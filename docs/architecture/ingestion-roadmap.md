@@ -90,6 +90,14 @@ features that can be bolted on. If SP-2 does not deliver content-addressed, vers
 artifacts with a real dependency DAG, no later sub-project can retrofit them. Everything plugs into
 whatever SP-2 decides.
 
+**Carried into SP-2 from SP-1 (found while implementing `canonical_json`):** Python's `json.dumps`
+defaults to `allow_nan=True`, so `float("nan")` serializes to a bare `NaN` token. That is
+*deterministic* — it satisfies SP-1's byte-identical invariant — but it is **not valid JSON**, and
+every strict parser downstream will reject it. For a pipeline whose whole point is extracting
+financial ratios (where `0/0` is a live possibility), this is a real interop hazard. It belongs in
+SP-2's **schema/validation** layer, before serialization — not in the serialization wrapper, which
+correctly stayed a thin, branch-free pass-through. Decide it deliberately in SP-2's spec.
+
 ### Why SP-3 exists
 
 The goal is *"the best algorithm at each step for most accurate functioning."* Research produces
