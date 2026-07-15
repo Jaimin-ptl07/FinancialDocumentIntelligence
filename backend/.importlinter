@@ -1,3 +1,14 @@
+# The layered purity contract -- the single most important structural rule in
+# this project. All twelve pipeline phases' algorithms live in `core`, and their
+# purity (no I/O, no config, no clock, no RNG) is what makes them testable
+# offline against frozen fixtures, deterministic across re-runs, and safely
+# re-runnable -- which incremental reprocessing depends on.
+#
+# WARNING: this file is parsed with stdlib configparser, which does NOT strip
+# trailing inline comments. Writing `api | workers  # siblings` would make
+# "# siblings" part of the parsed layer name and silently corrupt the contract.
+# Every comment MUST be on its own standalone line.
+
 [importlinter]
 root_package = fdi
 
@@ -6,9 +17,19 @@ name = FDI layered architecture
 type = layers
 containers =
     fdi
+# Ordered high to low: a layer may import the layers below it, never above.
+#
+# `|` means INDEPENDENT SIBLINGS: api and workers may NOT import each other.
+# `:` would mean the opposite -- that they may. The separator that reads like
+# "or" is the strict one.
 layers =
     api | workers
     pipeline
     platform
     core
+# Mandatory, not decorative. A layers contract only constrains the modules it
+# LISTS. Without this, the day someone adds `fdi.utils`, `core` could import it
+# and CI would stay green -- a gate that looks enforced but leaks. `exhaustive`
+# forces every child of `fdi` to be either a declared layer or an explicit
+# `exhaustive_ignores` entry. It requires `containers`.
 exhaustive = true
