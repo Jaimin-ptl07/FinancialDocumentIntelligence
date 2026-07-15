@@ -17,7 +17,17 @@ uv sync --project backend
 Run from the repo root:
 
 ```powershell
-uv run --project backend ruff check backend
-uv run --project backend mypy backend/src
-uv run --project backend pytest -q
+uv run --directory backend ruff check .
+uv run --directory backend mypy --strict src
+uv run --directory backend pytest -q
 ```
+
+### Why `--directory` and not `--project`
+
+`--project` picks the venv but leaves the working directory alone, and pytest and mypy
+discover their config from the filesystem rather than from uv. Run from the repo root,
+`--project` silently discards everything in `pyproject.toml`: pytest's rootdir misdetects
+and `asyncio_mode` falls back to `STRICT` (so every unmarked `async def` test fails with
+"async def functions are not natively supported"), and mypy never loads `[tool.mypy]` at
+all — its config search is cwd-only — so `ignore_missing_imports` and `strict` are both
+dead. `--directory` sets the cwd, so every tool finds the config. Don't "simplify" it back.
