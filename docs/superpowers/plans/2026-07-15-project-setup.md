@@ -1,12 +1,12 @@
-﻿# SP-1 â€” Project Setup & Walking Skeleton: Implementation Plan
+# SP-1 — Project Setup & Walking Skeleton: Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prove every integration seam that SP-2â€¦SP-18 depend on â€” API â†’ RabbitMQ â†’ Celery â†’ Postgres â†’ S3 â†’ Redis â€” with CI enforcing the structural rules, before any real document processing exists.
+**Goal:** Prove every integration seam that SP-2…SP-18 depend on — API → RabbitMQ → Celery → Postgres → S3 → Redis — with CI enforcing the structural rules, before any real document processing exists.
 
 **Architecture:** One Python package `fdi` in `backend/`, built as one image with two entrypoints (uvicorn API, Celery prefork worker). A CI-enforced layered boundary keeps `fdi.core` pure. The I/O layer is written once as async; FastAPI awaits it, Celery tasks call `asyncio.run()` exactly once per task. Compose profiles keep the daily loop to ~5 GB of containers.
 
-**Tech Stack:** Python 3.13 Â· uv 0.11.28 Â· FastAPI 0.139 Â· SQLAlchemy 2.0.51 (async) Â· asyncpg 0.31 Â· Alembic 1.18 Â· Celery 5.6.3 (prefork) Â· RabbitMQ 4.3.2 Â· Redis 8.8.0 Â· PostgreSQL 18.4 Â· MinIO (S3 API) Â· structlog 26.1 Â· import-linter 2.13 Â· testcontainers 4.14.2 Â· Next.js 16 Â· Node 24 LTS
+**Tech Stack:** Python 3.13 · uv 0.11.28 · FastAPI 0.139 · SQLAlchemy 2.0.51 (async) · asyncpg 0.31 · Alembic 1.18 · Celery 5.6.3 (prefork) · RabbitMQ 4.3.2 · Redis 8.8.0 · PostgreSQL 18.4 · MinIO (S3 API) · structlog 26.1 · import-linter 2.13 · testcontainers 4.14.2 · Next.js 16 · Node 24 LTS
 
 **Spec:** `docs/superpowers/specs/2026-07-15-project-setup-design.md`
 **Roadmap:** `docs/architecture/ingestion-roadmap.md`
@@ -19,8 +19,8 @@ These are non-negotiable. Every task must preserve them; a task that breaks one 
 
 1. **`fdi.core` is pure.** No I/O, no `Settings`, no clock, no RNG, no imports from any other `fdi` subpackage. Enforced by `lint-imports` (Task 2).
 2. **Never `async def` under `@app.task`.** Celery returns the un-awaited coroutine and reports **SUCCESS while doing nothing**. Enforced by an AST test (Task 3).
-3. **Never create an event loop, engine, or connection pool at module import.** `fork()` copies the loop object but not its driving thread â†’ coroutines hang **silently**. Engines are created *inside* the task coroutine and disposed in `finally`.
-4. **Bind the correlation ID BEFORE crossing `asyncio.run()`.** contextvars is copy-in / no-copy-out â€” anything bound *inside* the loop is lost to the caller. Verified behaviour, not theory.
+3. **Never create an event loop, engine, or connection pool at module import.** `fork()` copies the loop object but not its driving thread → coroutines hang **silently**. Engines are created *inside* the task coroutine and disposed in `finally`.
+4. **Bind the correlation ID BEFORE crossing `asyncio.run()`.** contextvars is copy-in / no-copy-out — anything bound *inside* the loop is lost to the caller. Verified behaviour, not theory.
 5. **Prefork pool only.** `--concurrency=2` on this machine (memory-bound, not core-bound).
 6. **Determinism.** Artifact *bodies* are a pure function of input. IDs and timestamps live in Postgres rows, never in artifact bodies.
 7. **12-factor.** Config from environment only. No host paths in application code.
@@ -31,7 +31,7 @@ These are non-negotiable. Every task must preserve them; a task that breaks one 
 # 1. Start Docker Desktop (daemon is not running)
 # 2. Python 3.13 (installed is 3.11.3)
 uv python install 3.13
-# 3. Node 24 LTS (installed v21 is EOL) â€” install from nodejs.org, then:
+# 3. Node 24 LTS (installed v21 is EOL) — install from nodejs.org, then:
 corepack enable
 # 4. curl is broken machine-wide: a stale CURL_CA_BUNDLE points at a nonexistent
 #    PostgreSQL cert file, so every HTTPS call via curl fails.
@@ -40,7 +40,7 @@ corepack enable
 
 ### Commands
 
-All commands are issued from the **repo root** `D:\FinancialDocumentIntelligence`.
+All commands run from the **repo root** `D:\FinancialDocumentIntelligence` unless stated.
 
 | Purpose | Command |
 |---|---|
@@ -49,7 +49,7 @@ All commands are issued from the **repo root** `D:\FinancialDocumentIntelligence
 | Types | `uv run --directory backend mypy --strict src` |
 | Imports | `uv run --directory backend lint-imports --config .importlinter` |
 
-> ### ⚠️ `--directory`, never `--project`. This is not cosmetic.
+> ### `--directory`, never `--project`. This is not cosmetic.
 >
 > `--project` selects which project's **venv** to use. It does **not** change the working
 > directory — and pytest and mypy discover their config from the *filesystem*, not from uv.
@@ -65,13 +65,21 @@ All commands are issued from the **repo root** `D:\FinancialDocumentIntelligence
 >
 > Consequences: every `async def test_...()` without an explicit `@pytest.mark.asyncio`
 > marker fails with *"async def functions are not natively supported"* — that is the style
-> used throughout this plan. And `ignore_missing_imports` never loads, so `from celery
-> import Celery` fails the types gate. mypy's config search is **cwd-only** and is *not*
-> fixed by passing a path argument; pytest's is fixed by a path argument, which is why the
-> per-task commands below appear to work while the whole-suite gate does not.
+> used throughout this plan. And `ignore_missing_imports` never loads, so
+> `from celery import Celery` fails the types gate. mypy's config search is **cwd-only** and
+> is *not* fixed by passing a path argument; pytest's *is* fixed by a path argument, which is
+> why the per-task commands below appear to work while the whole-suite gate does not.
 >
-> Note this failure is *silent and misattributed*: it first detonates at Task 4, whose own
-> warning about a Windows testcontainers regression makes it very easy to misdiagnose.
+> This failure is *silent and misattributed*: it first detonates at Task 4, whose own warning
+> about a Windows testcontainers regression makes it very easy to misdiagnose.
+
+> ### Editing this file: use UTF-8-aware tools only
+>
+> This plan contains em-dashes, arrows and emoji. **Do not** edit it with PowerShell
+> `Get-Content -Raw` / `Set-Content`: on PS 5.1 `Get-Content` defaults to cp1252, silently
+> destroying every glyph with no cp1252 mapping — irreversibly, since they become `?`. This
+> already happened once and cost a full restore-and-replay from git. Use the Edit tool, or
+> Python with an explicit `encoding="utf-8"`.
 
 ### Branch
 
@@ -87,7 +95,7 @@ git checkout -b feature/sp-1-project-setup
 |---|---|
 | `backend/pyproject.toml` | deps, ruff/mypy/pytest config |
 | `backend/.importlinter` | the layered purity contract |
-| `backend/src/fdi/core/serialization.py` | `canonical_json` â€” deterministic JSON. **Pure.** |
+| `backend/src/fdi/core/serialization.py` | `canonical_json` — deterministic JSON. **Pure.** |
 | `backend/src/fdi/platform/config.py` | `Settings`, `get_settings()` |
 | `backend/src/fdi/platform/obs/logging.py` | structlog + correlation-ID contextvar |
 | `backend/src/fdi/platform/db/models.py` | `Base`, `Job` |
@@ -95,7 +103,7 @@ git checkout -b feature/sp-1-project-setup
 | `backend/src/fdi/platform/db/repository.py` | `JobRepository` |
 | `backend/src/fdi/platform/storage/artifact_store.py` | async S3 store over the sync `minio` SDK |
 | `backend/src/fdi/workers/app.py` | Celery app + config |
-| `backend/src/fdi/workers/tasks.py` | `ping_job` â€” the sync/async seam |
+| `backend/src/fdi/workers/tasks.py` | `ping_job` — the sync/async seam |
 | `backend/src/fdi/api/app.py` | FastAPI app factory, lifespan |
 | `backend/src/fdi/api/errors.py` | RFC 9457 handlers |
 | `backend/src/fdi/api/routes.py` | `/health`, `/ready`, `/ping-job`, `/jobs/{id}` |
@@ -104,7 +112,7 @@ git checkout -b feature/sp-1-project-setup
 | `docker/compose.yml` | profiles: core / graph / vector / ui |
 | `docker/rabbitmq.conf` | `consumer_timeout` |
 | `frontend/` | Next.js 16 |
-| `.github/workflows/ci.yml` | ruff Â· mypy Â· lint-imports Â· pytest |
+| `.github/workflows/ci.yml` | ruff · mypy · lint-imports · pytest |
 
 ---
 
@@ -126,7 +134,7 @@ New-Item -ItemType File backend/src/fdi/__init__.py, backend/tests/__init__.py, 
 [project]
 name = "fdi"
 version = "0.1.0"
-description = "Financial Document Intelligence â€” ingestion platform"
+description = "Financial Document Intelligence — ingestion platform"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "fastapi>=0.139",
@@ -183,7 +191,7 @@ asyncio_mode = "auto"
 markers = ["integration: needs Docker containers"]
 ```
 
-> **Note:** `testcontainers`' `postgres` extra is **empty** (`postgres = []`) â€” it pulls no SQLAlchemy or asyncpg. Ours come from the main dependency list, which is why this works.
+> **Note:** `testcontainers`' `postgres` extra is **empty** (`postgres = []`) — it pulls no SQLAlchemy or asyncpg. Ours come from the main dependency list, which is why this works.
 
 - [ ] **Step 3: Lock and sync**
 
@@ -196,7 +204,7 @@ Run: `uv run --directory backend ruff check .`
 Expected: `All checks passed!`
 
 Run: `uv run --directory backend pytest -q`
-Expected: `no tests ran` (exit 5 â€” acceptable, no tests exist yet)
+Expected: `no tests ran` (exit 5 — acceptable, no tests exist yet)
 
 - [ ] **Step 5: Commit**
 
@@ -215,7 +223,7 @@ git commit -m "chore(backend): scaffold uv project with ruff, mypy and pytest ga
 
 - [ ] **Step 1: Create the package skeleton**
 
-Empty `__init__.py` files satisfy import-linter's existence check â€” a layer must exist on disk, but may be empty.
+Empty `__init__.py` files satisfy import-linter's existence check — a layer must exist on disk, but may be empty.
 
 ```powershell
 New-Item -ItemType Directory -Force backend/src/fdi/core, backend/src/fdi/platform, backend/src/fdi/pipeline, backend/src/fdi/api, backend/src/fdi/workers | Out-Null
@@ -243,7 +251,7 @@ exhaustive = true
 
 > **Two facts this depends on, both counter-intuitive:**
 > - **`|` = independent siblings** (may NOT import each other). `:` would mean they *may*. The separator that reads like "or" is the strict one.
-> - **`exhaustive = true` is mandatory.** A layers contract only constrains modules it *lists*. Without it, the day someone adds `fdi.utils`, `core` could import it and **CI would stay green** â€” a gate that looks enforced but leaks. `exhaustive` forces every child of `fdi` to be a declared layer or an explicit `exhaustive_ignores` entry. It requires `containers`.
+> - **`exhaustive = true` is mandatory.** A layers contract only constrains modules it *lists*. Without it, the day someone adds `fdi.utils`, `core` could import it and **CI would stay green** — a gate that looks enforced but leaks. `exhaustive` forces every child of `fdi` to be a declared layer or an explicit `exhaustive_ignores` entry. It requires `containers`.
 
 - [ ] **Step 3: Write the failing test**
 
@@ -253,16 +261,20 @@ exhaustive = true
 """The layered contract is the project's most important structural rule.
 This test runs it in-process so a violation fails pytest, not just CI."""
 import subprocess
-import sys
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[2]
 
 
 def test_import_contract_holds() -> None:
+    # MUST be the `lint-imports` console script. Do NOT use
+    # `python -m importlinter.cli` -- importlinter/cli.py has no
+    # `if __name__ == "__main__"` guard, so `-m` merely imports the module and
+    # exits 0 without running anything. Verified: pointing that form at a config
+    # file that DOES NOT EXIST still returns exit 0 with no output, so this test
+    # would pass forever while enforcing nothing.
     result = subprocess.run(
-        [sys.executable, "-m", "importlinter.cli", "lint-imports",
-         "--config", str(BACKEND / ".importlinter")],
+        ["lint-imports", "--config", str(BACKEND / ".importlinter")],
         cwd=BACKEND, capture_output=True, text=True,
     )
     assert result.returncode == 0, (
@@ -281,13 +293,13 @@ Expected: PASS (the packages are empty, so no imports can violate anything).
 Temporarily create `backend/src/fdi/core/_violation.py`:
 
 ```python
-from fdi.platform import config  # noqa: F401  â€” core must never import platform
+from fdi.platform import config  # noqa: F401  — core must never import platform
 ```
 
 Run: `uv run --directory backend pytest tests/unit/test_import_contract.py -v`
 Expected: **FAIL**, naming `fdi.core._violation -> fdi.platform.config`.
 
-This step is the point of the task â€” a contract that has never been seen to fail is not known to work.
+This step is the point of the task — a contract that has never been seen to fail is not known to work.
 
 - [ ] **Step 6: Delete the violation**
 
@@ -392,9 +404,9 @@ git commit -m "test(workers): AST guard against async def under @app.task"
 
 ---
 
-## Task 4: De-risk testcontainers on Windows âš ï¸ EARLY BY DESIGN
+## Task 4: De-risk testcontainers on Windows ⚠️ EARLY BY DESIGN
 
-**Everything in Â§11 of the spec rests on testcontainers working on this machine, and there is an open Windows port-mapping regression filed against exactly 4.14.2 (testcontainers-python#1015, a 4.12.0â†’4.14.2 regression).** This task proves it works *before* twenty tasks depend on it. If it fails, stop and escalate â€” the fallback is compose-based integration tests, which is a spec change, not a code change.
+**Everything in §11 of the spec rests on testcontainers working on this machine, and there is an open Windows port-mapping regression filed against exactly 4.14.2 (testcontainers-python#1015, a 4.12.0→4.14.2 regression).** This task proves it works *before* twenty tasks depend on it. If it fails, stop and escalate — the fallback is compose-based integration tests, which is a spec change, not a code change.
 
 **Files:**
 - Create: `backend/tests/integration/conftest.py`
@@ -406,7 +418,7 @@ git commit -m "test(workers): AST guard against async def under @app.task"
 """Session-scoped containers for integration tests.
 
 WINDOWS: TC_HOST is read at IMPORT time (it is a dataclass field default), so it
-MUST be set before `testcontainers` is imported â€” setting it later silently does
+MUST be set before `testcontainers` is imported — setting it later silently does
 nothing. See testcontainers-python#1009 and #407.
 """
 from __future__ import annotations
@@ -427,7 +439,7 @@ from testcontainers.rabbitmq import RabbitMqContainer
 from testcontainers.redis import RedisContainer
 
 PG_IMAGE = "postgres:18.4"
-# NOT RELEASE.2025-10-15T17-29-55Z â€” that release exists but was never published
+# NOT RELEASE.2025-10-15T17-29-55Z — that release exists but was never published
 # as a container image (MinIO stopped publishing free images ~2025-10-23).
 MINIO_IMAGE = "minio/minio:RELEASE.2025-09-07T16-13-09Z"
 RABBITMQ_IMAGE = "rabbitmq:4.3.2-management"
@@ -440,7 +452,7 @@ def postgres_url() -> Iterator[str]:
 
     The method-level `driver` overrides the constructor default (psycopg2).
     Readiness runs `psql` INSIDE the container, so no Python driver is needed
-    to wait â€” `driver="asyncpg"` cannot break the wait strategy.
+    to wait — `driver="asyncpg"` cannot break the wait strategy.
     """
     with PostgresContainer(PG_IMAGE) as pg:
         yield pg.get_connection_url(driver="asyncpg")
@@ -468,7 +480,7 @@ def minio_endpoint(minio_container: MinioContainer) -> str:
 def amqp_url() -> Iterator[str]:
     """amqp://guest:guest@host:port/%2F
 
-    RabbitMqContainer has NO url builder â€” assemble it. The default vhost '/'
+    RabbitMqContainer has NO url builder — assemble it. The default vhost '/'
     MUST be percent-encoded: the RabbitMQ URI spec says `vhost = segment`, so
     the common `...//` form is out of spec.
     """
@@ -482,7 +494,7 @@ def amqp_url() -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
-    """redis://host:port/0 â€” RedisContainer has no get_connection_url()."""
+    """redis://host:port/0 — RedisContainer has no get_connection_url()."""
     with RedisContainer(REDIS_IMAGE) as rc:
         host = rc.get_container_host_ip()
         port = rc.get_exposed_port(rc.port)
@@ -531,12 +543,12 @@ def test_redis_url_well_formed(redis_url: str) -> None:
     assert redis_url.endswith("/0")
 ```
 
-- [ ] **Step 3: Run it â€” this is the gate**
+- [ ] **Step 3: Run it — this is the gate**
 
 Run: `uv run --directory backend pytest tests/integration/test_containers_smoke.py -v`
-Expected: **4 passed** (first run pulls images â€” several minutes on this connection).
+Expected: **4 passed** (first run pulls images — several minutes on this connection).
 
-**If this fails with port-mapping or host-resolution errors: STOP.** Do not proceed to Task 5. Report the exact error. Fallback options, in order: (a) confirm `TC_HOST=localhost` is set before import, (b) pin `testcontainers==4.12.0` (pre-regression), (c) escalate to change spec Â§11 to compose-based integration tests.
+**If this fails with port-mapping or host-resolution errors: STOP.** Do not proceed to Task 5. Report the exact error. Fallback options, in order: (a) confirm `TC_HOST=localhost` is set before import, (b) pin `testcontainers==4.12.0` (pre-regression), (c) escalate to change spec §11 to compose-based integration tests.
 
 - [ ] **Step 4: Commit**
 
@@ -547,7 +559,7 @@ git commit -m "test(integration): session-scoped testcontainers fixtures with Wi
 
 ---
 
-## Task 5: `core.serialization` â€” the first pure module
+## Task 5: `core.serialization` — the first pure module
 
 **Files:**
 - Create: `backend/src/fdi/core/serialization.py`
@@ -572,7 +584,7 @@ def test_output_is_compact_and_sorted() -> None:
 
 
 def test_unicode_is_preserved_not_escaped() -> None:
-    assert canonical_json({"co": "Reliance â‚¹"}) == '{"co":"Reliance â‚¹"}'
+    assert canonical_json({"co": "Reliance ₹"}) == '{"co":"Reliance ₹"}'
 
 
 def test_repeated_calls_are_byte_identical() -> None:
@@ -583,14 +595,14 @@ def test_repeated_calls_are_byte_identical() -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_serialization.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.core.serialization'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.core.serialization'`
 
 - [ ] **Step 3: Implement**
 
 `backend/src/fdi/core/serialization.py`:
 
 ```python
-"""Deterministic JSON. PURE â€” no I/O, no config, no clock, no RNG."""
+"""Deterministic JSON. PURE — no I/O, no config, no clock, no RNG."""
 
 import json
 from typing import Any
@@ -601,7 +613,7 @@ def canonical_json(obj: Any) -> str:
 
     - sort_keys: dict insertion order must not leak into bytes
     - separators: no incidental whitespace
-    - ensure_ascii=False: emit real UTF-8 (annual reports carry â‚¹, Ã©, etc.)
+    - ensure_ascii=False: emit real UTF-8 (annual reports carry ₹, é, etc.)
     """
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 ```
@@ -625,7 +637,7 @@ git commit -m "feat(core): canonical_json for deterministic artifact bodies"
 
 ---
 
-## Task 6: `platform.config` â€” settings from environment only
+## Task 6: `platform.config` — settings from environment only
 
 **Files:**
 - Create: `backend/src/fdi/platform/config.py`
@@ -686,14 +698,14 @@ def test_does_not_read_dotenv_files(monkeypatch: pytest.MonkeyPatch, tmp_path) -
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_config.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.config'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.platform.config'`
 
 - [ ] **Step 3: Implement**
 
 `backend/src/fdi/platform/config.py`:
 
 ```python
-"""Configuration. Environment only â€” Compose reads .env and injects it."""
+"""Configuration. Environment only — Compose reads .env and injects it."""
 
 from functools import lru_cache
 
@@ -728,7 +740,7 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-> `Settings()` is never instantiated at import â€” only inside `get_settings()`. A module-level
+> `Settings()` is never instantiated at import — only inside `get_settings()`. A module-level
 > instantiation would read the environment at import time and break test isolation.
 
 - [ ] **Step 4: Run to verify it passes**
@@ -745,9 +757,9 @@ git commit -m "feat(platform): env-only settings with strict extra=forbid"
 
 ---
 
-## Task 7: `platform.obs.logging` â€” structlog with correlation IDs
+## Task 7: `platform.obs.logging` — structlog with correlation IDs
 
-Two verified traps here. (1) The common `LoggerFactory` + `JSONRenderer` chain **double-prints tracebacks** â€” `BoundLogger.exception()` hardcodes `exc_info=True` and proxies to stdlib, which re-appends the traceback structlog already rendered. `ProcessorFormatter` fixes it *and* routes uvicorn/Celery's own logs through JSON. (2) contextvars is **copy-in, no-copy-out** â€” anything bound inside `asyncio.run()` is invisible to the caller.
+Two verified traps here. (1) The common `LoggerFactory` + `JSONRenderer` chain **double-prints tracebacks** — `BoundLogger.exception()` hardcodes `exc_info=True` and proxies to stdlib, which re-appends the traceback structlog already rendered. `ProcessorFormatter` fixes it *and* routes uvicorn/Celery's own logs through JSON. (2) contextvars is **copy-in, no-copy-out** — anything bound inside `asyncio.run()` is invisible to the caller.
 
 **Files:**
 - Create: `backend/src/fdi/platform/obs/__init__.py`, `backend/src/fdi/platform/obs/logging.py`
@@ -833,7 +845,7 @@ def test_exception_is_not_double_printed(capsys) -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_logging.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.obs'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.platform.obs'`
 
 - [ ] **Step 3: Implement**
 
@@ -930,7 +942,7 @@ git commit -m "feat(platform): structlog JSON logging with correlation-id contex
 
 ---
 
-## Task 8: `platform.db.models` â€” Base and Job
+## Task 8: `platform.db.models` — Base and Job
 
 **Files:**
 - Create: `backend/src/fdi/platform/db/__init__.py`, `backend/src/fdi/platform/db/models.py`
@@ -967,7 +979,7 @@ def test_job_status_values() -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_models.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.db'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.platform.db'`
 
 - [ ] **Step 3: Implement**
 
@@ -1027,7 +1039,7 @@ git commit -m "feat(platform): Job ORM model with server-side timestamps"
 
 ---
 
-## Task 9: `platform.db.engine` â€” factories, never module-level
+## Task 9: `platform.db.engine` — factories, never module-level
 
 **Files:**
 - Create: `backend/src/fdi/platform/db/engine.py`
@@ -1059,7 +1071,7 @@ def test_make_session_factory_is_callable() -> None:
 
 def test_no_module_level_engine() -> None:
     """Global Constraint 3. A pool built at import is inherited across fork(),
-    handing two interpreters one socket â€” corrupting SILENTLY. This module must
+    handing two interpreters one socket — corrupting SILENTLY. This module must
     expose factories only, never a ready-made engine."""
     tree = ast.parse(ENGINE_SRC.read_text(encoding="utf-8"))
     for node in tree.body:
@@ -1074,7 +1086,7 @@ def test_no_module_level_engine() -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_engine.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.db.engine'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.platform.db.engine'`
 
 - [ ] **Step 3: Implement**
 
@@ -1148,7 +1160,7 @@ prepend_sys_path = %(here)s/src
 sqlalchemy.url =
 ```
 
-Leave `sqlalchemy.url` empty â€” `env.py` reads it from `Settings` so there is exactly one source of config.
+Leave `sqlalchemy.url` empty — `env.py` reads it from `Settings` so there is exactly one source of config.
 
 - [ ] **Step 3: Replace `backend/alembic/env.py`**
 
@@ -1323,18 +1335,18 @@ def _alembic_applied(postgres_url: str) -> None:
 async def migrated_engine(
     postgres_url: str, _alembic_applied: None
 ) -> AsyncIterator[AsyncEngine]:
-    """Function-scoped ON PURPOSE — do NOT make this session-scoped.
+    """Function-scoped ON PURPOSE - do NOT make this session-scoped.
 
     pytest-asyncio 1.x runs each test on its own function-scoped event loop
-    (`asyncio_default_fixture_loop_scope` defaults to None). A session-scoped
+    (asyncio_default_fixture_loop_scope defaults to None). A session-scoped
     async fixture would bind its pool to a different loop than the test using
     it, producing exactly the failure this project's spec warns about:
     `got Future attached to a different loop`.
 
     Function scope also mirrors production: every Celery task builds an engine
     inside its own asyncio.run() and disposes it in `finally`. The test should
-    look like the thing it tests. The container itself stays session-scoped, so
-    the cost here is a connection handshake per test, not a container start.
+    look like the thing it tests. The container stays session-scoped, so the
+    cost is a connection handshake per test, not a container start.
     """
     engine = create_async_engine(postgres_url)
     yield engine
@@ -1355,7 +1367,7 @@ git commit -m "feat(platform): alembic async env and the jobs migration"
 
 ---
 
-## Task 11: `platform.db.repository` â€” JobRepository
+## Task 11: `platform.db.repository` — JobRepository
 
 **Files:**
 - Create: `backend/src/fdi/platform/db/repository.py`
@@ -1439,14 +1451,14 @@ async def test_mark_done_on_missing_job_raises(session_factory) -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/integration/test_repository.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.db.repository'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.platform.db.repository'`
 
 - [ ] **Step 3: Implement**
 
 `backend/src/fdi/platform/db/repository.py`:
 
 ```python
-"""Job persistence. The caller owns the transaction â€” commit is theirs, not ours."""
+"""Job persistence. The caller owns the transaction — commit is theirs, not ours."""
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1500,9 +1512,9 @@ git commit -m "feat(platform): JobRepository over async SQLAlchemy"
 
 ---
 
-## Task 12: `platform.storage.artifact_store` â€” async S3
+## Task 12: `platform.storage.artifact_store` — async S3
 
-The `minio` SDK is synchronous. We wrap it in `asyncio.to_thread`, which gives a genuinely async interface over a maintained client â€” and contextvars *do* propagate into `to_thread`, so log lines from inside keep their correlation ID.
+The `minio` SDK is synchronous. We wrap it in `asyncio.to_thread`, which gives a genuinely async interface over a maintained client — and contextvars *do* propagate into `to_thread`, so log lines from inside keep their correlation ID.
 
 **Files:**
 - Create: `backend/src/fdi/platform/storage/__init__.py`, `backend/src/fdi/platform/storage/artifact_store.py`
@@ -1563,7 +1575,7 @@ async def test_presigned_url_is_returned(store: ArtifactStore) -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/integration/test_artifact_store.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.storage'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.platform.storage'`
 
 - [ ] **Step 3: Implement**
 
@@ -1574,7 +1586,7 @@ Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.platform.stor
 ```python
 """S3 artifact store.
 
-Targets the generic S3 API only â€” never a MinIO-specific feature. MinIO is the
+Targets the generic S3 API only — never a MinIO-specific feature. MinIO is the
 local-dev container; production is S3/Azure Blob. That is what makes swapping it
 a compose change rather than a code change.
 
@@ -1659,7 +1671,7 @@ git commit -m "feat(platform): async S3 artifact store with canonical JSON bodie
 
 ---
 
-## Task 13: `workers.app` â€” the Celery application
+## Task 13: `workers.app` — the Celery application
 
 **Files:**
 - Create: `backend/src/fdi/workers/app.py`
@@ -1710,7 +1722,7 @@ def test_celery_app_config() -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_celery_app.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.workers.app'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.workers.app'`
 
 - [ ] **Step 3: Implement**
 
@@ -1755,7 +1767,7 @@ def create_celery_app() -> Celery:
 app = create_celery_app()
 ```
 
-> `app = create_celery_app()` at module level is required â€” `celery -A fdi.workers.app` needs it.
+> `app = create_celery_app()` at module level is required — `celery -A fdi.workers.app` needs it.
 > This is safe: `Celery()` opens no sockets and creates no event loop. It is *connection pools and
 > event loops* that must never exist at import (Global Constraint 3), not configuration objects.
 
@@ -1773,9 +1785,9 @@ git commit -m "feat(workers): celery app with acks-late, prefetch=1 and child re
 
 ---
 
-## Task 14: `workers.tasks` â€” the sync/async seam
+## Task 14: `workers.tasks` — the sync/async seam
 
-The most important twelve lines in SP-1. Every stage in SP-2â€¦SP-18 follows this shape.
+The most important twelve lines in SP-1. Every stage in SP-2…SP-18 follows this shape.
 
 **Files:**
 - Create: `backend/src/fdi/workers/tasks.py`
@@ -1824,7 +1836,7 @@ async def test_ping_job_writes_artifact_and_marks_done(
 async def test_ping_artifact_body_is_deterministic(
     session_factory, minio_client, postgres_url
 ) -> None:
-    """Done criterion 10. The body must not contain the job id or a timestamp â€”
+    """Done criterion 10. The body must not contain the job id or a timestamp —
     those belong in the Postgres row."""
     from fdi.platform.storage.artifact_store import ArtifactStore
     from fdi.workers.tasks import _ping_job
@@ -1855,7 +1867,7 @@ def test_ping_job_task_is_not_a_coroutine_function() -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/integration/test_ping_task.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.workers.tasks'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.workers.tasks'`
 
 - [ ] **Step 3: Implement**
 
@@ -1937,7 +1949,7 @@ async def _ping_job(
         log.info("ping_job.running", job_id=job_id)
 
         await store.ensure_bucket()
-        # NOTE: the body carries no job id and no timestamp â€” Global Constraint 6.
+        # NOTE: the body carries no job id and no timestamp — Global Constraint 6.
         key = await store.put_json(f"jobs/{job_id}/ping.json", PING_PAYLOAD)
 
         async with session_factory() as session:
@@ -1963,18 +1975,18 @@ Expected: 3 passed
 - [ ] **Step 5: Run the AST guard against real task code**
 
 Run: `uv run --directory backend pytest tests/unit/test_no_async_celery_tasks.py -v`
-Expected: PASS â€” now meaningful, since a real `@app.task` exists.
+Expected: PASS — now meaningful, since a real `@app.task` exists.
 
 - [ ] **Step 6: Commit**
 
 ```powershell
 git add backend
-git commit -m "feat(workers): ping_job â€” the canonical sync-wrapper/async-impl stage seam"
+git commit -m "feat(workers): ping_job — the canonical sync-wrapper/async-impl stage seam"
 ```
 
 ---
 
-## Task 15: `api.errors` â€” RFC 9457 problem details
+## Task 15: `api.errors` — RFC 9457 problem details
 
 **Files:**
 - Create: `backend/src/fdi/api/errors.py`
@@ -2031,7 +2043,7 @@ async def test_unhandled_exception_is_problem_json_without_leaking(
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_api_errors.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.api.errors'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.api.errors'`
 
 - [ ] **Step 3: Implement**
 
@@ -2090,7 +2102,7 @@ git commit -m "feat(api): RFC 9457 problem+json error handlers"
 
 ---
 
-## Task 16: `api.app` and `api.routes` â€” the HTTP surface
+## Task 16: `api.app` and `api.routes` — the HTTP surface
 
 **Files:**
 - Create: `backend/src/fdi/api/app.py`, `backend/src/fdi/api/routes.py`, `backend/src/fdi/api/schemas.py`, `backend/src/fdi/api/deps.py`
@@ -2168,7 +2180,7 @@ async def test_get_unknown_job_is_404_problem_json(
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/integration/test_api.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.api.app'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.api.app'`
 
 - [ ] **Step 3: Write `backend/src/fdi/api/schemas.py`**
 
@@ -2321,7 +2333,7 @@ async def get_job(job_id: str, session: SessionDep, store: StoreDep) -> JobView:
 ```
 
 > **Why `/health` never touches Postgres:** liveness answers "should this process be
-> restarted?" A DB outage is not a reason to kill the API â€” the orchestrator would
+> restarted?" A DB outage is not a reason to kill the API — the orchestrator would
 > restart-loop every replica while the DB recovers. Readiness answers "send it traffic?",
 > which is the question a DB outage actually changes.
 
@@ -2346,7 +2358,7 @@ from fdi.platform.storage.artifact_store import ArtifactStore
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Owns the engine. Created here â€” inside the running loop â€” not at import."""
+    """Owns the engine. Created here — inside the running loop — not at import."""
     settings = get_settings()
     configure_logging(settings.log_level)
 
@@ -2388,7 +2400,7 @@ Expected: 5 passed
 Run: `uv run --directory backend ruff check .`
 Run: `uv run --directory backend mypy --strict src`
 Run: `uv run --directory backend lint-imports --config .importlinter`
-Expected: all clean. **`api` importing `workers.tasks` is allowed** â€” they are independent siblings on the same layer, so `|` forbids it. **If `lint-imports` fails here, that is the contract working.** Fix by moving the publish call behind a `pipeline`-layer function rather than weakening the contract.
+Expected: all clean. **`api` importing `workers.tasks` is allowed** — they are independent siblings on the same layer, so `|` forbids it. **If `lint-imports` fails here, that is the contract working.** Fix by moving the publish call behind a `pipeline`-layer function rather than weakening the contract.
 
 - [ ] **Step 9: Commit**
 
@@ -2399,9 +2411,9 @@ git commit -m "feat(api): health, ready, ping-job and job views"
 
 ---
 
-## Task 17: Resolve the apiâ†’workers layering violation
+## Task 17: Resolve the api→workers layering violation
 
-Task 16 Step 8 will fail the contract: `api/routes.py` imports `fdi.workers.tasks`, but `api | workers` are independent siblings. **This is the contract doing its job** â€” the fix is a seam, not an exemption.
+Task 16 Step 8 will fail the contract: `api/routes.py` imports `fdi.workers.tasks`, but `api | workers` are independent siblings. **This is the contract doing its job** — the fix is a seam, not an exemption.
 
 **Files:**
 - Create: `backend/src/fdi/pipeline/dispatch.py`
@@ -2427,7 +2439,7 @@ def test_dispatch_publishes_with_correlation_id() -> None:
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --directory backend pytest tests/unit/test_dispatch.py -v`
-Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.pipeline.dispatch'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'fdi.pipeline.dispatch'`
 
 - [ ] **Step 3: Implement**
 
@@ -2436,7 +2448,7 @@ Expected: FAIL â€” `ModuleNotFoundError: No module named 'fdi.pipeline.disp
 ```python
 """Publishing seam.
 
-`api` and `workers` are independent siblings â€” neither may import the other, so
+`api` and `workers` are independent siblings — neither may import the other, so
 the API cannot import the task object directly. `pipeline` sits below both and
 owns dispatch. The API depends on this; the concrete task is injected at wiring
 time, which also makes dispatch trivially testable with no broker.
@@ -2469,7 +2481,7 @@ Add to `lifespan`, after the `artifact_store` line:
 ```
 
 > This import lives in `api/app.py`, which is the composition root. import-linter still flags
-> `api -> workers`. Add the wiring module to the contract's ignore list â€” an explicit, reviewed
+> `api -> workers`. Add the wiring module to the contract's ignore list — an explicit, reviewed
 > exception at the composition root only, not a general weakening:
 
 Append to `backend/.importlinter`:
@@ -2561,8 +2573,8 @@ Built from the **repo root** so the context can see `backend/`.
 ########################  builder  ########################
 FROM python:3.13-slim-trixie AS builder
 
-# Distroless uv image â€” the ONLY correct kind for COPY --from.
-# Pinned, not :latest â€” the uv guide calls pinning best practice for reproducibility.
+# Distroless uv image — the ONLY correct kind for COPY --from.
+# Pinned, not :latest — the uv guide calls pinning best practice for reproducibility.
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -3108,7 +3120,7 @@ export default function Home() {
         disabled={busy}
         className="mt-6 rounded bg-black px-4 py-2 text-white disabled:opacity-40 dark:bg-white dark:text-black"
       >
-        {busy ? "Runningâ€¦" : "Submit ping job"}
+        {busy ? "Running…" : "Submit ping job"}
       </button>
 
       {job && (
@@ -3242,10 +3254,10 @@ git commit -m "ci: ruff, mypy --strict, import contract, unit and integration te
 ```markdown
 # Financial Document Intelligence
 
-Ingestion platform for annual reports: PDF â†’ OCR â†’ structural intelligence â†’
-AST â†’ graph â†’ ontology â†’ embeddings â†’ retrieval.
+Ingestion platform for annual reports: PDF → OCR → structural intelligence →
+AST → graph → ontology → embeddings → retrieval.
 
-- **Roadmap:** `docs/architecture/ingestion-roadmap.md` â€” read this first
+- **Roadmap:** `docs/architecture/ingestion-roadmap.md` — read this first
 - **Current state:** SP-1 (walking skeleton) complete. No document processing yet.
 
 ## Quick start
@@ -3268,7 +3280,7 @@ Invoke-RestMethod "http://localhost:8000/jobs/$($r.job_id)"
 
 ## Profiles
 
-Run only what the current sub-project needs â€” the full stack is ~18.5 GB on a
+Run only what the current sub-project needs — the full stack is ~18.5 GB on a
 19.8 GB machine.
 
 | Profile | Services | ~Container RAM | From |
@@ -3296,12 +3308,12 @@ uv run --directory backend lint-imports --config .importlinter
 
 ## Architecture rules
 
-1. **`fdi.core` is pure** â€” no I/O, config, clock or RNG. Enforced by `lint-imports`.
-2. **Never `async def` under `@app.task`** â€” Celery reports SUCCESS and does nothing.
+1. **`fdi.core` is pure** — no I/O, config, clock or RNG. Enforced by `lint-imports`.
+2. **Never `async def` under `@app.task`** — Celery reports SUCCESS and does nothing.
    Enforced by an AST test.
-3. **Never build a loop, engine or pool at module import** â€” `fork()` copies the loop
+3. **Never build a loop, engine or pool at module import** — `fork()` copies the loop
    without its thread and hangs silently.
-4. **Bind the correlation ID before `asyncio.run()`** â€” contextvars is copy-in,
+4. **Bind the correlation ID before `asyncio.run()`** — contextvars is copy-in,
    no-copy-out.
 5. **Prefork only.** Memory-bound, so `--concurrency=2` on this machine.
 
@@ -3311,7 +3323,7 @@ uv run --directory backend lint-imports --config .importlinter
   release shipped source-only after the project archived; the newest pullable image
   predates the fix. Application code targets the generic S3 API, so replacing it is a
   compose change. Never run it in production.
-- `consumer_timeout` in `docker/rabbitmq.conf` is currently **inert** â€” RabbitMQ 4.3
+- `consumer_timeout` in `docker/rabbitmq.conf` is currently **inert** — RabbitMQ 4.3
   evaluates it for quorum queues only, and Celery declares classic. Kept for when
   quorum queues arrive.
 ```
@@ -3321,7 +3333,7 @@ uv run --directory backend lint-imports --config .importlinter
 Run: `docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}"`
 Replace the `5 GB` figure in the profile table with the measured total.
 
-- [ ] **Step 3: Audit every done criterion from spec Â§12**
+- [ ] **Step 3: Audit every done criterion from spec §12**
 
 Walk them one by one and record the evidence:
 
@@ -3330,7 +3342,7 @@ Walk them one by one and record the evidence:
 | 1 | six services healthy | `docker compose ... --profile core ps` |
 | 2 | migrate completes before api/worker | `docker compose ... ps` shows `migrate` exited 0 |
 | 3 | ping round-trip | Task 20 Step 6 |
-| 4 | `GET /jobs/{id}` â†’ working `artifact_url` | Task 21 `test_full_round_trip` |
+| 4 | `GET /jobs/{id}` → working `artifact_url` | Task 21 `test_full_round_trip` |
 | 5 | one `correlation_id` across both logs | Task 20 Step 7 |
 | 6 | Next.js renders live status | Task 22 Step 4 |
 | 7 | CI green on four gates | Task 23 |
@@ -3348,12 +3360,12 @@ Change:
 ```
 to:
 ```markdown
-- **Status:** Implemented 2026-07-15 on `feature/sp-1-project-setup`. All Â§12 done criteria verified.
+- **Status:** Implemented 2026-07-15 on `feature/sp-1-project-setup`. All §12 done criteria verified.
 ```
 
 - [ ] **Step 5: Update the roadmap**
 
-In `docs/architecture/ingestion-roadmap.md`, change SP-1's status from `ðŸ“ spec written` to `âœ… done`,
+In `docs/architecture/ingestion-roadmap.md`, change SP-1's status from `📝 spec written` to `✅ done`,
 and add a "What SP-1 shipped that SP-2 must know" note recording: the `core`/`platform` boundary
 and its `exhaustive` contract, the canonical task shape, `canonical_json`, the `JobDispatcher` seam,
 and the ignore-list entry for `fdi.api.app -> fdi.workers.tasks`.
@@ -3369,30 +3381,30 @@ git commit -m "docs: README, SP-1 done-criteria audit, roadmap status"
 
 ## Self-Review
 
-**Spec coverage** â€” every Â§-numbered section maps to a task:
+**Spec coverage** — every §-numbered section maps to a task:
 
-| Spec Â§ | Task(s) |
+| Spec § | Task(s) |
 |---|---|
-| Â§2 pre-work | Environment pre-work block |
-| Â§3.1 one package, two entrypoints | 1, 18 |
-| Â§3.2 purity boundary | 2, 17 |
-| Â§3.3 async boundary | 9, 14 |
-| Â§3.4 S3 / MinIO | 12, 20 |
-| Â§3.5 profiles | 20 |
-| Â§3.6 Python 3.13 / Node 24 | 1, 22 |
-| Â§4 layout | 1, 2 |
-| Â§5 topology | 20 |
-| Â§6 profiles | 20 |
-| Â§7 execution model | 13, 14, 19 |
-| Â§8 walking skeleton | 14, 16, 21 |
-| Â§9 config | 6, 20 |
-| Â§10 error handling | 15, 16, 20 |
-| Â§11 testing | 4, 23 |
-| Â§12 done criteria | 24 |
+| §2 pre-work | Environment pre-work block |
+| §3.1 one package, two entrypoints | 1, 18 |
+| §3.2 purity boundary | 2, 17 |
+| §3.3 async boundary | 9, 14 |
+| §3.4 S3 / MinIO | 12, 20 |
+| §3.5 profiles | 20 |
+| §3.6 Python 3.13 / Node 24 | 1, 22 |
+| §4 layout | 1, 2 |
+| §5 topology | 20 |
+| §6 profiles | 20 |
+| §7 execution model | 13, 14, 19 |
+| §8 walking skeleton | 14, 16, 21 |
+| §9 config | 6, 20 |
+| §10 error handling | 15, 16, 20 |
+| §11 testing | 4, 23 |
+| §12 done criteria | 24 |
 
 **Known risks carried into execution:**
 
-1. **Task 4 is a hard gate.** testcontainers-python#1015 is an open Windows port-mapping regression against 4.14.2. If Task 4 fails, stop and escalate â€” the fallback (compose-based integration tests) is a spec change.
+1. **Task 4 is a hard gate.** testcontainers-python#1015 is an open Windows port-mapping regression against 4.14.2. If Task 4 fails, stop and escalate — the fallback (compose-based integration tests) is a spec change.
 2. **Task 16 Step 8 is expected to fail `lint-imports`.** Task 17 resolves it. This is written deliberately as two tasks so the contract is *seen* to bite before it is accommodated.
-3. **MinIO is knowingly vulnerable.** Local dev only. Documented in the README and spec Â§3.4.
+3. **MinIO is knowingly vulnerable.** Local dev only. Documented in the README and spec §3.4.
 4. **Compose bind-mounted volumes on Windows** can be slow under WSL2. If Postgres throughput is painful, switch `pgdata` to a plain named volume (Docker-managed, inside the WSL2 VM) and accept that it lives on C:.
