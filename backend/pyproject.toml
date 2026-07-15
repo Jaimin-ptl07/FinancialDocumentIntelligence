@@ -1,0 +1,58 @@
+[project]
+name = "fdi"
+version = "0.1.0"
+description = "Financial Document Intelligence — ingestion platform"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.139",
+    "uvicorn[standard]>=0.35",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.14",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "asyncpg>=0.31",
+    "alembic>=1.18",
+    "celery>=5.6.3",
+    "redis>=5.2",
+    "minio>=7.2.20",
+    "structlog>=26.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.13",
+    "testcontainers[postgres,minio,rabbitmq,redis]==4.14.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fdi"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "C4", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: needs Docker containers"]
