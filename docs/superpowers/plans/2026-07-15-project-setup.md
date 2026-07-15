@@ -402,6 +402,29 @@ git add backend
 git commit -m "test(workers): AST guard against async def under @app.task"
 ```
 
+### Known limits of this guard (measured, not assumed)
+
+Two shapes defeat it. Both were confirmed empirically in the same run that correctly caught
+all four canonical forms (`@shared_task`, `@app.task`, `@app.task(name=...)`,
+`@shared_task(bind=True)`):
+
+1. **Aliased decorators** — `task_alias = app.task` then `@task_alias`. The matcher keys on the
+   literal names `task`/`shared_task`, so an alias is invisible to it.
+2. **Class-based tasks** — `class BadTask(Task): async def run(self): ...`. Celery invokes `run()`
+   by subclassing, so there is no decorator for an AST matcher to see at all. **This one is
+   structural, not an oversight**: no decorator-based check can ever cover it.
+
+Neither is fixed, deliberately — chasing them would over-build a guard against shapes this
+project does not use. **The rule is: every stage uses the decorator form in §7.** If class-based
+tasks are ever adopted, this guard silently stops protecting the thing it was built for, and
+needs a second check keyed on `Task` subclasses with an async `run`. Recorded here so that
+decision is made knowingly rather than discovered.
+
+Also note the scan path is load-bearing: `SRC = parents[2] / "src" / "fdi"`. If it were wrong,
+`rglob()` on a nonexistent directory returns **empty rather than raising**, so the test would
+pass trivially forever while scanning nothing. Verified by breaking it on purpose. The
+`assert files` line exists solely to make that failure impossible to mistake for a pass.
+
 ---
 
 ## Task 4: De-risk testcontainers on Windows ⚠️ EARLY BY DESIGN
