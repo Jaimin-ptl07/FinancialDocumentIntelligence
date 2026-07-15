@@ -51,6 +51,12 @@ python_version = "3.13"
 strict = true
 ignore_missing_imports = true
 mypy_path = "src"
+# Without this, mypy uses pydantic's @dataclass_transform typing, which treats every
+# field lacking a default as a mandatory __init__ kwarg -- so a bare `Settings()`, the
+# only way this app ever constructs it, reports 6 false `call-arg` errors. The plugin
+# special-cases BaseSettings subclasses (`force_optional=... or is_settings` in
+# pydantic/mypy.py) because their fields are populated from the environment at runtime.
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
