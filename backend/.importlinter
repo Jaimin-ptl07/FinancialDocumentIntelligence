@@ -1,0 +1,14 @@
+[importlinter]
+root_package = fdi
+
+[importlinter:contract:fdi-layers]
+name = FDI layered architecture
+type = layers
+containers =
+    fdi
+layers =
+    api | workers
+    pipeline
+    platform
+    core
+exhaustive = true
