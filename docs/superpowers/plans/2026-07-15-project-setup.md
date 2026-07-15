@@ -42,12 +42,23 @@ corepack enable
 
 All commands run from the **repo root** `D:\FinancialDocumentIntelligence` unless stated.
 
-| Purpose | Command |
-|---|---|
-| Tests | `uv run --directory backend pytest -q` |
-| Lint | `uv run --directory backend ruff check .` |
-| Types | `uv run --directory backend mypy --strict src` |
-| Imports | `uv run --directory backend lint-imports --config .importlinter` |
+| Purpose | Command | Needs Docker? |
+|---|---|---|
+| Fast loop | `uv run --directory backend pytest -m "not integration" -q` | no |
+| Full suite | `uv run --directory backend pytest -q` | **yes** |
+| Lint | `uv run --directory backend ruff check .` | no |
+| Types | `uv run --directory backend mypy --strict src` | no |
+| Imports | `uv run --directory backend lint-imports --config .importlinter` | no |
+
+> **Bare `pytest -q` requires Docker** — integration tests are not deselected by default, and
+> that is deliberate: hiding them behind an opt-in flag is how they stop being run locally and
+> start failing only in CI. Use `-m "not integration"` for the inner loop when you know you
+> haven't touched an I/O seam.
+>
+> **Budget timeouts off ~105s, not ~45s.** The container suite was measured green across four
+> consecutive runs, but wall time ranged **41s → 105s** (a 2.4× spread, mostly RabbitMQ
+> readiness). A timeout tuned to the fast case would flake intermittently and look like a bug in
+> the code under test.
 
 > ### `--directory`, never `--project`. This is not cosmetic.
 >

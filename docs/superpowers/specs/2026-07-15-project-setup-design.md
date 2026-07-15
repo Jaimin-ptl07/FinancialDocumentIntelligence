@@ -368,14 +368,42 @@ a laptop where containers settle slowly. Correct for cloud, mildly annoying loca
 | Layer | Approach |
 |---|---|
 | **Unit** | pure functions, zero containers, fast enough to run on save. Where `core` is tested — forever, offline. |
-| **Integration** | session-scoped **testcontainers**: Postgres, RabbitMQ, MinIO, Redis. |
+| **Integration** | session-scoped **testcontainers**: Postgres, RabbitMQ, MinIO, Redis. ✅ **Verified working on this Windows box** — testcontainers-python#1015 did not reproduce. |
 | **E2E** | the §8 round-trip, asserted end to end. |
 
 **CI gates:** `ruff` · `mypy --strict` · `import-linter` · `pytest`.
 
-**Accepted trade-off:** testcontainers costs ~30–60s of session startup on a 15 W CPU. Testing
-against an already-running Compose stack would be faster but creates two paths that drift. One path
-was chosen over inner-loop speed.
+**Accepted trade-off:** testcontainers costs container startup on a 15 W CPU. Testing against an
+already-running Compose stack would be faster but creates two paths that drift. One path was chosen
+over inner-loop speed.
+
+### Measured at implementation (do not re-derive)
+
+- **Startup is 41–105s, not 30–60s.** Four consecutive runs were all green, but wall time varied
+  **2.4×**, mostly RabbitMQ readiness. **Budget CI timeouts off ~105s.** A timeout tuned to the
+  fast case flakes intermittently and reads as a bug in the code under test.
+- **`TC_HOST=localhost` is inert on this machine** and is kept only as portability insurance.
+  Docker Desktop uses the named-pipe transport, and testcontainers already falls back to
+  `localhost` for npipe — the guard sets a value that was already correct. It *would* matter for
+  remote-Docker or some WSL configurations. **If containers ever stop resolving, `TC_HOST` is not
+  the lever.**
+- The import-ordering constraint is real regardless: `testcontainers`' `config.py` declares
+  `tc_host_override` as a **plain dataclass field default** (its neighbours use `default_factory`),
+  so it is read exactly once at import. Setting `TC_HOST` afterwards does nothing.
+- **Ryuk works on Windows/WSL2** — it reaped every container across four runs, zero leaks. Do
+  **not** set `TESTCONTAINERS_RYUK_DISABLED`; it is not a fix for anything here.
+- Images total ~1.5 GB; first pull ~82s.
+
+**Bare `pytest -q` requires Docker.** Integration tests are deliberately *not* deselected by
+default — hiding them behind an opt-in is how they stop running locally and start failing only in
+CI. `pytest -m "not integration" -q` is the fast inner loop.
+
+**Known typing gap, not currently gated:** `testcontainers` ships **no `py.typed` marker**, so
+under `ignore_missing_imports = true` mypy treats it as untyped and `MinioContainer.get_client()`
+degrades to `Any` despite being annotated upstream. That is why the `minio_endpoint` fixture needs
+an explicit `endpoint: str = ...` local. The mypy gate covers `src` only, so this is invisible
+today — **if it is ever extended to `tests`, `conftest.py`'s `minio_client` fixture breaks.** Same
+one-line local-annotation fix.
 
 ---
 
