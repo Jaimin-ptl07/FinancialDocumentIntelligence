@@ -1751,6 +1751,19 @@ def test_celery_app_config() -> None:
     assert app.conf.broker_connection_retry_on_startup is True
     assert app.conf.broker_url == REQUIRED_ENV["FDI_BROKER_URL"]
     assert app.conf.result_backend == REQUIRED_ENV["FDI_RESULT_BACKEND"]
+    # Concurrency must come from config, not a CLI flag -- otherwise
+    # FDI_WORKER_CONCURRENCY looks configurable while being silently overridden.
+    assert app.conf.worker_concurrency == 2
+
+
+def test_worker_concurrency_honours_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FDI_WORKER_CONCURRENCY", "7")
+    from fdi.platform.config import get_settings
+
+    get_settings.cache_clear()
+    from fdi.workers.app import create_celery_app
+
+    assert create_celery_app().conf.worker_concurrency == 7
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1782,6 +1795,11 @@ def create_celery_app() -> Celery:
     app.conf.update(
         broker_url=settings.broker_url,
         result_backend=settings.result_backend,
+        # Single source of truth for concurrency. The compose worker command
+        # deliberately carries NO --concurrency flag: a CLI flag silently wins over
+        # config, which would make FDI_WORKER_CONCURRENCY look configurable while
+        # doing nothing.
+        worker_concurrency=settings.worker_concurrency,
         task_acks_late=True,
         task_reject_on_worker_lost=True,
         worker_prefetch_multiplier=1,
@@ -2724,7 +2742,16 @@ git commit -m "build(rabbitmq): consumer_timeout headroom for multi-minute stage
 # Copy to .env and adjust. .env is gitignored.
 
 # Volumes live on F: -- D: has only ~29 GB free.
-FDI_DATA_ROOT=F:/fdi-data
+#
+# NOT FDI_-prefixed, deliberately. `FDI_` is reserved for Settings fields and
+# nothing else -- the app rejects any unknown FDI_ var it can see, so a
+# Compose-only var wearing that prefix is a landmine: the moment someone adds
+# `env_file:` to a service, the app refuses to boot citing a variable that is
+# legitimately required from the operator's point of view. That reads as a false
+# positive and invites weakening the validator. Every other Compose-only var here
+# (POSTGRES_*, MINIO_*, RABBITMQ_*) already sits outside FDI_; this restores that
+# rule rather than inventing one.
+COMPOSE_DATA_ROOT=F:/fdi-data
 
 POSTGRES_USER=fdi
 POSTGRES_PASSWORD=fdi
@@ -2753,6 +2780,12 @@ FDI_LOG_LEVEL=INFO
 ```yaml
 name: fdi
 
+# This allowlist MUST contain every Settings field, or the field is inert: the var
+# is set in .env, never reaches the container, and the app silently uses its
+# default. That is the same silent-misbehaviour class the config validator exists
+# to prevent, arriving through Compose instead of through os.environ -- and the
+# validator cannot catch it, because it only sees what is already inside the
+# container. Add a Settings field, add it here.
 x-backend-env: &backend-env
   FDI_DATABASE_URL: ${FDI_DATABASE_URL}
   FDI_BROKER_URL: ${FDI_BROKER_URL}
@@ -2763,6 +2796,8 @@ x-backend-env: &backend-env
   FDI_S3_BUCKET: ${FDI_S3_BUCKET}
   FDI_S3_SECURE: ${FDI_S3_SECURE}
   FDI_LOG_LEVEL: ${FDI_LOG_LEVEL}
+  FDI_WORKER_CONCURRENCY: ${FDI_WORKER_CONCURRENCY}
+  FDI_ARTIFACT_URL_TTL_SECONDS: ${FDI_ARTIFACT_URL_TTL_SECONDS}
 
 x-backend-build: &backend-build
   build:
@@ -2868,13 +2903,16 @@ services:
     <<: *backend-build
     profiles: [core]
     environment: *backend-env
+    # No --concurrency flag, deliberately. Concurrency comes from
+    # FDI_WORKER_CONCURRENCY -> Settings -> app.conf.worker_concurrency (Task 13).
+    # A CLI flag here would be a SECOND source of truth that silently wins over the
+    # env var, making FDI_WORKER_CONCURRENCY look configurable while doing nothing.
     command:
       - celery
       - -A
       - fdi.workers.app
       - worker
       - --pool=prefork
-      - --concurrency=2
       - --loglevel=INFO
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -2934,19 +2972,19 @@ services:
 
 volumes:
   pgdata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/postgres"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/postgres"}
   miniodata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/minio"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/minio"}
   redisdata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/redis"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/redis"}
   rabbitdata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/rabbitmq"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/rabbitmq"}
   neo4jdata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/neo4j"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/neo4j"}
   etcddata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/etcd"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/etcd"}
   milvusdata:
-    driver_opts: {type: none, o: bind, device: "${FDI_DATA_ROOT}/milvus"}
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/milvus"}
 ```
 
 - [ ] **Step 3: Create the volume directories on F:**
