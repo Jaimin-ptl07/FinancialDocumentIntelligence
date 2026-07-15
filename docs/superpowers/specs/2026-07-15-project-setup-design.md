@@ -241,7 +241,7 @@ Guards, each closing a specific documented failure mode:
 | `--pool=prefork` only | gevent/eventlet: CPU work never yields (monkey-patching only makes *I/O* yield), broker heartbeat starves → RabbitMQ redelivers → CPU re-burned. Celery's docs also state the gevent pool "does not implement soft time limits [and] will not enforce the hard time limit if the task is blocking" — a blocking CPU task there is un-timeout-able. |
 | `asyncio.run()` **once per task** | `async_to_sync`'s fresh-loop-per-*call* → `got Future attached to a different loop`, pooling impossible |
 | Never build loop/pool at module import | `fork()` copies the loop object but not its driving thread → coroutines hang **silently, with no error** |
-| Pools built in `worker_process_init` | a pooled connection carried across fork gives two interpreters one socket → silent message corruption, not a clean error |
+| Engine created **inside** the task coroutine and disposed in `finally` — never at module level | A pool built at import is inherited across `fork()`, handing two interpreters one socket → **silent message corruption**, not a clean error. Note this is *not* solved by building pools in `worker_process_init`: that is the remedy for the sync-worker design (§3.3), and under `asyncio.run()`-per-task there is no event loop at `worker_process_init` for a pool to bind to. The remedy here is that **nothing exists at module level to be inherited**. |
 | CI lint: no `async def` under `@app.task` | Celery returns an un-awaited coroutine, **reports success, and does nothing** |
 | `consumer_timeout` raised above p99 in `rabbitmq.conf` | 30-minute default + `task_acks_late` → channel killed → requeue → **infinite redelivery loop re-burning CPU on the largest documents** |
 | `task_acks_late=True` | task loss on worker death |
@@ -251,17 +251,25 @@ Guards, each closing a specific documented failure mode:
 Canonical task shape:
 
 ```python
-@app.task                                   # sync def — NOT async def
+@app.task                                    # sync def — NOT async def
 def run_stage(doc_id: str) -> str:
-    return asyncio.run(_run_stage(doc_id))
+    return asyncio.run(_run_stage(doc_id))   # exactly one loop, per task
 
 async def _run_stage(doc_id: str) -> str:
-    raw = await store.get(doc_id, "in.json")        # I/O
-    out = transform(raw)                             # CPU — pure, sync, blocks this loop (fine)
-    await store.put(doc_id, "out.json", out)         # I/O
-    await repo.mark_done(doc_id)                     # I/O
-    return out.key
+    engine = make_engine(...)                # built INSIDE the loop, never at import
+    try:
+        raw = await store.get(doc_id, "in.json")     # I/O
+        out = transform(raw)                          # CPU — pure, sync; blocks this loop (fine,
+                                                      #   nothing else is on it)
+        await store.put(doc_id, "out.json", out)     # I/O
+        await mark_done(engine, doc_id)              # I/O
+        return out.key
+    finally:
+        await engine.dispose()               # loop dies with the task; so must the pool
 ```
+
+The engine lives exactly as long as the loop that owns it. Per-task connection setup costs
+milliseconds against minutes of CPU — the same reasoning that made §3.3's choice affordable.
 
 ---
 
