@@ -66,14 +66,31 @@ boundary is what makes that cheap.
 
 ### 3.2 The `core` / `platform` purity boundary — enforced in CI
 
-An `import-linter` **layered contract** runs as a CI gate:
+An `import-linter` **layered contract** runs as a CI gate (`lint-imports`, exit 0/1):
 
 ```
-api, workers  →  pipeline  →  platform  →  core
+api | workers   ← independent siblings; neither may import the other
+      ↓
+   pipeline
+      ↓
+   platform
+      ↓
+     core       ← imports nothing else from fdi
 ```
 
 `core` may import nothing from `fdi` outside `core`: no settings singleton, no clock, no RNG, no I/O.
 Violations fail the build.
+
+**Two syntax facts this depends on, both counter-intuitive:**
+
+1. **`|` means independent siblings** (may *not* import each other) — `:` means siblings that *may*.
+   The separator that looks like "or" is the strict one.
+2. **`exhaustive = true` is mandatory, not optional.** A `layers` contract only constrains the modules
+   it *lists*. Without `exhaustive`, the day someone adds `fdi.utils` or `fdi.helpers`, `core` could
+   import it freely **and CI would stay green** — the gate would appear to enforce the boundary while
+   leaking. `exhaustive` (with `containers = fdi`) forces every child of `fdi` to be either a declared
+   layer or an explicit entry in `exhaustive_ignores`. A rule that looks enforced but isn't is worse
+   than no rule, because it is trusted.
 
 *Why this is the most important structural rule in the project:* all twelve phases' algorithms live
 in `core`. Purity is what makes them **testable offline against frozen fixtures** (no OCR cost in
@@ -113,10 +130,27 @@ MinIO the *server* appears only in local Compose and never in production; cloud 
 Blob.
 
 *Why:* MinIO's community server repository is **archived** — its README reads "THIS REPOSITORY IS NO
-LONGER MAINTAINED", and its final release (2025-10-15) was itself a CVE fix for privilege
-escalation. An unmaintained storage layer with no patch pipeline is unacceptable in production, but
-acceptable on an isolated dev container holding throwaway data. Confining it to local dev makes the
-eventual swap a Compose change with **zero application-code impact**.
+LONGER MAINTAINED". An unmaintained storage layer with no patch pipeline is unacceptable in
+production, but acceptable on an isolated dev container holding throwaway data. Confining it to local
+dev makes the eventual swap a Compose change with **zero application-code impact**.
+
+**⚠️ The patched image is unobtainable, and we are pinning a vulnerable one deliberately.** MinIO
+stopped publishing free container images around 2025-10-23. Its final release,
+`RELEASE.2025-10-15T17-29-55Z`, *is* the fix for **CVE-2025-62506** (privilege escalation) — but it
+shipped **source-only**. The newest tag on Docker Hub is `RELEASE.2025-09-07T16-13-09Z`, which is
+therefore **permanently unpatched for that CVE**. We pin it anyway, with eyes open:
+
+- Third-party rebuilds (`alpine/minio`, `ghcr.io/golithus/minio`) trade a known, local-only CVE for
+  an unvetted supply chain — a worse trade for a dev dependency.
+- Garage or SeaweedFS are maintained and S3-compatible, but cost `testcontainers`' built-in
+  `MinioContainer` support, which SP-1's integration tests rely on.
+- The container is dev-only, on an isolated Docker network, holding throwaway data, and **never runs
+  in production**. Exploiting it requires access to the developer's own machine.
+
+This is exactly the risk this section's decision was designed to contain: because application code
+targets the S3 API and nothing else, replacing this container is a one-line Compose change. Revisit
+if MinIO is ever proposed for anything beyond local dev — at which point the answer is *no*, and
+Garage/SeaweedFS/S3 take its place.
 
 ### 3.5 Compose profiles — pay for a service at its phase
 
@@ -181,7 +215,7 @@ D:\FinancialDocumentIntelligence\
 | Service | Image | Profile | Notes |
 |---|---|---|---|
 | `postgres` | `postgres:18.4` | core | registry + job state |
-| `minio` | `minio/minio:RELEASE.2025-10-15T17-29-55Z` | core | **local dev only** (§3.4); the final upstream release — itself the privilege-escalation CVE fix, so this is the most-patched build that exists |
+| `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | core | **local dev only** (§3.4). ⚠️ Knowingly unpatched for CVE-2025-62506 — see §3.4. |
 | `redis` | `redis:8.8.0` | core | Celery result backend |
 | `rabbitmq` | `rabbitmq:4.3.2-management` | core | broker; custom `rabbitmq.conf` |
 | `migrate` | backend image | core | **one-shot**, runs `alembic upgrade head`, exits |
@@ -243,7 +277,7 @@ Guards, each closing a specific documented failure mode:
 | Never build loop/pool at module import | `fork()` copies the loop object but not its driving thread → coroutines hang **silently, with no error** |
 | Engine created **inside** the task coroutine and disposed in `finally` — never at module level | A pool built at import is inherited across `fork()`, handing two interpreters one socket → **silent message corruption**, not a clean error. Note this is *not* solved by building pools in `worker_process_init`: that is the remedy for the sync-worker design (§3.3), and under `asyncio.run()`-per-task there is no event loop at `worker_process_init` for a pool to bind to. The remedy here is that **nothing exists at module level to be inherited**. |
 | CI lint: no `async def` under `@app.task` | Celery returns an un-awaited coroutine, **reports success, and does nothing** |
-| `consumer_timeout` raised above p99 in `rabbitmq.conf` | 30-minute default + `task_acks_late` → channel killed → requeue → **infinite redelivery loop re-burning CPU on the largest documents** |
+| `consumer_timeout` raised above p99 in `rabbitmq.conf` — *insurance, currently inert* | 30-minute default + `task_acks_late` → channel killed → requeue → **infinite redelivery loop re-burning CPU on the largest documents**. ⚠️ **RabbitMQ 4.3 stopped evaluating consumer timeouts for classic queues** — it is now quorum-queue-only. Celery declares classic queues by default, so on our stack this trap **does not currently exist and the setting is a no-op**. We set it anyway: it costs nothing and becomes load-bearing the moment quorum queues are adopted (the HA path, since 4.x dropped classic mirrored queues — see §15). 4.3 also adds per-queue `x-consumer-timeout` and a `consumer-timeout` policy key, both of which beat the global setting. |
 | `task_acks_late=True` | task loss on worker death |
 | `worker_prefetch_multiplier=1` | head-of-line blocking on long tasks |
 | `worker_max_tasks_per_child` | unbounded memory drift |
@@ -392,7 +426,12 @@ real OCR · the unified document schema (SP-2) · the stage/DAG framework (SP-2)
 | PostgreSQL | **18.4** | 18 is GA (19 is beta only). asyncpg 0.31.0 states support for 9.5–**18**. |
 | RabbitMQ | **4.3.2** | 4.2's **community** support ends **2026-07-31 — 16 days from now, not yet passed**. Its 2030 LTS date is *commercial* only and buys nothing without a Broadcom licence. 4.3 community runs to 2026-11-30. |
 | Redis | 8.8.0 | tri-licensed RSALv2 / SSPLv1 / **AGPLv3** — AGPLv3 may be *elected* (added as a third option 2025-05-01, not swapped in) |
-| MinIO server | pinned, local-dev only | archived upstream (§3.4) |
+| MinIO server | `RELEASE.2025-09-07T16-13-09Z` | archived upstream; **newest tag on Docker Hub**. The patched `2025-10-15` release is source-only and unobtainable as an image — this pin is knowingly unpatched for CVE-2025-62506. Local dev only. (§3.4) |
+| uv | 0.11.28 | pin the distroless `ghcr.io/astral-sh/uv:0.11.28` for `COPY --from=`; `:latest` is not reproducible |
+| structlog | 26.1.0 | must use `ProcessorFormatter` — the common `LoggerFactory` + `JSONRenderer` chain double-prints tracebacks |
+| pydantic-settings | 2.14.2 | omitting `env_file` is sufficient; it already defaults to `None` |
+| import-linter | 2.13 | `\|` = independent siblings; `exhaustive = true` required (§3.2) |
+| testcontainers | see plan | |
 | minio Python SDK | 7.2.20 | Apache-2.0, maintained, generic S3 client |
 | Neo4j | 5.26.28 (LTS) | final 5.x; hotfixes to 2028-06-06. No CalVer release carries LTS yet. |
 | Milvus | v2.6.20 | companions: `etcd v3.5.25`, `minio RELEASE.2024-05-28T17-19-04Z` |
