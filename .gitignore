@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Environment / secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.pnpm-store/
+
+# Local artifacts (real artifacts live in object storage, volumes live on F:)
+/data/
+/tmp/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
