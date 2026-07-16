@@ -67,4 +67,7 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["integration: needs Docker containers"]
+markers = [
+    "integration: needs Docker containers",
+    "e2e: needs the compose stack running",
+]

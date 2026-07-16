@@ -22,6 +22,17 @@ uv run --directory backend mypy --strict src
 uv run --directory backend pytest -q
 ```
 
+`pytest -q` runs the whole suite — including the `e2e` round-trip tests, which
+silently **skip** unless the stack is up (`docker compose --profile core up -d`).
+For the fast inner loop, deselect both the container and stack tests:
+
+```powershell
+uv run --directory backend pytest -m "not integration and not e2e" -q
+```
+
+That form touches no network and shows no misleading "skipped" e2e lines — the
+reachability probe lives in a fixture, so deselecting `e2e` never opens a socket.
+
 ### Why `--directory` and not `--project`
 
 `--project` picks the venv but leaves the working directory alone, and pytest and mypy
