@@ -2239,6 +2239,36 @@ git commit -m "feat(workers): celery app with acks-late, prefetch=1 and child re
 
 The most important twelve lines in SP-1. Every stage in SP-2…SP-18 follows this shape.
 
+> ### ⛔ `if correlation_id: bind(...)` — as this plan originally specified — LEAKS IDs BETWEEN JOBS.
+>
+> Prefork reuses the worker process across tasks, and `bind_correlation_id` writes a contextvar that
+> outlives the task. Job A binds `cid-1`; job B arrives with no ID, the `if` is false, **nothing
+> rebinds, and B's log lines carry A's correlation ID.** Reproduced through Celery's own
+> `build_tracer`/`trace_task` path, not a bare call:
+>
+> ```
+> body-sees     -> 'cid-A'    job A, dispatched with correlation_id="cid-A"
+> between-tasks -> 'cid-A'    nothing ever clears it
+> body-sees     -> 'cid-A'    job B, dispatched with NO id -- reads A's
+> ```
+>
+> **The framework saves nobody.** `celery/app/trace.py`, `celery/concurrency/prefork.py` and
+> `billiard/pool.py` contain **zero** references to `contextvars` or `copy_context` — verified by
+> grep, not assumed. Combined with `worker_max_tasks_per_child=50`, up to **50 jobs share one
+> Context**. On a platform whose entire value is provenance, log lines attributed to the wrong
+> document are not cosmetic.
+>
+> **The fix needs both halves; they close different holes.** Unconditional bind (minting when
+> absent) stops *this* task inheriting a predecessor's ID. `finally: clear` stops *this* task's ID
+> becoming the ambient default for the next one — including future SP-2…SP-18 stages whose author
+> forgets to bind at all. Verified by mutation: reverting to the plan's version turns the leak tests
+> red (`3 failed`); the shipped version is green (`7 passed`).
+>
+> **Known limit, not papered over:** minting can hide a dispatch bug. If the API is meant to always
+> pass an ID, a minted one silently means it didn't. Minting was still chosen — the signature permits
+> `correlation_id=""`, and unattributable log lines are the worse failure — but nothing currently
+> detects that case. Worth a warning when SP-2 wires real dispatch.
+
 **Files:**
 - Create: `backend/src/fdi/workers/tasks.py`
 - Test: `backend/tests/integration/test_ping_task.py`
@@ -2332,7 +2362,10 @@ Three rules, each closing a verified failure:
    `async def` returns an un-awaited coroutine and reports SUCCESS.
 2. The correlation ID is bound in the SYNC wrapper, BEFORE asyncio.run().
    contextvars is copy-in / no-copy-out: bind it inside the loop and the caller
-   never sees it.
+   never sees it. Bind UNCONDITIONALLY and clear in `finally` -- prefork reuses
+   the process, so a conditional bind leaks the previous job's ID into this one.
+   Celery handles contextvars nowhere; verified by grep across trace.py,
+   prefork.py and billiard/pool.py.
 3. The engine is created INSIDE the coroutine and disposed in `finally`. A pool
    built at import is inherited across fork() and corrupts silently.
 """
@@ -2364,12 +2397,28 @@ def _make_client(settings: Any) -> Minio:
     )
 
 
-@app.task(name="fdi.ping_job", bind=False)
+# `type: ignore[untyped-decorator]` is NOT optional, and EVERY stage in SP-2..SP-18
+# will need it. Celery 5.6.3 ships no `py.typed`, so under `ignore_missing_imports`
+# the package resolves to Any, making `app.task(...)` an untyped decorator -- and
+# `--strict` implies `disallow_untyped_decorators`. Without it the gate fails:
+#   error: Untyped decorator makes function "ping_job" untyped [untyped-decorator]
+# Scoped to the line on purpose: a module-wide override would also wave through a
+# genuinely untyped decorator added later. `--strict` implies
+# `warn_unused_ignores`, so if `celery-types` is ever added, this comment fails the
+# gate rather than rotting silently.
+@app.task(name="fdi.ping_job", bind=False)  # type: ignore[untyped-decorator]
 def ping_job(job_id: str, correlation_id: str = "") -> str:
-    """Sync wrapper. Binds the correlation ID BEFORE the loop, then runs once."""
-    if correlation_id:
-        bind_correlation_id(correlation_id)
-    return asyncio.run(_ping_job(job_id))
+    """Sync wrapper. Binds the correlation ID BEFORE the loop, then runs once.
+
+    Unconditional bind + `finally: clear`. `if correlation_id:` is a LEAK, not an
+    optimisation -- this process has already run other jobs and their IDs are
+    still bound. See the callout below.
+    """
+    bind_correlation_id(correlation_id or new_correlation_id())
+    try:
+        return asyncio.run(_ping_job(job_id))
+    finally:
+        clear_correlation_id()
 
 
 async def _ping_job(
@@ -2408,14 +2457,38 @@ async def _ping_job(
         log.info("ping_job.done", job_id=job_id, artifact_key=key)
         return key
     except Exception as exc:
-        async with make_session_factory(engine)() as session:
-            await JobRepository(session).mark_failed(job_id, error=repr(exc))
-            await session.commit()
+        # Log the CAUSE first: everything after this point can fail, and if it
+        # does, this line is the only surviving record of why the job died.
         log.exception("ping_job.failed", job_id=job_id)
+        try:
+            # A fresh factory, not `session_factory`: that name is bound inside the
+            # `try` and would be unbound here had its own line raised.
+            async with make_session_factory(engine)() as session:
+                await JobRepository(session).mark_failed(job_id, error=repr(exc))
+                await session.commit()
+        except Exception:
+            # Swallowed ON PURPOSE -- see the callout below. Letting this escape
+            # replaces `exc` with whatever broke while recording it, and Celery
+            # stores the MASK as the task's error. Logged, never lost.
+            log.exception("ping_job.mark_failed_failed", job_id=job_id)
+        # Bare `raise` re-raises `exc`, NOT the swallowed one: the inner handler has
+        # exited, so the exception being handled is the outer one again. Verified.
         raise
     finally:
         await engine.dispose()
 ```
+
+> **Why the bookkeeping is best-effort — the original `except` destroyed the real error.**
+> If `mark_failed` itself raises, its exception *replaces* `exc`, and this is worse than the usual
+> "`__context__` still has it" consolation: this app sets `result_serializer="json"`, so Celery's
+> `prepare_exception` emits only `{exc_type, exc_message, exc_module}` — **no chain**. A client's
+> `result.get()` re-raises the mask with `__context__` of **`None`**. The cause survives solely in
+> the worker's traceback string: a human can grep it back, a program cannot.
+>
+> The nonexistent-job case is the nastiest shape: `mark_running` raises `KeyError`, the handler calls
+> `mark_failed`, which raises `KeyError` **with an identical message**. The substitution is invisible
+> to every obvious assertion — only `__context__` distinguishes them, and that is exactly what JSON
+> drops.
 
 - [ ] **Step 4: Run to verify it passes**
 
