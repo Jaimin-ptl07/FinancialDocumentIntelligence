@@ -3716,7 +3716,7 @@ git commit -m "build(compose): profiled stack with pinned tags and F: volumes"
 **Files:**
 - Test: `backend/tests/e2e/test_walking_skeleton.py`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```python
 """The SP-1 deliverable, asserted end to end against the running compose stack.
@@ -3778,7 +3778,7 @@ def test_correlation_id_is_echoed() -> None:
     assert r.json()["correlation_id"] == "e2e-fixed-id"
 ```
 
-- [ ] **Step 2: Add the `e2e` marker to `backend/pyproject.toml`**
+- [x] **Step 2: Add the `e2e` marker to `backend/pyproject.toml`**
 
 ```toml
 markers = [
@@ -3787,17 +3787,55 @@ markers = [
 ]
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 Run: `uv run --directory backend pytest tests/e2e -v`
 Expected: 3 passed (with the core profile up).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add backend
 git commit -m "test(e2e): assert the full walking-skeleton round-trip"
 ```
+
+> **Task 21 — done. Verified against a live core stack: 3 passed in 5.64s
+> (`test_ready_reports_all_backends`, `test_full_round_trip`,
+> `test_correlation_id_is_echoed`). With the stack DOWN, all three report
+> `skipped` with a visible reason — an honest gate, not a green one.**
+>
+> Two plan defects fixed before the test landed (both in the plan's proposed
+> version above; the shipped file avoids them):
+>
+> 1. **Collection-time network probe.** The proposed `pytestmark = [..., skipif(not
+>    _stack_is_up())]` calls `_stack_is_up()` — a real socket to `localhost:8000`
+>    — at COLLECTION, so every invocation probes, including the fast unit loop
+>    (`pytest -m "not integration and not e2e"`), whose defining property is that
+>    it touches no network. It is also unsound: if any unrelated process answers
+>    on :8000 the probe passes and the e2e tests run against the wrong server.
+>    Shipped fix: the probe lives in a **session-scoped `stack` fixture** each test
+>    requests; `-m` deselection runs before fixture setup, so `-m "not e2e"` opens
+>    no socket. Verified: fast suite = 57 passed, 65 deselected, zero network.
+>
+> 2. **Fast-suite pollution / silent-skip false confidence.** The e2e module was
+>    not marked, so `-m "not integration"` INCLUDED it and showed a green
+>    `skipped` while testing the SP-1 deliverable not at all. Shipped fix:
+>    registered the `e2e` marker in `pyproject.toml`; the canonical fast command
+>    is now `-m "not integration and not e2e"`, documented in `backend/README.md`
+>    with a note that `pytest -q` runs e2e and they skip unless the stack is up.
+>    **Handoff to Task 23 (CI):** CI must run e2e against a real stack OR
+>    explicitly DESELECT it — a silently-skipped e2e must never be counted green.
+>
+> Operational note (not a code defect, recorded for operators): compose's
+> `${FDI_...}` interpolation takes the invoking SHELL over `--env-file`, so a
+> single `FDI_` var exported EMPTY in the operator's shell silently overrides
+> `.env` and, for the bool/int fields, crashes the stack at `migrate` with
+> `int_parsing`/`bool_parsing` on `""` — the same silent-override class the
+> `x-backend-env` comment warns about, arriving from the shell side. The str
+> fields swallow `""` (a valid string), so only `s3_secure`/`worker_concurrency`/
+> `artifact_url_ttl_seconds` surface it — masking that ALL vars were empty. The
+> up command must be run from a shell with no stray `FDI_` vars; the plan's
+> `--env-file .env` form (Step 2/3 above) is correct and required.
 
 ---
 
