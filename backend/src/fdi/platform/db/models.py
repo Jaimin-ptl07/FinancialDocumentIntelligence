@@ -4,7 +4,7 @@ truth, and this keeps wall-clock out of artifact bodies (Global Constraint 6).""
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -57,6 +57,51 @@ class Job(Base):
     # -- no UPDATE is emitted at all. So this column means "last write *through
     # the ORM*", which is only the same thing as "last write" for as long as the
     # repository stays the sole writer.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class StageStatus(enum.StrEnum):
+    """Stage lifecycle states. See `JobStatus` for the `StrEnum` rationale."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class Document(Base):
+    __tablename__ = "document"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class StageRun(Base):
+    __tablename__ = "stage_run"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','done','failed')", name="ck_stage_run_status"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(ForeignKey("document.id"), index=True, nullable=False)
+    stage_name: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    stage_version: Mapped[int] = mapped_column(nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
