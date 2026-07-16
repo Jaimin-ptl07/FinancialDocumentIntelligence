@@ -1071,7 +1071,13 @@ class Base(DeclarativeBase):
     pass
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(enum.StrEnum):
+    """StrEnum, NOT `(str, enum.Enum)` -- that form fails ruff UP042, and for a
+    real reason: it renders as `JobStatus.QUEUED` under f-strings and `%s` while
+    comparing, joining and persisting as `queued`. It passes every obvious smoke
+    test and corrupts only interpolated output -- a log line or an f-string query.
+    StrEnum gives `queued` everywhere."""
+
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
@@ -1321,6 +1327,11 @@ def upgrade() -> None:
                   server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True),
                   server_default=sa.func.now(), nullable=False),
+        # The ONLY thing enforcing the status domain -- see the note below.
+        sa.CheckConstraint(
+            "status IN ('queued', 'running', 'done', 'failed')",
+            name="ck_jobs_status",
+        ),
     )
     op.create_index("ix_jobs_status", "jobs", ["status"])
     op.create_index("ix_jobs_correlation_id", "jobs", ["correlation_id"])
@@ -1331,6 +1342,27 @@ def downgrade() -> None:
     op.drop_index("ix_jobs_status", table_name="jobs")
     op.drop_table("jobs")
 ```
+
+> **Why an explicit `CHECK` and not `Enum(JobStatus)` — all three alternatives are traps, measured
+> against SQLAlchemy 2.0.51 on this box.** The obvious "improvement" here is to swap `String(16)`
+> for a real enum type. Do not.
+>
+> - **`sa.Enum(JobStatus)`** creates a native PG type whose accepted labels are
+>   `['QUEUED', 'RUNNING', 'DONE', 'FAILED']` — the enum **member names, not their values**. The
+>   app writes `"queued"` (the value, per `test_job_status_values`), so PG would reject every
+>   correct write and accept only strings no other layer produces. Fixable with
+>   `values_callable=lambda x: [i.value for i in x]`, which is exactly the kind of incantation
+>   nobody adds until after the outage.
+> - **`sa.Enum(JobStatus, native_enum=False)`** looks like the safe middle path and is the worst of
+>   the three: `create_constraint` defaults to **`False`** in SQLAlchemy 2.x, so it emits a bare
+>   `VARCHAR(7)` with **no constraint at all** — less enforcement than `String(16)`, wearing a name
+>   that reads as enforced.
+> - Native PG enums are also genuinely painful to evolve (`ALTER TYPE ... ADD VALUE` cannot run in
+>   a transaction on older PG; removing a value means recreating the type).
+>
+> Storing the plain string and constraining it in the DB keeps the domain enforced where it cannot
+> be bypassed, and keeps migrations ordinary DDL. `JobStatus` stays the single source of the four
+> literals for Python callers.
 
 - [ ] **Step 5: Write the test**
 
@@ -1354,6 +1386,25 @@ async def test_migration_creates_jobs_table(migrated_engine) -> None:
         cols = {r[0] for r in rows}
     assert {"id", "status", "artifact_key", "error",
             "correlation_id", "created_at", "updated_at"} == cols
+
+
+async def test_status_check_constraint_rejects_unknown_values(migrated_engine) -> None:
+    """The CHECK is the only thing enforcing the status domain -- prove it bites.
+
+    `Job.status` is String(16), not Enum(JobStatus), so nothing in Python stops
+    status="banana": JobStatus IS a str, so mypy accepts the enum and any string
+    alike. Without this constraint the four-value domain is a convention, and
+    conventions rot silently. A gate never seen to fail is not known to work.
+    """
+    async with migrated_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text(
+            "INSERT INTO jobs (id, status) VALUES ('ck-ok', 'queued')"
+        ))
+    with pytest.raises(sqlalchemy.exc.IntegrityError, match="ck_jobs_status"):
+        async with migrated_engine.begin() as conn:
+            await conn.execute(sqlalchemy.text(
+                "INSERT INTO jobs (id, status) VALUES ('ck-bad', 'banana')"
+            ))
 
 
 async def test_alembic_version_is_stamped(migrated_engine) -> None:
@@ -1441,6 +1492,21 @@ git commit -m "feat(platform): alembic async env and the jobs migration"
 **Files:**
 - Create: `backend/src/fdi/platform/db/repository.py`
 - Test: `backend/tests/integration/test_repository.py`
+
+> **`updated_at` is only as honest as this class. Measured during Task 8, against SQLAlchemy 2.0.51.**
+> `onupdate=func.now()` is a SQLAlchemy-level default, not a DB trigger, so it fires only for writes
+> this ORM issues. It **does** fire for ORM attribute mutation *and* for Core `update(Job)...`
+> (that one surprised me — `func.now()` is a SQL expression rendered inline at compile time, so
+> `session.execute(update(...))` gets `SET ..., updated_at=now()` too). It is **bypassed** by:
+> raw `text("UPDATE jobs ...")`, **`ON CONFLICT DO UPDATE`** (the upsert emits no `updated_at` in
+> its SET clause), and any call passing `updated_at` explicitly. A flush with no net change emits
+> no UPDATE at all, so the timestamp simply does not advance.
+>
+> So `updated_at` means *"last write through SQLAlchemy in this process"* — trustworthy precisely
+> while `JobRepository` is the only writer. **If this class ever upserts, `updated_at` silently
+> stops advancing and every staleness check built on it quietly lies.** Either set it explicitly in
+> the upsert's `SET`, or move the whole thing to a DB trigger. Decide it here, deliberately, not by
+> reaching for `ON CONFLICT` when a race shows up in SP-2.
 
 - [ ] **Step 1: Write the failing test**
 
