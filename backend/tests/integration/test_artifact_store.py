@@ -184,6 +184,13 @@ async def test_put_json_uploads_every_byte(
     assert await store.get_json(key) == obj
 
 
+async def test_exists_reflects_presence(store: ArtifactStore) -> None:
+    key = "artifacts/doc1/ping/v1/abc.json"
+    assert await store.exists(key) is False
+    await store.put_json(key, {"kind": "ping"})
+    assert await store.exists(key) is True
+
+
 # There is deliberately NO test that `get_raw`'s `finally: close(); release_conn()`
 # prevents a connection leak, because on this code path it provably does not do
 # anything -- and a green test claiming otherwise would be worse than no test.

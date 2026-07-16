@@ -73,6 +73,21 @@ class ArtifactStore:
     async def get_json(self, key: str) -> Any:
         return json.loads(await self.get_raw(key))
 
+    async def exists(self, key: str) -> bool:
+        """True iff an object exists at key. stat_object raises S3Error(NoSuchKey) when absent."""
+        from minio.error import S3Error
+
+        def _stat() -> bool:
+            try:
+                self._client.stat_object(self._bucket, key)
+                return True
+            except S3Error as exc:
+                if exc.code in {"NoSuchKey", "NoSuchObject"}:
+                    return False
+                raise
+
+        return await asyncio.to_thread(_stat)
+
     async def presigned_get_url(self, key: str, ttl_seconds: int) -> str:
         url: str = await asyncio.to_thread(
             self._presign_client.presigned_get_object,
