@@ -26,6 +26,8 @@ from testcontainers.postgres import PostgresContainer
 from testcontainers.rabbitmq import RabbitMqContainer
 from testcontainers.redis import RedisContainer
 
+from fdi.platform.config import get_settings
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 PG_IMAGE = "postgres:18.4"
@@ -101,6 +103,47 @@ _SETTINGS_STUBS = {
     "FDI_S3_SECRET_KEY": "minioadmin",
 }
 
+# Deliberately unroutable (port 1). Nothing should ever CONNECT to this: tests
+# that touch Postgres inject `postgres_url` explicitly. If this URL ever appears
+# in a connection error, a test read config it should have been given.
+_STUB_DATABASE_URL = "postgresql+asyncpg://stub:stub@127.0.0.1:1/stub"
+
+
+@pytest.fixture
+def stub_fdi_env(_isolate_fdi_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The six required FDI_ vars, for tests that IMPORT a module reading Settings.
+
+    `fdi.workers.app` ends in a module-level `app = create_celery_app()`, which
+    calls `get_settings()`. So `import fdi.workers.tasks` -- which must do
+    `from fdi.workers.app import app` to reach the decorator -- reads the
+    environment at IMPORT time. Celery requires that module-level app, so this is
+    structural, not a smell to fix in tasks.py. Measured with the prefix cleared:
+
+        ValidationError: 6 validation errors for Settings
+        database_url  Field required ...
+
+    That collides with tests/conftest.py::_isolate_fdi_env, which clears the whole
+    FDI_ prefix before EVERY test. `_alembic_applied` is not a source of these vars
+    either -- it undoes them in its own `finally`, by design, so they are absent
+    during every test body regardless of fixture order.
+
+    Depending on `_isolate_fdi_env` EXPLICITLY is what makes this work: it pins the
+    order in code rather than relying on pytest's autouse-before-non-autouse rule,
+    so this fixture cannot be silently torn apart by a future reordering. The
+    isolation fixture stays: it is what stops a developer's stray `FDI_FOO=1` from
+    failing tests they never touched.
+
+    These are STUBS. Every test here injects its real dependencies, so nothing
+    connects to them; they exist only to get past `Settings()`. Teardown (env
+    restore + `get_settings.cache_clear()`) is `_isolate_fdi_env`'s job.
+    """
+    monkeypatch.setenv("FDI_DATABASE_URL", _STUB_DATABASE_URL)
+    for key, value in _SETTINGS_STUBS.items():
+        monkeypatch.setenv(key, value)
+    # _isolate_fdi_env cleared the cache before this fixture ran -- i.e. before
+    # these vars existed. Clear again so the first get_settings() call sees them.
+    get_settings.cache_clear()
+
 
 @pytest.fixture(scope="session")
 def _alembic_applied(postgres_url: str) -> None:
@@ -122,8 +165,6 @@ def _alembic_applied(postgres_url: str) -> None:
     `migrated_engine` takes `postgres_url` directly.
     """
     monkeypatch = pytest.MonkeyPatch()
-    from fdi.platform.config import get_settings
-
     try:
         monkeypatch.setenv("FDI_DATABASE_URL", postgres_url)
         for key, value in _SETTINGS_STUBS.items():
