@@ -1,11 +1,14 @@
-"""Registry persistence. The caller owns the transaction — commit is theirs,
-not ours."""
+"""Registry + eval persistence. The caller owns the transaction — commit is
+theirs, not ours."""
+
+import uuid
 
 import sqlalchemy
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
-from fdi.platform.db.models import Document, StageRun
+from fdi.platform.db.models import Document, EvalCaseResult, EvalRun, StageRun
 
 
 class RegistryRepository:
@@ -77,3 +80,73 @@ class RegistryRepository:
                 .limit(1)
             )
         ).scalars().first()
+
+
+class EvalRepository:
+    """Eval run + case_result persistence. The caller owns the transaction."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record_run(
+        self,
+        run_id: str,
+        candidate_name: str,
+        candidate_version: int,
+        dataset_name: str,
+        dataset_version: int,
+        metric_name: str,
+        outcome: EvalOutcome,
+    ) -> None:
+        self._s.add(
+            EvalRun(
+                id=run_id,
+                candidate_name=candidate_name,
+                candidate_version=candidate_version,
+                dataset_name=dataset_name,
+                dataset_version=dataset_version,
+                metric_name=metric_name,
+                aggregate=outcome.aggregate,
+            )
+        )
+        # Flush the parent row before the children: EvalCaseResult.eval_run_id is
+        # a real FK, and with no ORM relationship() linking the two mapped
+        # classes, the unit of work has no dependency edge to order these two
+        # inserts itself — a single flush() at the end risked emitting the
+        # child INSERT first and tripping the FK constraint (seen locally).
+        await self._s.flush()
+        for result in outcome.results:
+            self._s.add(
+                EvalCaseResult(
+                    id=str(uuid.uuid4()),
+                    eval_run_id=run_id,
+                    case_id=result.case_id,
+                    score=result.score,
+                )
+            )
+        await self._s.flush()
+
+    async def leaderboard(
+        self, dataset_name: str, metric_name: str
+    ) -> list[tuple[str, int, float]]:
+        # SP-3 scale: datasets/candidates are small, so fetch every matching run
+        # and reduce to "latest per candidate" in Python rather than a
+        # window-function/subquery on max(created_at). Simpler to read and
+        # correct; revisit with a DB-side query if this table grows large.
+        rows = (
+            await self._s.execute(
+                sqlalchemy.select(EvalRun).where(
+                    EvalRun.dataset_name == dataset_name,
+                    EvalRun.metric_name == metric_name,
+                )
+            )
+        ).scalars().all()
+
+        latest: dict[str, EvalRun] = {}
+        for run in rows:
+            current = latest.get(run.candidate_name)
+            if current is None or run.created_at > current.created_at:
+                latest[run.candidate_name] = run
+
+        ranked = sorted(latest.values(), key=lambda r: r.aggregate, reverse=True)
+        return [(r.candidate_name, r.candidate_version, r.aggregate) for r in ranked]
