@@ -216,6 +216,14 @@ Volumes live on **F:** (202 GB free), never D: (29 GB free). Corpus: ~5–20 rea
 store, autoscaled workers. Expected around SP-13/SP-14, when the 5000-document run becomes real.
 The 12-factor discipline above is what makes this a config change rather than a redesign.
 
+## 7. External services (decided 2026-07-17)
+
+- **OCR / layout: Azure Document Intelligence** (SP-5). Settles the "which OCR engine" research question.
+- **LLM: Azure OpenAI (GPT)** — SP-7 semantic classification, SP-10 ontology mapping, and wherever an LLM is needed.
+- **Credentials** live at `D:\FinancialDocIntelligence\.env` (a sibling dir OUTSIDE this repo — real secrets, never committed). Vars: `AZURE_DI_ENDPOINT`/`AZURE_DI_KEY`/`AZURE_DI_POLLING_TIMEOUT_S`; `GPT_ENDPOINT`/`GPT_DEPLOYMENT`/`GPT_MODEL_NAME`/`GPT_SUBSCRIPTION_KEY`/`GPT_API_VERSION`.
+- **Wiring (at SP-5):** add `FDI_AZURE_DI_*` / `FDI_GPT_*` fields to `Settings` + the `x-backend-env` allowlist + `.env.example` (placeholders only); the operator copies real values into the repo's gitignored `.env`.
+- **Determinism caveat:** Azure DI output is not byte-stable, so SP-5's OCR-artifact content-addressing must key on the input PDF + DI model version, not the response bytes — decide explicitly in the SP-5 spec.
+
 ---
 
 ## 7. Source-of-Truth Documents
