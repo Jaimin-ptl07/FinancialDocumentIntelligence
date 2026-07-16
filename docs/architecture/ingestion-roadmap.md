@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1 spec written; nothing implemented yet.
+- **Status:** Roadmap agreed 2026-07-15. SP-1 implemented and verified on `feature/sp-1-project-setup`; SP-2 is next.
 - **Last updated:** 2026-07-15
 - **Purpose:** the single durable entry point for this project. It records the vision, the
   sub-project decomposition, the build order, and the invariants every sub-project must honor.
@@ -61,7 +61,7 @@ Each row is one spec → plan → implement cycle.
 
 | # | Sub-project | Phase | Research | Status |
 |---|---|---|---|---|
-| **SP-1** | Project setup & walking skeleton | setup | light | 📝 spec written |
+| **SP-1** | Project setup & walking skeleton | setup | light | ✅ done |
 | **SP-2** | The base — unified schema, artifact store, registry, **stage/DAG framework** | base | medium | ⬜ |
 | **SP-3** | Eval harness & ground truth | — | medium | ⬜ |
 | **SP-4** | Document Intake | 1 | light | ⬜ |
@@ -82,6 +82,31 @@ Each row is one spec → plan → implement cycle.
 | **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ⬜ |
 | **SP-17** | Quality validation framework | enterprise | medium | ⬜ |
 | **SP-18** | Next.js frontend | — | light | ⬜ |
+
+### What SP-1 shipped that SP-2 must know
+
+The walking skeleton left load-bearing seams and rules SP-2 builds on, not around:
+
+- **The `core` / `platform` boundary is CI-enforced and `exhaustive`.** `.importlinter`
+  declares the layers `api | workers → pipeline → platform → core` with
+  `exhaustive = true`, so every module must belong to a named layer or the contract
+  breaks. `fdi.core` is pure (no I/O, config, clock, RNG). Adding a subsystem in SP-2
+  means placing it in a layer, not appending to a list.
+- **The canonical task shape.** One `asyncio.run()` per Celery task, engine built
+  *inside* the coroutine and disposed in `finally`; never `async def` under `@app.task`;
+  never a loop/engine/pool at module import (fork copies it without its thread). An AST
+  test and a fork-guard enforce these — SP-2's stages inherit the shape.
+- **`canonical_json` and determinism (Global Constraint 6).** Artifact bodies are a
+  byte-identical function of input; ids and timestamps live in Postgres rows, never in
+  the artifact. SP-2's content-addressing depends on this already holding.
+- **The `JobDispatcher` seam.** `api` and `workers` are independent siblings that may
+  not import each other; the composition root (`api/app.py` lifespan) is the ONE place
+  that wires a concrete task into an injected dispatcher. The single ignore-list entry
+  `fdi.api.app -> fdi.workers.tasks` exempts exactly that line and nothing else —
+  putting the import back in `routes.py` breaks the contract.
+- **CORS is a dev-scoped hardcoded allowlist**, `.env` must be passed with `--env-file`,
+  and the `vector` profile (Milvus) is the OOM risk on the ~9.6 GB Docker VM — see the
+  README caveats before wiring new services.
 
 ### Why SP-2 is the highest-leverage sub-project
 

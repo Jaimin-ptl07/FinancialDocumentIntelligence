@@ -1,6 +1,6 @@
 # SP-1 — Project Setup & Walking Skeleton (Design Spec)
 
-- **Status:** Approved 2026-07-15. Not yet implemented.
+- **Status:** Implemented 2026-07-15 on `feature/sp-1-project-setup`. All §12 done criteria verified (criterion 7, CI, verified command-by-command locally; runs on GitHub on first push).
 - **Sub-project:** SP-1 of 18 — see `docs/architecture/ingestion-roadmap.md`
 - **Depends on:** nothing (greenfield)
 - **Blocks:** SP-2 … SP-18 (all of them)
