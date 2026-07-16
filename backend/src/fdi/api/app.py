@@ -57,6 +57,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from fdi.pipeline.dispatch import JobDispatcher
     from fdi.workers.tasks import ping_job
 
+    # Re-assert the broker from THIS process's Settings, rather than inheriting
+    # whatever was in os.environ the first time fdi.workers.app was imported.
+    #
+    # workers/app.py runs `app = create_celery_app()` in its module body, so its
+    # broker_url is frozen at first import, anywhere in the process, forever --
+    # measured: a later os.environ change plus get_settings.cache_clear() does NOT
+    # move it. In production that is invisible (env is set before uvicorn starts).
+    # Under test it made the suite depend on FILESYSTEM SORT ORDER: it passed only
+    # because `tests/integration` collects before `tests/unit`, so the Celery app
+    # happened to be built with the container's broker first. Forcing the reverse
+    # order hangs -- /ping-job retries against the stub host `h` forever, exit 124.
+    #
+    # The composition root owns wiring, so it should say which broker it dispatches
+    # to instead of depending on import order to be lucky.
+    ping_job.app.conf.broker_url = settings.broker_url
+    ping_job.app.conf.result_backend = settings.result_backend
+
     app.state.dispatcher = JobDispatcher(ping_job)
     try:
         yield
