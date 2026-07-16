@@ -1,23 +1,16 @@
 """Pure DAG topology + staleness. No I/O: staleness is decided from recorded facts,
 not by reading artifact blobs."""
 
-from dataclasses import dataclass
 from graphlib import CycleError as _GraphlibCycleError
 from graphlib import TopologicalSorter
 
+from fdi.core.facts import RunFacts as RunFacts
 from fdi.pipeline.keys import derived_input_hash
 from fdi.pipeline.stage import Stage
 
 
 class CycleError(ValueError):
     """The registered stages form a dependency cycle."""
-
-
-@dataclass(frozen=True)
-class RunFacts:
-    version: int
-    input_hash: str
-    output_hash: str
 
 
 class DagResolver:

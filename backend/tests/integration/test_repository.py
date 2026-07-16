@@ -12,9 +12,10 @@ import pytest
 import sqlalchemy
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from fdi.core.facts import RunFacts
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.db.models import Job, JobStatus
-from fdi.platform.db.repository import JobRepository
+from fdi.platform.db.repository import JobRepository, RegistryRepository
 
 pytestmark = pytest.mark.integration
 
@@ -268,3 +269,36 @@ async def test_overlong_error_is_truncated_to_column_width_not_rejected(
         "truncation counted the wrong units -- PostgreSQL's varchar(n) counts "
         "characters, so the slice must too"
     )
+
+
+async def test_run_lifecycle_and_facts(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.create_document("doc1")
+        await repo.start_run("r1", "doc1", "ping", 1, "ih", "corr-1")
+        await repo.finish_run("r1", output_hash="oh", artifact_key="artifacts/doc1/ping/v1/ih.json")
+        await s.commit()
+
+        facts = await repo.runs_for_document("doc1")
+        assert facts == {"ping": RunFacts(version=1, input_hash="ih", output_hash="oh")}
+
+        run = await repo.latest_run("doc1", "ping")
+        assert run is not None and run.status == "done" and run.artifact_key.endswith("ih.json")
+
+
+async def test_failed_run_is_recorded(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.create_document("doc2")
+        await repo.start_run("r2", "doc2", "ping", 1, "ih", None)
+        await repo.fail_run("r2", "boom")
+        await s.commit()
+
+        run = await repo.latest_run("doc2", "ping")
+        assert run is not None
+        assert run.status == "failed" and run.error == "boom"
+        assert await repo.runs_for_document("doc2") == {}  # only DONE runs are facts
