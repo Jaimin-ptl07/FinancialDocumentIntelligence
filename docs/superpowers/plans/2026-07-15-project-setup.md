@@ -3243,11 +3243,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ########################  runtime  ########################
 FROM python:3.13-slim-trixie
 
-# curl is for the compose healthcheck; python:slim has none.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
-
+# NO curl, NO apt layer. The compose healthcheck (Task 20) hits /health with the
+# venv's own Python, saving curl's ~13.5 MB apt layer and dropping any reliance on
+# curl -- which a stale CURL_CA_BUNDLE breaks host-side on this machine.
 RUN groupadd --system fdi && useradd --system --gid fdi --home-dir /app fdi
 
 COPY --from=builder --chown=fdi:fdi /app/.venv /app/.venv
@@ -3271,8 +3269,24 @@ Expected: build succeeds.
 
 - [ ] **Step 4: Verify both entrypoints resolve**
 
-Run: `docker run --rm fdi-backend:dev python -c "import fdi.api.app, fdi.workers.app; print('ok')"`
+Run (the six `FDI_` vars are REQUIRED — see below):
+```
+docker run --rm \
+  -e FDI_DATABASE_URL=postgresql+asyncpg://u:p@h:5432/db \
+  -e FDI_BROKER_URL=amqp://guest:guest@h:5672/%2F \
+  -e FDI_RESULT_BACKEND=redis://h:6379/0 \
+  -e FDI_S3_ENDPOINT=h:9000 -e FDI_S3_ACCESS_KEY=ak -e FDI_S3_SECRET_KEY=sk \
+  fdi-backend:dev python -c "import fdi.api.app, fdi.workers.app; print('ok')"
+```
 Expected: `ok`
+
+> **A BARE `docker run` (no env) cannot print `ok`, and that is correct behaviour, not a build fault.**
+> `import fdi.workers.app` runs `app = create_celery_app()` in the module body, which reads all six
+> settings — so a bare run raises `pydantic ValidationError: 6 validation errors for Settings`,
+> naming each missing field. Loud and immediate, exactly as designed (Task 13). The plan previously
+> printed `Expected: ok` against the bare command, which is unreachable. `celery -A fdi.workers.app
+> worker --help` (needs no broker but *does* trigger autodiscover) is the stronger entrypoint check
+> — it would have caught the Task 13 `force=True` circular import, which a plain `import` also does.
 
 Run: `docker run --rm fdi-backend:dev celery --version`
 Expected: `5.6.3`
@@ -3486,7 +3500,10 @@ services:
       minio: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      # Python, not curl: the image ships no curl (Task 18 dropped the apt layer).
+      # urlopen raises on any non-2xx or connection failure, so a bare exit code is
+      # a sufficient liveness signal.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5
