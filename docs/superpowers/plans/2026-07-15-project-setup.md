@@ -1602,6 +1602,51 @@ git commit -m "feat(platform): alembic async env and the jobs migration"
 > stops advancing and every staleness check built on it quietly lies.** Either set it explicitly in
 > the upsert's `SET`, or move the whole thing to a DB trigger. Decide it here, deliberately, not by
 > reaching for `ON CONFLICT` when a race shows up in SP-2.
+>
+> **`now()` is transaction-start time — now VERIFIED against the live container, not just PG's docs.**
+> Two `SELECT now()` 100ms apart inside one transaction return an identical value; `statement_timestamp()`
+> and `clock_timestamp()` both differ. Consequences: rows created in one transaction share a
+> `created_at`, so **`created_at` is not a total order** and anything sorting by it must tie-break.
+> And any `updated_at` test must span transactions, or it fails for reasons unrelated to the code.
+
+> ### ⚠️ Three real hazards this class ships with, all measured. Carry them into SP-2.
+>
+> None is wrong for a walking skeleton with one worker and no retries. All three become wrong the
+> moment SP-2 adds retries to an at-least-once broker, so they are recorded rather than discovered.
+>
+> 1. **The status columns are independent facts.** Neither mutator clears the other's column.
+>    Measured: `mark_done` then `mark_failed` leaves
+>    `status='failed'` **holding a valid `artifact_key`** — a row claiming failure while carrying a
+>    good artifact. `mark_running` on a finished job reopens it with both still set. Any consumer
+>    doing `if status == "failed": show(error)` then shows a stale error next to a real result.
+>    The fix is *not* a rigid state machine — forbidding `failed → done` would break legitimate
+>    retries. It is (a) clear the counterpart column, (b) guard terminal transitions with a
+>    `WHERE status = ...` so a late duplicate no-ops instead of clobbering.
+> 2. **Concurrent `mark_done` is a silent lost update — no error at all.** Measured across two
+>    sessions: both returned successfully, last writer won, `errors raised: NONE`. PG's READ
+>    COMMITTED row-locks so B blocks until A commits, then B's `WHERE id = ...` still matches and
+>    overwrites. Without `version_id_col`, SQLAlchemy sees `rowcount == 1` and is satisfied — no
+>    `StaleDataError`. (Shown across connections in one process, not two OS processes; the mechanism
+>    does not depend on the process boundary, but that specific pairing is unproven.)
+> 3. **`error[:2048]` loses tracebacks quietly.** The units are correct — PG's `varchar(2048)` counts
+>    *characters*, not bytes (2048 emoji = 8192 octets stores fine; 2049 raises), and Python slicing
+>    counts codepoints, so they match exactly. But 5000 chars silently become 2048 with no marker and
+>    no log, and tracebacks routinely exceed 2048. Note the slice is still the *better* of the two
+>    obvious options: without it PG raises `StringDataRightTruncation`, which aborts the transaction,
+>    so the job would never be marked failed at all — losing the whole failure rather than its tail.
+>    That is a false dichotomy though: truncating **with** a `…[truncated N chars]` marker costs one
+>    line and keeps the diagnostic honest. Do that in SP-2.
+
+> **`correlation_id` has three representations of "absent", and the type system endorses the worst one.**
+> `create(correlation_id: str)` is a stricter promise than the column (`Mapped[str | None]`, nullable —
+> and `test_migrations.py` itself inserts a NULL-correlation row, so the nullability is real, not
+> vestigial). The repository's strictness is right and matches spec §8 ("minted at the API"). The
+> hazard is the obvious call site: **`get_correlation_id()` returns `""` when unbound, never `None`** —
+> so `create(job_id, correlation_id=get_correlation_id())` writes an empty string that satisfies
+> `str` while meaning nothing, and `ix_jobs_correlation_id` grows one entry shared by every
+> context-less job. Three ways to say "no ID" (NULL, `""`, real), only one of which any type checker
+> objects to. Fix when Task 16/17 wire the API: `nullable=False` plus a non-empty CHECK, keeping the
+> strict signature — a Task 10 migration change, so deliberately not done here.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1676,6 +1721,47 @@ async def test_mark_done_on_missing_job_raises(session_factory) -> None:
     async with session_factory() as s:
         with pytest.raises(KeyError):
             await JobRepository(s).mark_done(str(uuid.uuid4()), artifact_key="x")
+
+
+@pytest.mark.parametrize("mutator", ["mark_running", "mark_done", "mark_failed"])
+async def test_updated_at_advances_and_created_at_does_not(session_factory, mutator) -> None:
+    """The ONLY thing watching `onupdate`. Without this, all five tests above stay
+    green with `onupdate=func.now()` deleted from the model -- measured, not feared.
+
+    MUST span two transactions. PG's now() is TRANSACTION-START time (verified
+    against the live container: two SELECTs 100ms apart in one transaction return
+    an identical now(), while statement_timestamp() differs). `onupdate` renders
+    now() into the UPDATE's SET clause, so a create+mutate sharing a transaction
+    stamps both columns from one clock reading and this assertion fails for a
+    reason that has nothing to do with the code.
+
+    No sleep() needed: back-to-back transactions land ~5.3ms apart against PG's
+    microsecond resolution. Do not add one to "fix flakiness" -- if this goes
+    flaky, the cause is transaction scope, not timing.
+    """
+    job_id = str(uuid.uuid4())
+    async with session_factory() as s:
+        await JobRepository(s).create(job_id, correlation_id="cid-ts")
+        await s.commit()
+    async with session_factory() as s:
+        before = await JobRepository(s).get(job_id)
+        assert before is not None
+        created_at, updated_at = before.created_at, before.updated_at
+
+    async with session_factory() as s:
+        repo = JobRepository(s)
+        kwargs = {"mark_done": {"artifact_key": "k/x.json"},
+                  "mark_failed": {"error": "boom"}}.get(mutator, {})
+        await getattr(repo, mutator)(job_id, **kwargs)
+        await s.commit()
+
+    async with session_factory() as s:
+        after = await JobRepository(s).get(job_id)
+    assert after is not None
+    assert after.updated_at > updated_at, (
+        "updated_at did not advance -- onupdate did not reach the UPDATE's SET clause"
+    )
+    assert after.created_at == created_at, "created_at must never move"
 ```
 
 - [ ] **Step 2: Run to verify it fails**
