@@ -2050,6 +2050,31 @@ git commit -m "feat(platform): async S3 artifact store with canonical JSON bodie
 - Create: `backend/src/fdi/workers/app.py`
 - Test: `backend/tests/unit/test_celery_app.py`
 
+> ### ⚠️ Task 6's validator made the whole suite hostage to the developer's shell.
+>
+> Rejecting unknown `FDI_` vars is right for the app and hostile to the tests. Measured against the
+> **already-committed** `test_config.py`, before the fix:
+>
+> ```
+> FDI_FOO=1 pytest -m "not integration"        -> 1 failed, 26 passed
+>   ValidationError: 1 validation error for Settings   <- names Settings, not your shell
+> FDI_WORKER_CONCURRENCY=9 pytest              -> assert 9 == 2
+> ```
+>
+> A developer with any unrelated `FDI_*` exported fails tests they never touched, and the error
+> points at the wrong thing entirely. **`monkeypatch.delenv` over a known list cannot fix this** —
+> the offending name is *unknown by premise*, which is the whole point of the validator. Only
+> clearing the prefix works, so it lives in `tests/conftest.py` as autouse `_isolate_fdi_env`
+> rather than being re-solved per test file.
+>
+> It also clears the `get_settings` lru_cache on **teardown**: `monkeypatch` restores the
+> environment, not the object built from it, so a `Settings` cached under one test's env would
+> otherwise be served to later files.
+>
+> Verified it does not mask what it isolates: neutering the stray-var scan in `config.py` turns
+> `test_unknown_setting_is_rejected` **red**, and the suite passes under
+> `FDI_FOO=1 FDI_WORKER_CONCURRENCY=9 FDI_S3_BUCKET=nope`.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -2067,6 +2092,9 @@ REQUIRED_ENV = {
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # tests/conftest.py's autouse _isolate_fdi_env has already cleared the whole
+    # FDI_ prefix; this only sets what these tests need. See the callout below --
+    # that clearing is load-bearing, not tidiness.
     for k, v in REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)
     from fdi.platform.config import get_settings
@@ -2151,7 +2179,8 @@ def create_celery_app() -> Celery:
         enable_utc=True,
         task_track_started=True,
     )
-    app.autodiscover_tasks(["fdi.workers"], force=True)
+    # NO force=True. See the callout below -- it makes this module unimportable.
+    app.autodiscover_tasks(["fdi.workers"])
     return app
 
 
@@ -2162,10 +2191,40 @@ app = create_celery_app()
 > This is safe: `Celery()` opens no sockets and creates no event loop. It is *connection pools and
 > event loops* that must never exist at import (Global Constraint 3), not configuration objects.
 
+> ### ⛔ `force=True` (as this plan originally specified) makes the worker unbootable.
+>
+> `force=True` discovers **immediately** rather than deferring, so `import fdi.workers.app` imports
+> `fdi.workers.tasks` **while `app.py` is still executing** — and Task 14's `tasks.py` opens with
+> `from fdi.workers.app import app` to get the decorator. Measured:
+>
+> ```
+> ImportError: cannot import name 'app' from partially initialized module
+> 'fdi.workers.app' (most likely due to a circular import)
+> ```
+>
+> Not a silent skip, not a half-built app: `celery -A fdi.workers.app worker` **cannot boot**.
+> **Task 14 was dead on arrival as written.**
+>
+> It is never swallowed, on two independent counts (both measured, not inferred):
+> 1. `find_related_module` (`loaders/base.py:271`) catches **`ModuleNotFoundError`**. A circular
+>    import raises plain **`ImportError`** — the *parent* class — so the handler never matches.
+> 2. Even if it did, that handler only returns `None` when `e.name == module_name`. Here
+>    `e.name == 'fdi.workers.app'`, not `'fdi.workers.tasks'` → it re-raises.
+>
+> **What `force` is actually for:** forcing discovery *now* instead of deferring it onto the
+> `import_modules` signal — for callers needing `app.tasks` populated without worker bootstrap. It
+> defaults to `False` *precisely because* the app module is normally still executing.
+>
+> **Deferring is not "never", which is the obvious worry** — verified rather than assumed: after
+> `loader.import_default_modules()` (what worker boot calls), `'fdi.workers.tasks' in sys.modules`
+> is `True` and `app.tasks` contains `fdi.ping_job`. So this does not trade a loud `ImportError` for
+> a silent `Received unregistered task`. `test_task_discovery_is_deferred_not_forced` guards it, and
+> was proven to fail when `force=True` is reintroduced.
+
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `uv run --directory backend pytest tests/unit/test_celery_app.py -v`
-Expected: 1 passed
+Expected: 3 passed — two specified here, plus the regression guard against `force=True`.
 
 - [ ] **Step 5: Commit**
 
