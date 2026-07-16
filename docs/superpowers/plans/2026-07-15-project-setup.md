@@ -1832,6 +1832,40 @@ git commit -m "feat(platform): JobRepository over async SQLAlchemy"
 
 The `minio` SDK is synchronous. We wrap it in `asyncio.to_thread`, which gives a genuinely async interface over a maintained client — and contextvars *do* propagate into `to_thread`, so log lines from inside keep their correlation ID.
 
+> **That contextvars claim is now TESTED, not just asserted** — it was stated twice here and watched
+> by nothing, the same shape as the four inert gates already found. Verified by counterfactual, which
+> is the only way to prove it: swapping `asyncio.to_thread(f)` → `loop.run_in_executor(None, f)` —
+> the *same* thread offload, differing only in the context copy — turns the test RED
+> (`'' != 'cid-...'`). So `to_thread` is **load-bearing, not stylistic**. The test also asserts the
+> call really left the calling thread; without that, a plain `f()` would keep the ID trivially and
+> the test would prove nothing.
+
+> ### ⚠️ `len(body)` must count BYTES. This one is not hypothetical for *this* corpus.
+>
+> `canonical_json` uses `ensure_ascii=False`, so characters ≠ bytes for any non-ASCII input — and
+> this platform ingests **Indian annual reports**, where `₹` is on every page. Measured:
+>
+> ```
+> canonical_json({"amount": "₹1,00,000", "note": "café"})
+>   -> 36 CHARACTERS but 39 BYTES
+> put_object(length=len(canonical_json(obj)))  -> uploads 36 of 39 bytes
+> truncated body -> b'...,"note":"caf\xc3'    <- severed mid-codepoint
+> still valid JSON? -> NO: UnicodeDecodeError
+> ```
+>
+> **Encode first, then measure.** `len(body)` where `body = canonical_json(obj).encode("utf-8")` is
+> correct; `len(canonical_json(obj))` silently uploads a prefix. Pinned by a parametrized test whose
+> `multi-byte-utf8` case goes RED under the wrong form while both ASCII cases stay green — which is
+> exactly why a test with only ASCII fixtures would have blessed the bug.
+
+> **Deliberately NOT tested, and why:** `get_raw`'s `finally: close(); release_conn()` cannot be
+> distinguished from its absence on this code path. Measured over 25 sequential GETs:
+> `full_no_cleanup=0, partial_no_cleanup=24, partial_with_cleanup=1` — `read()` drains to EOF and
+> urllib3's `_error_catcher` already releases. A test asserting the cleanup prevents leaks **passes
+> with the cleanup deleted**; one was written, caught doing exactly that, and removed rather than
+> hedged. A false guarantee is worse than no guarantee. The cleanup stays — it is what stops the 24
+> the day someone streams a large artifact instead of reading it whole.
+
 **Files:**
 - Create: `backend/src/fdi/platform/storage/__init__.py`, `backend/src/fdi/platform/storage/artifact_store.py`
 - Test: `backend/tests/integration/test_artifact_store.py`
@@ -1887,6 +1921,29 @@ async def test_presigned_url_is_returned(store: ArtifactStore) -> None:
     assert url.startswith("http")
     assert "p.json" in url
 ```
+
+> **⛔ That presigned test proves almost nothing — see the shipped version instead.**
+> `startswith("http")` and `"p.json" in url` all pass for a malformed, unsigned, or unreachable URL.
+> The shipped test **fetches** it and compares bytes, pins the netloc to the configured endpoint,
+> asserts `X-Amz-Expires=60` (proving `ttl_seconds` actually reaches the signature), and GETs it
+> **unsigned expecting 403** — without that control, a plain URL against a public bucket looks
+> identical to a correctly signed one.
+>
+> **The hazard this test structurally CANNOT catch — carry it to Task 20.** testcontainers builds the
+> client from the *host's* view (`get_container_host_ip()` + mapped port), so the presigned URL is
+> host-reachable **by construction**:
+>
+> ```
+> minio_endpoint: localhost:24775
+> presigned URL : http://localhost:24775/test-artifacts/p.json?X-Amz-Algorithm=...  -> 200
+> ```
+>
+> Under compose the API container gets `FDI_S3_ENDPOINT=minio:9000`, so presigning emits
+> `http://minio:9000/...` — a hostname **the browser cannot resolve**, while every test stays green.
+> A presigned URL embeds whatever endpoint its client was configured with, so the one value that
+> makes the container work is the one that breaks the browser. **Presigning needs a separate public
+> endpoint** (`FDI_S3_PUBLIC_ENDPOINT`), decided in Task 20 — not discovered when the UI shows a
+> broken download link.
 
 - [ ] **Step 2: Run to verify it fails**
 
