@@ -70,7 +70,12 @@ def test_full_round_trip(stack: str) -> None:
 
     assert view is not None, "no /jobs response before the 60s deadline"
     assert view["status"] == "done", view
-    assert view["artifact_key"] == f"jobs/{job_id}/ping.json"
+    # SP-2: the artifact is content-addressed and version-stamped, not a flat
+    # jobs/{id}/ping.json. The doc_id (returned as job_id) still scopes the path.
+    artifact_key = view["artifact_key"]
+    assert isinstance(artifact_key, str)
+    assert artifact_key.startswith(f"artifacts/{job_id}/ping/v1/")
+    assert artifact_key.endswith(".json")
 
     artifact = httpx.get(str(view["artifact_url"]), timeout=5.0)
     assert artifact.status_code == 200
