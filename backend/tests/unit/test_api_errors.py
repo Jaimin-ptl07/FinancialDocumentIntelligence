@@ -259,6 +259,42 @@ async def test_unhandled_exception_log_carries_correlation_id_and_cause(
     assert "RuntimeError" in entry["exception"], "the traceback must survive in the log"
 
 
+async def test_500_gives_the_caller_a_handle_without_leaking(client: AsyncClient) -> None:
+    """RFC 9457 s3.1 `instance`. The opaque 500 body is the point AND the problem.
+
+    Four identical fields for every caller and every cause means a user reporting
+    "it 500s" hands support nothing to search on, while the log line that knows
+    everything is keyed by a correlation id the caller was never told. `instance`
+    is the join between them, and it leaks nothing: it is the id we minted, not
+    anything about the failure.
+
+    urn:fdi:request:, not urn:uuid: -- "cid-from-endpoint" is not a UUID, and
+    urn:uuid: has a syntax (RFC 9562) a client may reasonably parse.
+    """
+    r = await client.get("/crash-after-binding")
+    assert r.status_code == 500
+    body = r.json()
+    assert body["instance"] == "urn:fdi:request:cid-from-endpoint"
+    assert "unexpected" not in json.dumps(body), "the handle must not become a leak"
+
+
+async def test_problem_without_a_bound_correlation_id_omits_instance(
+    client: AsyncClient,
+) -> None:
+    """`get_correlation_id()` returns "" when unbound, never None.
+
+    So the naive `content["instance"] = f"urn:uuid:{get_correlation_id()}"`
+    emits `"urn:uuid:"` -- a syntactically invalid URI that a client would take
+    for a real handle and quote at support, where it identifies nothing. Absent
+    must stay absent. (This app's middleware always binds; this pins the
+    behaviour for every other caller of `problem()`, including a 500 raised
+    before the middleware ran.)
+    """
+    r = await client.get("/crash")
+    assert r.status_code == 500
+    assert "instance" not in r.json()
+
+
 async def test_500_survives_a_logger_that_raises(
     monkeypatch: pytest.MonkeyPatch, client: AsyncClient
 ) -> None:

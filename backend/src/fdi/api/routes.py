@@ -1,0 +1,120 @@
+"""HTTP surface."""
+
+import contextlib
+import uuid
+from collections.abc import Awaitable, Callable
+
+import sqlalchemy
+import structlog
+from fastapi import APIRouter, HTTPException, Response, status
+
+from fdi.api.deps import CorrelationIdDep, SessionDep, StoreDep
+from fdi.api.schemas import JobAccepted, JobView, ReadyView
+from fdi.platform.broker.health import check_broker
+from fdi.platform.config import get_settings
+from fdi.platform.db.repository import JobRepository
+
+log = structlog.get_logger(__name__)
+router = APIRouter()
+
+
+@router.get("/health")
+async def health() -> dict[str, str]:
+    """Liveness only. Must never touch a backend, or a DB blip restarts the API.
+
+    Takes no `SessionDep`/`StoreDep` *by construction*, which is the only thing
+    that actually enforces this -- a dependency here would open a connection
+    before the body ran, and the body would still look backend-free.
+    """
+    return {"status": "ok"}
+
+
+async def _probe(name: str, check: Callable[[], Awaitable[object]]) -> bool:
+    """Run one readiness check. Never raises; a probe that can raise cannot report.
+
+    The `log` call is suppressed for the same reason `api.errors._unhandled`
+    suppresses its own: an unconfigured structlog renders through rich, which is
+    unencodable on cp1252 stdout, and the UnicodeEncodeError would escape this
+    `except` and turn a clean 503 into a bodyless 500 -- i.e. the endpoint whose
+    entire job is to report the outage becomes a second outage. This is the only
+    class of place that earns the suppression: `/ready` and the 500 handler are
+    the two responses that ARE the diagnostic. `ping_job.queued` below is
+    deliberately NOT suppressed -- a broken logger on the normal path should be
+    loud.
+
+    `warning` + `repr`, not `exception`: an orchestrator polls /ready every few
+    seconds, so a full traceback per poll against a down backend is a log flood
+    that buries the first one -- which is the only one that says when it started.
+    """
+    try:
+        await check()
+        return True
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            log.warning(f"ready.{name}_failed", error=repr(exc))
+        return False
+
+
+@router.get("/ready", response_model=ReadyView)
+async def ready(session: SessionDep, store: StoreDep, response: Response) -> ReadyView:
+    """Readiness: can this instance actually serve traffic?
+
+    All three backends are probed because /ping-job needs all three: it writes a
+    row, the worker reads the bucket, and the publish goes to the broker. A
+    `broker=True` literal -- which is what this endpoint shipped as -- is not a
+    cheap approximation of that, it is a field that reports success without
+    looking, on the one endpoint whose only product is the looking.
+    """
+    postgres_ok = await _probe(
+        "postgres", lambda: session.execute(sqlalchemy.text("SELECT 1"))
+    )
+    s3_ok = await _probe("s3", store.ensure_bucket)
+    broker_ok = await _probe("broker", lambda: check_broker(get_settings().broker_url))
+
+    view = ReadyView(postgres=postgres_ok, s3=s3_ok, broker=broker_ok)
+    if not (postgres_ok and s3_ok and broker_ok):
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return view
+
+
+@router.post("/ping-job", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
+async def create_ping_job(session: SessionDep, correlation_id: CorrelationIdDep) -> JobAccepted:
+    """Persist the job, publish it. The worker picks it up.
+
+    The id arrives already bound and already validated from
+    `CorrelationIdMiddleware`, so it is known to fit `correlation_id`'s
+    varchar(36). Reading the header here instead -- which is where it started --
+    put an unvalidated client string into that column, and PostgreSQL raises
+    rather than truncates: a 37-character `X-Request-ID` returned a 500.
+    """
+    job_id = str(uuid.uuid4())
+    await JobRepository(session).create(job_id, correlation_id=correlation_id)
+    await session.commit()
+
+    from fdi.workers.tasks import ping_job
+
+    ping_job.apply_async(args=[job_id], kwargs={"correlation_id": correlation_id})
+    log.info("ping_job.queued", job_id=job_id)
+
+    return JobAccepted(job_id=job_id, correlation_id=correlation_id, status="queued")
+
+
+@router.get("/jobs/{job_id}", response_model=JobView)
+async def get_job(job_id: str, session: SessionDep, store: StoreDep) -> JobView:
+    job = await JobRepository(session).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+
+    artifact_url = None
+    if job.artifact_key:
+        artifact_url = await store.presigned_get_url(
+            job.artifact_key, ttl_seconds=get_settings().artifact_url_ttl_seconds
+        )
+
+    return JobView(
+        job_id=job.id,
+        status=job.status,
+        artifact_key=job.artifact_key,
+        artifact_url=artifact_url,
+        error=job.error,
+    )

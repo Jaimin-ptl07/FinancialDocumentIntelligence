@@ -17,6 +17,7 @@ two error formats, chosen by how the caller got it wrong.
 
 import contextlib
 import http
+import uuid
 from collections.abc import Mapping
 from typing import Any
 
@@ -27,6 +28,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
+
+from fdi.platform.obs.logging import get_correlation_id
 
 log = structlog.get_logger(__name__)
 
@@ -55,7 +58,39 @@ def _safe_headers(headers: Mapping[str, str] | None) -> dict[str, str] | None:
     return {k: v for k, v in headers.items() if k.lower() not in _RESERVED_HEADERS} or None
 
 
-def _problem(
+def _instance(correlation_id: str) -> str | None:
+    """RFC 9457 s3.1 `instance`: a URI identifying this *occurrence*.
+
+    Without it a 500 body is the same four opaque fields for every caller and
+    every cause -- there is nothing to quote at support. The correlation id is
+    the handle we already have; this makes it a URI.
+
+    Two shapes, because one honest field beats one uniform lie. `urn:uuid:` has
+    a spec (RFC 9562) and a caller may reasonably parse it, so it is used only
+    when the id really is a canonical UUID -- which is every id this app mints,
+    i.e. the default path. A caller-supplied id is honoured verbatim and is
+    often not a UUID (nginx's $request_id is 32 undashed hex; X-Ray's is not a
+    UUID at all), and `urn:uuid:1-63441c4a-...` would be malformed. Those get an
+    informal, unregistered NID instead: syntactically a valid URN (RFC 8141),
+    dereferences to nothing, and claims nothing it cannot back.
+
+    `str(uuid.UUID(v)) == v` rather than a bare `uuid.UUID(v)`: the constructor
+    happily accepts 32 undashed hex and normalises it, so the naive check would
+    emit an `instance` whose id does not match the `correlation_id` in the log
+    line beside it -- the one thing this member exists to make possible.
+    """
+    if not correlation_id:
+        # get_correlation_id() returns "" when unbound, never None. Absent is
+        # absent: an `instance` of "urn:uuid:" is worse than no instance.
+        return None
+    try:
+        canonical = str(uuid.UUID(correlation_id)) == correlation_id
+    except ValueError:
+        canonical = False
+    return f"urn:uuid:{correlation_id}" if canonical else f"urn:fdi:request:{correlation_id}"
+
+
+def problem(
     status: int,
     detail: str,
     title: str | None = None,
@@ -78,13 +113,16 @@ def _problem(
         "status": status,
         "detail": detail,
     }
+    instance = _instance(get_correlation_id())
+    if instance is not None:
+        content["instance"] = instance
     content.update(extra)  # RFC 9457 s3.2 extension members
     return JSONResponse(status_code=status, media_type=CONTENT_TYPE, content=content, headers=safe)
 
 
 async def _http_exc(_: Request, exc: Exception) -> Response:
     assert isinstance(exc, StarletteHTTPException)
-    return _problem(exc.status_code, str(exc.detail), headers=exc.headers)
+    return problem(exc.status_code, str(exc.detail), headers=exc.headers)
 
 
 async def _validation_exc(_: Request, exc: Exception) -> Response:
@@ -93,7 +131,7 @@ async def _validation_exc(_: Request, exc: Exception) -> Response:
     # so they survive as an extension member. Dropping them would make uniform
     # framing a downgrade against FastAPI's default, which is how a "fix" gets
     # reverted later.
-    return _problem(422, "Request validation failed.", errors=jsonable_encoder(exc.errors()))
+    return problem(422, "Request validation failed.", errors=jsonable_encoder(exc.errors()))
 
 
 async def _unhandled(_: Request, exc: Exception) -> Response:
@@ -112,7 +150,7 @@ async def _unhandled(_: Request, exc: Exception) -> Response:
     # after this response is sent, so the server still logs the original cause.
     with contextlib.suppress(Exception):
         log.exception("api.unhandled_exception", error=repr(exc))
-    return _problem(500, "An internal error occurred.")
+    return problem(500, "An internal error occurred.")
 
 
 def install_error_handlers(app: FastAPI) -> None:

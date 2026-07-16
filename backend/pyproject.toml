@@ -12,6 +12,12 @@ dependencies = [
     "asyncpg>=0.31",
     "alembic>=1.18",
     "celery>=5.6.3",
+    # Celery's own transport library, and what apply_async dials underneath.
+    # Declared explicitly because `fdi.platform.broker.health` imports it
+    # directly: `api` may not import `fdi.workers` to ask the broker anything,
+    # so /ready probes the transport itself. An undeclared transitive dep is a
+    # dependency you have without a version constraint on it.
+    "kombu>=5.6.2",
     "redis>=5.2",
     "minio>=7.2.20",
     "structlog>=26.1",
