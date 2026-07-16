@@ -2702,6 +2702,37 @@ git commit -m "feat(api): RFC 9457 problem+json error handlers"
 - Create: `backend/src/fdi/api/app.py`, `backend/src/fdi/api/routes.py`, `backend/src/fdi/api/schemas.py`, `backend/src/fdi/api/deps.py`
 - Test: `backend/tests/integration/test_api.py`
 
+> ### ⛔ Four defects found here. Three are in the tests, which is the pattern by now.
+>
+> 1. **`X-Request-ID` let a client choose the response code.** It flows unvalidated into a
+>    `String(36)` column, and Task 11 measured that PG raises `StringDataRightTruncation` past the
+>    width — so **a 37-character header is a 500**, and a 10 KB one likewise. Log injection, by
+>    contrast, is **not** a hazard: structlog's `JSONRenderer` escapes correctly (measured with
+>    `'x","level":"critical","evil":"'` — one line, `level` still `info`). Fixed by validating to
+>    `[A-Za-z0-9._~-]{1,36}` → **400**. Deliberately *not* UUID-only: that closes every hazard by
+>    construction but 400s every request behind an ALB/nginx stamping its own format — a worse
+>    failure than the bug. Truncate and ignore-and-mint both silently break the one property the
+>    header exists to provide: that the caller's ID and ours are the same string.
+> 2. **`/ready`'s `broker` field was the literal `True`.** Decorative, and it passed because the
+>    plan's test never asserted it — the other two passed because the containers were up, which is
+>    equally true of `return True`. Now a real kombu probe; each backend is proven by killing *that
+>    backend only* (→ 503, that field `False`, the others `True`).
+> 3. **The plan's fixture never ran lifespan.** `ASGITransport` sends only an `http` scope, so
+>    `app.state.session_factory` was never set — Step 7's "5 passed" was unreachable; 4 of 5 died on
+>    `KeyError`.
+> 4. **`len(job_id) == 36` is incidental** — `"a"*36` passes it. 36 *is* load-bearing, but at the DB.
+>
+> **Carry-forward 3 answered: uvicorn DOES double-log**, verified against a real uvicorn on a real
+> socket. Under the planned `CMD ["uvicorn", ...]` its default dictConfig gives the `uvicorn` logger
+> a stderr handler with `propagate=False`, so its traceback prints raw *beside* our JSON —
+> reintroducing exactly what `ProcessorFormatter` was chosen to prevent in Task 7, and falsifying
+> `configure_logging`'s own docstring. Fixed at the source.
+>
+> **A test-harness trap worth knowing generally:** pytest uses a *different* `CaptureIO` for the
+> setup phase than the call phase. `configure_logging()` in a fixture binds a handler to a stream the
+> test body then closes — every record dropped with `ValueError: I/O operation on closed file`. Any
+> log assertion wired that way silently reads `""` **and passes**.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -2890,9 +2921,10 @@ async def ready(session: SessionDep, store: StoreDep, response: Response) -> Rea
 @router.post("/ping-job", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
 async def create_ping_job(request: Request, session: SessionDep) -> JobAccepted:
     """Mint a correlation id, persist the job, publish it. The worker picks it up."""
-    correlation_id = request.headers.get("X-Request-ID") or new_correlation_id()
-    bind_correlation_id(correlation_id)
-
+    # NOT request.headers.get("X-Request-ID") directly -- that is the unvalidated
+    # client string that turns a 37-char header into a varchar(36) 500, because
+    # correlation_id is String(36) and PG raises StringDataRightTruncation past it.
+    # Task 16's CorrelationIdDep validates ([A-Za-z0-9._~-]{1,36} or 400) and binds.
     job_id = str(uuid.uuid4())
     await JobRepository(session).create(job_id, correlation_id=correlation_id)
     await session.commit()
@@ -3088,6 +3120,24 @@ ignore_imports =
     fdi.api.app -> fdi.workers.tasks
 ```
 
+> ### ⚠️ That exemption must name ONE EDGE. A wildcard here is a fake gate, one character away.
+>
+> Measured, with Task 16's real violation (`fdi.api.routes -> fdi.workers.tasks`) planted in the tree:
+>
+> | `ignore_imports` spelling | Result |
+> |---|---|
+> | `fdi.api.app -> fdi.workers.tasks` (correct) | **`0 kept, 1 broken`** — names line 129 |
+> | `fdi.api.* -> fdi.workers.*` (wildcard) | **`1 kept, 0 broken`** — green, violation in tree |
+>
+> The wildcard reads like the same idea and is an `api -> workers` amnesty. This project has already
+> found five gates that enforced nothing while looking green; an exemption added to make a gate pass
+> is exactly how the sixth gets made.
+>
+> Proven narrow, with the exemption live: re-introducing `routes -> workers.tasks` → **broken**;
+> the reverse `workers -> api` → **broken**; a new undeclared `fdi.utils` → **broken** (`exhaustive`
+> survives). It is also self-cleaning — delete the wiring it excuses and lint-imports fails with
+> *"No matches for ignored import"*, so a stale exemption cannot rot silently.
+
 - [ ] **Step 5: Add the dependency to `backend/src/fdi/api/deps.py`**
 
 ```python
@@ -3109,11 +3159,12 @@ Replace the body's import + publish with the injected dispatcher:
 ```python
 @router.post("/ping-job", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
 async def create_ping_job(
-    request: Request, session: SessionDep, dispatcher: DispatcherDep
+    correlation_id: CorrelationIdDep, session: SessionDep, dispatcher: DispatcherDep
 ) -> JobAccepted:
-    correlation_id = request.headers.get("X-Request-ID") or new_correlation_id()
-    bind_correlation_id(correlation_id)
-
+    # NOT request.headers.get("X-Request-ID") directly -- that is the unvalidated
+    # client string that turns a 37-char header into a varchar(36) 500, because
+    # correlation_id is String(36) and PG raises StringDataRightTruncation past it.
+    # Task 16's CorrelationIdDep validates ([A-Za-z0-9._~-]{1,36} or 400) and binds.
     job_id = str(uuid.uuid4())
     await JobRepository(session).create(job_id, correlation_id=correlation_id)
     await session.commit()
