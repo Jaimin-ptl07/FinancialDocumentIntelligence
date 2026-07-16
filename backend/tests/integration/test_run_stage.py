@@ -63,8 +63,10 @@ async def test_cache_miss_then_hit(session_factory, store) -> None:  # fixtures 
         "session_factory": session_factory, "store": store,
         "registry": reg, "resolver": resolver,
     }
-    await run_stage(run_id="r1", **common)
-    await run_stage(run_id="r2", **common)   # same input + version -> cache hit
+    # Unique run ids: the migrated DB is session-scoped, so a hardcoded "r1"/"r2"
+    # collides with the same literals in test_repository.py on stage_run's PK.
+    await run_stage(run_id=str(uuid.uuid4()), **common)
+    await run_stage(run_id=str(uuid.uuid4()), **common)   # same input + version -> cache hit
 
     assert stage.calls == 1, "cache hit must NOT re-run the stage body"
     key = artifact_key(doc, "ping", 1, root_input_hash(None))

@@ -274,17 +274,20 @@ async def test_overlong_error_is_truncated_to_column_width_not_rejected(
 async def test_run_lifecycle_and_facts(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    # Unique doc + run ids: the migrated DB is session-scoped, so hardcoded literals
+    # collide with the same ids in sibling tests on the PKs.
     async with session_factory() as s:
         repo = RegistryRepository(s)
-        await repo.create_document("doc1")
-        await repo.start_run("r1", "doc1", "ping", 1, "ih", "corr-1")
-        await repo.finish_run("r1", output_hash="oh", artifact_key="artifacts/doc1/ping/v1/ih.json")
+        doc, r1 = str(uuid.uuid4()), str(uuid.uuid4())
+        await repo.create_document(doc)
+        await repo.start_run(r1, doc, "ping", 1, "ih", "corr-1")
+        await repo.finish_run(r1, output_hash="oh", artifact_key=f"artifacts/{doc}/ping/v1/ih.json")
         await s.commit()
 
-        facts = await repo.runs_for_document("doc1")
+        facts = await repo.runs_for_document(doc)
         assert facts == {"ping": RunFacts(version=1, input_hash="ih", output_hash="oh")}
 
-        run = await repo.latest_run("doc1", "ping")
+        run = await repo.latest_run(doc, "ping")
         assert run is not None and run.status == "done" and run.artifact_key.endswith("ih.json")
 
 
@@ -293,12 +296,13 @@ async def test_failed_run_is_recorded(
 ) -> None:
     async with session_factory() as s:
         repo = RegistryRepository(s)
-        await repo.create_document("doc2")
-        await repo.start_run("r2", "doc2", "ping", 1, "ih", None)
-        await repo.fail_run("r2", "boom")
+        doc, r2 = str(uuid.uuid4()), str(uuid.uuid4())
+        await repo.create_document(doc)
+        await repo.start_run(r2, doc, "ping", 1, "ih", None)
+        await repo.fail_run(r2, "boom")
         await s.commit()
 
-        run = await repo.latest_run("doc2", "ping")
+        run = await repo.latest_run(doc, "ping")
         assert run is not None
         assert run.status == "failed" and run.error == "boom"
-        assert await repo.runs_for_document("doc2") == {}  # only DONE runs are facts
+        assert await repo.runs_for_document(doc) == {}  # only DONE runs are facts
