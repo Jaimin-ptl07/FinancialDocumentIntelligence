@@ -1,6 +1,26 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1 implemented and verified on `feature/sp-1-project-setup`; SP-2 is next.
+- **Status:** Roadmap agreed 2026-07-15. SP-1 and SP-2 implemented on `feature/sp-1-project-setup`; SP-3 is next.
+
+### What SP-2 shipped that SP-3/SP-4 must know
+
+- **A stage is `name` + `version: int` + `deps: tuple[str, ...]` + `async run(ctx) -> body`.** It reads
+  inputs via `ctx.read(upstream)` and returns a body; the framework owns hashing, storage, the DB, and
+  scheduling. New phases (intake, OCR, normalize, …) are just `Stage` subclasses self-registered into
+  `fdi.pipeline.registry.REGISTRY`.
+- **Artifacts are content-addressed + version-stamped:** `artifacts/{doc}/{stage}/v{version}/{input_hash}.json`.
+  A stage's `input_hash` is the sha256 over its upstream stages' recorded `output_hash`es (root stages hash
+  the document checksum). Same input + version → same key → `run_stage` skips recompute. Bump a stage's
+  `version` to force its downstream to regenerate.
+- **Registry = `document` + `stage_run` (Postgres).** `stage_run` records `input_hash`, `output_hash`,
+  `stage_version`, `artifact_key`, `status` (CHECK-constrained). `RegistryRepository` is the accessor;
+  `runs_for_document` returns `{stage: RunFacts}` for the pure `DagResolver` staleness math.
+- **Execution is one generic `run_stage_task` Celery task per stage**, chaining successors via the resolver.
+  `StageDispatcher.dispatch(doc, stage, correlation_id)` publishes one. Determinism / core-purity / the
+  one-`asyncio.run`-per-task shape all still hold (`RunFacts` and the NaN validator live in `fdi.core`).
+- **Staleness is detect-and-report, not auto-cascade:** `GET /docs/{id}/stale`, `POST /docs/{id}/reprocess?from=`.
+- **SP-4 owns `document.checksum`** (intake/dedup); it is nullable until then. **SP-6 owns the rich unified
+  normalized-document schema**; SP-2 shipped only the artifact-body validator + envelope.
 - **Last updated:** 2026-07-15
 - **Purpose:** the single durable entry point for this project. It records the vision, the
   sub-project decomposition, the build order, and the invariants every sub-project must honor.
@@ -62,7 +82,7 @@ Each row is one spec → plan → implement cycle.
 | # | Sub-project | Phase | Research | Status |
 |---|---|---|---|---|
 | **SP-1** | Project setup & walking skeleton | setup | light | ✅ done |
-| **SP-2** | The base — unified schema, artifact store, registry, **stage/DAG framework** | base | medium | ⬜ |
+| **SP-2** | The base — unified schema, artifact store, registry, **stage/DAG framework** | base | medium | ✅ done |
 | **SP-3** | Eval harness & ground truth | — | medium | ⬜ |
 | **SP-4** | Document Intake | 1 | light | ⬜ |
 | **SP-5** | OCR & Layout Extraction | 2 | medium | ⬜ |

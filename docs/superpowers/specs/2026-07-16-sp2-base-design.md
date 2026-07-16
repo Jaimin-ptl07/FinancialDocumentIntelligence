@@ -1,6 +1,6 @@
 # SP-2 — The Base: stage/DAG framework, content-addressed artifacts, registry
 
-- **Status:** Approved 2026-07-16. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. §7 done criteria 1-6, 8 verified (unit + testcontainers + static gates, full suite 126 passed); criterion 7 (live e2e round-trip) is code-complete but its live run is deferred — it needs the api/worker image rebuilt and `ghcr.io` is currently unreachable (the same blocker as SP-1).
 - **Depends on:** SP-1 (walking skeleton) — complete on `feature/sp-1-project-setup`.
 - **Roadmap:** `docs/architecture/ingestion-roadmap.md` §3 ("Why SP-2 is the highest-leverage sub-project").
 
