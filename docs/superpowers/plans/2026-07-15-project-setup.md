@@ -3844,7 +3844,7 @@ git commit -m "test(e2e): assert the full walking-skeleton round-trip"
 **Files:**
 - Create: `frontend/` (scaffold), `frontend/app/page.tsx`, `docker/frontend.Dockerfile`
 
-- [ ] **Step 1: Scaffold**
+- [x] **Step 1: Scaffold**
 
 Run from the repo root:
 
@@ -3853,7 +3853,7 @@ pnpm create next-app@latest frontend --typescript --app --tailwind --eslint --no
 ```
 Expected: `frontend/` created. Confirm `node -v` reports v24 first.
 
-- [ ] **Step 2: Replace `frontend/app/page.tsx`**
+- [x] **Step 2: Replace `frontend/app/page.tsx`**
 
 ```tsx
 "use client";
@@ -3914,7 +3914,7 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 3: Write `docker/frontend.Dockerfile`**
+- [x] **Step 3: Write `docker/frontend.Dockerfile`**
 
 ```dockerfile
 FROM node:24-slim
@@ -3927,18 +3927,55 @@ EXPOSE 3000
 CMD ["pnpm", "dev", "--hostname", "0.0.0.0"]
 ```
 
-- [ ] **Step 4: Verify against the running API**
+- [x] **Step 4: Verify against the running API**
 
 Run: `docker compose -f docker/compose.yml --env-file .env --profile core --profile ui up -d`
 Open `http://localhost:3000`, click **Submit ping job**.
 Expected: the JSON view settles to `"status": "done"` with a non-null `artifact_url`. This is done-criterion 6.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add frontend docker/frontend.Dockerfile
 git commit -m "feat(frontend): Next.js shell rendering live job status"
 ```
+
+> **Task 22 — done. done-criterion 6 proven at the gold standard: a REAL headless
+> Chromium loaded the page, clicked Submit, and rendered `"status":"done"` with a
+> non-null host-fetchable `artifact_url` and ZERO browser errors. Committed as
+> `feat(frontend)`; the CORS enabler shipped first as `feat(api)`.**
+>
+> One defect the plan missed, and it is invisible to every other test:
+>
+> - **The API had no CORS, so the browser round-trip could not work.** The page
+>   fetches the API from `http://localhost:3000` — a different origin. A browser
+>   sends the request but withholds the RESPONSE from the page's JS unless it
+>   carries `Access-Control-Allow-Origin`; even the bodyless POST needs it to be
+>   readable. curl and httpx enforce no origin policy, so Task 21's e2e round-trip
+>   and every unit test are blind to it — done-criterion 6 would have failed in a
+>   real browser with a green backend suite. Fixed by adding `CORSMiddleware`
+>   (allowlist `["http://localhost:3000"]`, not `"*"`) as the outermost user
+>   middleware in `create_app`, with `test_cors.py` proving preflight + simple-GET
+>   ACAO and that an unlisted origin gets none (gate-proved by neutralising it).
+>
+> Recorded, not defects:
+>
+> - **`create-next-app@latest` now installs Next 16.2.10 / React 19.2.4**, not the
+>   15 the plan text anticipated. App Router is unchanged; `next build` + lint are
+>   clean; `page.tsx` is verbatim. No pin was added (the plan used `@latest`).
+> - **Toolchain:** Node here is v21 (satisfies Next's `>=20`), and pnpm is
+>   reachable only as `corepack pnpm` — a PATH-shim `EPERM` under
+>   `C:\Program Files\nodejs`. `create-next-app`'s built-in install crashed on
+>   `spawn pnpm ENOENT`; completed with `corepack pnpm install`.
+> - **The live verification patched the corrected `app.py` into the running api
+>   container (`docker cp` + restart), because the deployed image is the Task-20
+>   build (pre-CORS) and a rebuild is blocked: `ghcr.io/astral-sh/uv:0.11.28` is
+>   not cached and ghcr.io is currently unreachable (HTTP 000). The SOURCE is
+>   correct and unit-tested; the image rebuild is a mechanical `docker compose
+>   build` pending network — NOT a code defect. Any operator on a working network
+>   gets the CORS layer for free at build. Flagged forward to Task 23/24: CI
+>   builds the image on a network that can reach ghcr, so CI is where the built
+>   image's CORS is exercised end to end.**
 
 ---
 
