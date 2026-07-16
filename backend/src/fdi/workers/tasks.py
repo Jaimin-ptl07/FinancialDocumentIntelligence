@@ -36,7 +36,6 @@ app, so a worker with broken config still fails at import, not here.
 
 import asyncio
 import uuid
-from typing import Any
 
 import structlog
 from minio import Minio
@@ -47,7 +46,6 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
-from fdi.platform.db.repository import JobRepository
 from fdi.platform.obs.logging import (
     bind_correlation_id,
     clear_correlation_id,
@@ -58,8 +56,6 @@ from fdi.workers.app import app
 
 log = structlog.get_logger(__name__)
 
-PING_PAYLOAD: dict[str, Any] = {"kind": "ping", "schema_version": 1}
-
 
 def _make_client(settings: Settings) -> Minio:
     return Minio(
@@ -68,91 +64,6 @@ def _make_client(settings: Settings) -> Minio:
         secret_key=settings.s3_secret_key,
         secure=settings.s3_secure,
     )
-
-
-# `type: ignore[untyped-decorator]` is NOT optional here, and every stage in
-# SP-2..SP-18 will need it. Celery 5.6.3 ships no `py.typed` and no stubs are
-# installed, so with `ignore_missing_imports = true` the whole package resolves to
-# Any -- which makes `app.task(...)` an UNTYPED decorator, and `--strict` implies
-# `disallow_untyped_decorators`. Without this, `mypy --strict src` fails:
-#
-#   error: Untyped decorator makes function "ping_job" untyped  [untyped-decorator]
-#
-# Scoped to this line on purpose: a module-wide `disallow_untyped_decorators =
-# false` override would also wave through a genuinely untyped decorator added
-# later. `--strict` also implies `warn_unused_ignores`, so if `celery-types` is
-# ever added this comment fails the gate rather than rotting silently.
-@app.task(name="fdi.ping_job", bind=False)  # type: ignore[untyped-decorator]
-def ping_job(job_id: str, correlation_id: str = "") -> str:
-    """Sync wrapper. Binds the correlation ID BEFORE the loop, then runs once.
-
-    Unconditional bind + `finally: clear` -- see rule 3. `if correlation_id:`
-    would be a correlation ID LEAK, not an optimisation: this process has already
-    run other jobs and their IDs are still bound.
-    """
-    bind_correlation_id(correlation_id or new_correlation_id())
-    try:
-        return asyncio.run(_ping_job(job_id))
-    finally:
-        clear_correlation_id()
-
-
-async def _ping_job(
-    job_id: str,
-    *,
-    store_bucket: str | None = None,
-    client: Minio | None = None,
-    db_url: str | None = None,
-) -> str:
-    """All of this task's I/O, in one coroutine, on one event loop.
-
-    The keyword args exist so tests can inject container-backed dependencies;
-    production passes none and reads Settings. `get_settings()` sits on the right
-    of each `or` so that an injected caller never reads the environment -- it is
-    lru_cached, so the repeats cost a dict lookup.
-    """
-    engine = make_engine(db_url or get_settings().database_url)
-    try:
-        session_factory = make_session_factory(engine)
-        store = ArtifactStore(
-            client or _make_client(get_settings()),
-            bucket=store_bucket or get_settings().s3_bucket,
-        )
-
-        async with session_factory() as session:
-            await JobRepository(session).mark_running(job_id)
-            await session.commit()
-        log.info("ping_job.running", job_id=job_id)
-
-        await store.ensure_bucket()
-        # NOTE: the body carries no job id and no timestamp — Global Constraint 6.
-        key = await store.put_json(f"jobs/{job_id}/ping.json", PING_PAYLOAD)
-
-        async with session_factory() as session:
-            await JobRepository(session).mark_done(job_id, artifact_key=key)
-            await session.commit()
-        log.info("ping_job.done", job_id=job_id, artifact_key=key)
-        return key
-    except Exception as exc:
-        # Log the CAUSE first: everything after this point can fail, and if it
-        # does, this line is the only surviving record of why the job died.
-        log.exception("ping_job.failed", job_id=job_id)
-        try:
-            # A fresh factory, not `session_factory`: that name is bound inside the
-            # `try` and would be unbound here had its own line raised.
-            async with make_session_factory(engine)() as session:
-                await JobRepository(session).mark_failed(job_id, error=repr(exc))
-                await session.commit()
-        except Exception:
-            # Swallowed ON PURPOSE -- see rule 5. Letting this escape would replace
-            # `exc` with whatever broke while recording it, and Celery would store
-            # the mask as the task's error. Logged, never lost.
-            log.exception("ping_job.mark_failed_failed", job_id=job_id)
-        # Bare `raise` re-raises `exc`, NOT the swallowed one: the inner handler has
-        # exited, so the exception being handled is the outer one again. Verified.
-        raise
-    finally:
-        await engine.dispose()
 
 
 async def _run_stage_async(
@@ -166,7 +77,7 @@ async def _run_stage_async(
     store_bucket: str | None = None,
 ) -> list[str]:
     """The task's I/O on one event loop. Keyword args let tests inject containers;
-    production passes none and reads Settings (mirrors _ping_job)."""
+    production passes none and reads Settings."""
     engine = make_engine(db_url or get_settings().database_url)
     try:
         session_factory = make_session_factory(engine)
@@ -185,6 +96,18 @@ async def _run_stage_async(
         await engine.dispose()
 
 
+# `type: ignore[untyped-decorator]` is NOT optional here, and every stage in
+# SP-2..SP-18 will need it. Celery 5.6.3 ships no `py.typed` and no stubs are
+# installed, so with `ignore_missing_imports = true` the whole package resolves to
+# Any -- which makes `app.task(...)` an UNTYPED decorator, and `--strict` implies
+# `disallow_untyped_decorators`. Without this, `mypy --strict src` fails:
+#
+#   error: Untyped decorator makes function "run_stage_task" untyped  [untyped-decorator]
+#
+# Scoped to this line on purpose: a module-wide `disallow_untyped_decorators =
+# false` override would also wave through a genuinely untyped decorator added
+# later. `--strict` also implies `warn_unused_ignores`, so if `celery-types` is
+# ever added this comment fails the gate rather than rotting silently.
 @app.task(name="fdi.run_stage", bind=False)  # type: ignore[untyped-decorator]
 def run_stage_task(doc_id: str, stage_name: str, correlation_id: str = "") -> None:
     """Sync wrapper. Binds correlation BEFORE asyncio.run, clears in finally

@@ -14,21 +14,22 @@ that import against the exemption in place, not assumed from the syntax.
 
 On the Protocol below -- read this before trusting it. Celery ships no `py.typed`,
 so under `ignore_missing_imports` the whole package resolves to `Any` and
-`ping_job` is `Any` (`reveal_type` confirms it; same root cause as the
+`run_stage_task` is `Any` (`reveal_type` confirms it; same root cause as the
 `type: ignore[untyped-decorator]` in workers/tasks.py). `Any` satisfies every
-Protocol, so `JobDispatcher(ping_job)` -- THE ONE CONSTRUCTION THIS CODE PERFORMS
-IN PRODUCTION -- is not type-checked against `TaskSender` at all, and will not be
-while Celery is untyped.
+Protocol, so `StageDispatcher(run_stage_task)` -- THE ONE CONSTRUCTION THIS CODE
+PERFORMS IN PRODUCTION -- is not type-checked against `TaskSender` at all, and
+will not be while Celery is untyped.
 
 What it does buy is real, but it is not that: mypy rejects a non-`Any` argument
-lacking `apply_async` -- `JobDispatcher(object())`, `JobDispatcher("x")` and
-`JobDispatcher(42)` are each measured `arg-type` errors. So the Protocol is not
+lacking `apply_async` -- `StageDispatcher(object())`, `StageDispatcher("x")` and
+`StageDispatcher(42)` are each measured `arg-type` errors. So the Protocol is not
 vacuous; it is simply blind at the call site that matters. Keep it as the stated
 requirement of the seam, not as evidence the injected object is a Celery task.
 The test suite, not mypy, is what checks that.
 
 One measured consequence, recorded here so it is not rediscovered as a mystery:
-if `celery-types` is ever installed, `JobDispatcher(ping_job)` will FAIL mypy --
+if `celery-types` is ever installed, `StageDispatcher(run_stage_task)` will FAIL
+mypy --
     Expected: def apply_async(self, args: list[str], ...)
     Got:      def apply_async(self, args: tuple[Any, ...] | None = ..., ...)
 because celery-types follows Celery's docstring ("args (Tuple)") rather than its
@@ -60,20 +61,6 @@ class TaskSender(Protocol):
     """
 
     def apply_async(self, args: list[str], kwargs: dict[str, str]) -> object: ...
-
-
-class JobDispatcher:
-    def __init__(self, ping_task: TaskSender) -> None:
-        self._ping_task = ping_task
-
-    def dispatch_ping(self, job_id: str, correlation_id: str) -> None:
-        """Publish, and deliberately drop the AsyncResult.
-
-        The correlation id travels as a task KWARG, not as a contextvar: nothing
-        propagates a contextvar across a broker. `ping_job` binds it on the far
-        side, before its own `asyncio.run()` (Global Constraint 4).
-        """
-        self._ping_task.apply_async(args=[job_id], kwargs={"correlation_id": correlation_id})
 
 
 class StageDispatcher:
