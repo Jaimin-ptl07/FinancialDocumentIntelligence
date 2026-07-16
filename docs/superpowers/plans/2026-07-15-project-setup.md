@@ -2599,17 +2599,75 @@ def _problem(status: int, detail: str, title: str | None = None) -> JSONResponse
     )
 
 
-def install_error_handlers(app: FastAPI) -> None:
-    @app.exception_handler(HTTPException)
-    async def _http_exc(_: Request, exc: HTTPException) -> JSONResponse:
-        return _problem(exc.status_code, str(exc.detail))
-
-    @app.exception_handler(Exception)
-    async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
-        # Log the real cause; return an opaque body. Internals are not client business.
+async def _unhandled(_: Request, exc: Exception) -> Response:
+    # The response must NOT depend on logging succeeding. See callout below.
+    # Swallowing is safe rather than lossy: ServerErrorMiddleware re-raises `exc`
+    # after this response is sent, so the server still logs the original cause.
+    with contextlib.suppress(Exception):
         log.exception("api.unhandled_exception", error=repr(exc))
-        return _problem(500, "An internal error occurred.")
+    return _problem(500, "An internal error occurred.")
+
+
+def install_error_handlers(app: FastAPI) -> None:
+    """Route every error class this app can emit through problem+json.
+
+    Keyed on `starlette.exceptions.HTTPException`, which ALSO covers FastAPI's
+    subclass (the MRO walk finds the parent). Keying on FastAPI's -- as this plan
+    originally did -- leaves the router's own 404 and 405 to FastAPI's default
+    handler. See the callout below.
+    """
+    app.add_exception_handler(StarletteHTTPException, _http_exc)
+    app.add_exception_handler(RequestValidationError, _validation_exc)
+    app.add_exception_handler(Exception, _unhandled)
 ```
+
+> ### ⛔ The plan's version leaked four ways. The whole point of this module is that *every* error is problem+json.
+>
+> Measured against the plan's code verbatim, not reasoned:
+>
+> | Error path | Plan's version | Fixed |
+> |---|---|---|
+> | `fastapi.HTTPException` | `application/problem+json` | unchanged |
+> | unhandled `Exception` | **`<none>`, body `b''`** | `application/problem+json` |
+> | unmatched route (404) | `application/json` | `application/problem+json` |
+> | wrong method (405) | `application/json` | `application/problem+json` |
+> | validation error (422) | `application/json` | `application/problem+json` |
+> | 401 | problem+json, **`WWW-Authenticate` dropped** | preserved |
+> | 304 | problem+json **+ a body** | bodiless (RFC 9110) |
+>
+> **404/405/422 are one mechanism.** `_lookup_exception_handler` walks `type(exc).__mro__`, so a
+> handler keyed on a **subclass never catches the parent**. Starlette raises *its* `HTTPException`
+> for unmatched routes; the plan registered FastAPI's subclass. This is worse than falling through:
+> FastAPI **pre-registers its own plain-JSON handler** against the parent and against
+> `RequestValidationError`, so those paths answer *confidently, in the wrong media type*. Fixed by
+> keying on `StarletteHTTPException`.
+>
+> **The bodyless 500 is the serious one — and its test was green.** With `structlog` unconfigured,
+> its default `ConsoleRenderer` draws the traceback through **rich**, whose box glyphs are
+> unencodable on cp1252 stdout. The `UnicodeEncodeError` **escapes the error handler**. Driven as
+> uvicorn drives it:
+>
+> ```
+> app raised: UnicodeEncodeError: 'charmap' codec can't encode characters in position 151-152
+> messages the client would receive: 0
+> ```
+>
+> The caller gets nothing at all — from the one module whose entire job is to work when everything
+> else has broken. **Fourth sighting of this cp1252 failure class** (after the Imports gate, and two
+> probe scripts). pytest hides it: its capture replaces `sys.stdout` with a UTF-8 `CaptureIO`, so
+> **the encoding that breaks production is never the one under test**.
+>
+> **`raise_app_exceptions=False` is doing more than it looks.** `ServerErrorMiddleware` re-raises
+> *unconditionally* after sending (*"We always continue to raise the exception"*), so the flag is
+> required, not stylistic. But it also makes httpx **fabricate `status_code = 500` with empty
+> headers when the app sends nothing** — so `assert r.status_code == 500` over that transport is not
+> evidence this module produced anything. That is exactly how the bodyless 500 stayed invisible; the
+> plan's test survives only because its *content-type* assertion happens to be load-bearing. The
+> shipped tests drive raw ASGI for this reason.
+>
+> **One fix would have introduced a bug:** 405 was previously served by FastAPI's default, which
+> *preserves* headers. Routing it through the plan's handler drops the RFC-mandated `Allow`. Headers
+> now pass through (minus content-type/content-length).
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -2626,6 +2684,19 @@ git commit -m "feat(api): RFC 9457 problem+json error handlers"
 ---
 
 ## Task 16: `api.app` and `api.routes` — the HTTP surface
+
+> **Carry these three in from Task 15, all measured:**
+> 1. **`configure_logging()` must run before anything logs.** Unconfigured structlog renders through
+>    rich, which is unencodable on cp1252 stdout — that is how Task 15's 500 handler ended up
+>    returning a bodyless response. `api.errors` is now immune (its log call is suppressed); every
+>    other call site, including `routes.py`, is **not**, and nothing detects it. Call
+>    `configure_logging()` in lifespan *first*.
+> 2. **`instance` (RFC 9457 §3.1) belongs here.** The useful value is `urn:uuid:<correlation_id>`,
+>    which needs per-request binding — so it could not be done in Task 15. Today's opaque 500 body
+>    gives the caller no handle to quote back at support. Bind the ID in middleware, then add it.
+> 3. **Check for double-logged tracebacks.** uvicorn logs its own traceback for a re-raised 500
+>    alongside ours (inferred from its source, unverified) — which would partly undo Task 7's
+>    no-double-printing work. Verify against a real server.
 
 **Files:**
 - Create: `backend/src/fdi/api/app.py`, `backend/src/fdi/api/routes.py`, `backend/src/fdi/api/schemas.py`, `backend/src/fdi/api/deps.py`
