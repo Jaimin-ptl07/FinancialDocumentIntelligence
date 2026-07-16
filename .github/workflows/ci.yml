@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync --project backend --locked
+
+      - name: Lint
+        run: uv run --directory backend ruff check .
+
+      - name: Types
+        run: uv run --directory backend mypy --strict src
+
+      - name: Import contract
+        run: uv run --directory backend lint-imports --config .importlinter
+
+      - name: Unit tests
+        run: uv run --directory backend pytest tests/unit -q
+
+      # Integration tests need Docker. ubuntu-latest has it; testcontainers
+      # manages lifecycles itself, so no service containers are declared.
+      - name: Integration tests
+        run: uv run --directory backend pytest tests/integration -q
+
+      # NOTE: tests/e2e is deliberately NOT run here. Those tests drive a running
+      # compose stack (localhost:8000 + a real Celery worker) and skip themselves
+      # when it is absent -- a silent skip that CI must never mistake for a pass
+      # (see Task 21). CI covers source correctness (lint/type/contract/unit) and
+      # the testcontainers-backed integration layer; the full walking-skeleton
+      # round-trip and the browser check are proven at build time against a live
+      # stack, not in this workflow. Neither does this workflow BUILD the Docker
+      # images -- the backend gates run under uv, the frontend under pnpm -- so a
+      # green run does not by itself prove the deployable image. Wiring an image
+      # build + compose round-trip into CI is a follow-up for the first task that
+      # owns a deployment target.
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      # corepack reads the `packageManager` pin in frontend/package.json
+      # (pnpm@9.15.9), so `pnpm install --frozen-lockfile` runs the exact version
+      # that produced pnpm-lock.yaml and fails on any drift.
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run build
