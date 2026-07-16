@@ -1261,14 +1261,14 @@ git commit -m "feat(platform): engine factories with a no-module-level-engine gu
 
 - [ ] **Step 1: Scaffold Alembic**
 
-Run: `uv run --directory backend alembic init -t async backend/alembic`
-Expected: creates `backend/alembic/` and `alembic.ini` in the repo root.
+Run: `uv run --directory backend alembic init -t async alembic`
+Expected: creates `backend/alembic/` and `backend/alembic.ini`.
 
-Then move the ini into `backend/`:
-
-```powershell
-Move-Item alembic.ini backend/alembic.ini -Force
-```
+> **The path is `alembic`, not `backend/alembic`.** `--directory backend` already puts cwd at
+> `backend/`, so the longer form creates `backend/backend/alembic`. With the correct form
+> `alembic.ini` lands in `backend/` directly, the generated `script_location = %(here)s/alembic`
+> is already right, and **no `Move-Item` step is needed** — the plan previously specified one to
+> clean up after the wrong path.
 
 - [ ] **Step 2: Point `alembic.ini` at the right script location**
 
@@ -1302,7 +1302,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# `%` -> `%%` is load-bearing, not defensive coding. set_main_option writes into
+# a configparser, which reads `%` as interpolation syntax. A password of `p@ss`
+# is CORRECTLY encoded in a URL as `p%40ss` -- and that kills every alembic
+# command at import with `ValueError: invalid interpolation syntax ... at
+# position 24`, naming neither alembic nor the password. It fires at set() time,
+# so nothing alembic-related even appears in the traceback.
+# The app is unaffected: create_async_engine takes the URL raw. So this breaks
+# ONLY migrations, ONLY in environments with a special character in the password
+# -- i.e. it passes every local test and fails at deploy.
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 
@@ -1410,6 +1419,26 @@ def downgrade() -> None:
 > be bypassed, and keeps migrations ordinary DDL. `JobStatus` stays the single source of the four
 > literals for Python callers.
 
+> ### ⚠️ `alembic check` is BLIND to the CHECK constraint. The banana test is its only guard.
+>
+> Measured during execution, not assumed: with the `CheckConstraint` **deleted** from the
+> migration, against a live PostgreSQL 18.4 —
+>
+> ```
+> is ck_jobs_status in the DB?      (nothing)
+> does 'banana' insert succeed?     INSERT 0 1
+> does `alembic check` notice?      No new upgrade operations detected.   exit 0
+> ```
+>
+> Autogenerate does not compare CHECK constraints in either direction, and the ORM never declares
+> one, so there is nothing to diff. `alembic check` is strong evidence for **columns and indexes**
+> and **zero** evidence for the constraint this task calls its point.
+>
+> So `test_status_check_constraint_rejects_unknown_values` is not belt-and-braces on top of
+> autogenerate — **it is the entire enforcement**. Delete it and the status domain silently
+> evaporates with every gate still green. That is the exact shape of the three inert gates this
+> plan has already found, so it is called out here rather than trusted to be obvious.
+
 - [ ] **Step 5: Write the test**
 
 `backend/tests/integration/test_migrations.py`:
@@ -1418,7 +1447,6 @@ def downgrade() -> None:
 """Proves the migration applies to a real PostgreSQL 18.4 and matches the ORM."""
 import pytest
 import sqlalchemy
-from sqlalchemy.ext.asyncio import create_async_engine
 
 pytestmark = pytest.mark.integration
 
@@ -1463,7 +1491,9 @@ async def test_alembic_version_is_stamped(migrated_engine) -> None:
 
 - [ ] **Step 6: Add the `migrated_engine` fixture to `backend/tests/integration/conftest.py`**
 
-Append:
+**Merge these imports into the file's existing top import block — do NOT append them.** Appending
+puts imports below module-level code, which is ruff **E402** and fails the lint gate. Only the
+fixture body goes at the bottom.
 
 ```python
 from collections.abc import AsyncIterator
@@ -1477,24 +1507,43 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="session")
-def _alembic_applied(postgres_url: str) -> None:
-    """Run migrations once per session against the container."""
-    import os
+def _alembic_applied(postgres_url: str) -> Iterator[None]:
+    """Run migrations once per session against the container.
 
-    os.environ["FDI_DATABASE_URL"] = postgres_url
-    os.environ.setdefault("FDI_BROKER_URL", "amqp://guest:guest@localhost:5672/%2F")
-    os.environ.setdefault("FDI_RESULT_BACKEND", "redis://localhost:6379/0")
-    os.environ.setdefault("FDI_S3_ENDPOINT", "localhost:9000")
-    os.environ.setdefault("FDI_S3_ACCESS_KEY", "minioadmin")
-    os.environ.setdefault("FDI_S3_SECRET_KEY", "minioadmin")
+    All SIX Settings fields must be set, not just DATABASE_URL: env.py calls
+    get_settings() at import, which validates the whole model, so `alembic
+    history` fails without FDI_S3_SECRET_KEY.
 
-    from fdi.platform.config import get_settings
+    Use MonkeyPatch, NOT os.environ. Raw os.environ assignment does not restore,
+    integration runs BEFORE unit, so all six leak into the unit phase along with
+    a get_settings cache pinned to a dying container. test_config.py survives
+    that only because it happens to monkeypatch every key it reads -- luck, not
+    design, and luck that expires the first time a test asserts on an FDI_ var
+    it did not set itself.
+    """
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("FDI_DATABASE_URL", postgres_url)
+        for key, value in {
+            "FDI_BROKER_URL": "amqp://guest:guest@localhost:5672/%2F",
+            "FDI_RESULT_BACKEND": "redis://localhost:6379/0",
+            "FDI_S3_ENDPOINT": "localhost:9000",
+            "FDI_S3_ACCESS_KEY": "minioadmin",
+            "FDI_S3_SECRET_KEY": "minioadmin",
+        }.items():
+            if key not in os.environ:
+                monkeypatch.setenv(key, value)
+        get_settings.cache_clear()
 
-    get_settings.cache_clear()
-
-    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
-    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    command.upgrade(cfg, "head")
+        # NOTE: no set_main_option("script_location", ...) override here, on
+        # purpose. Overriding it would mask a broken alembic.ini -- the suite
+        # would pass while the ini nobody tests is wrong. Let %(here)s resolve.
+        cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+        command.upgrade(cfg, "head")
+        yield
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -1521,8 +1570,8 @@ async def migrated_engine(
 
 - [ ] **Step 7: Run to verify it passes**
 
-Run: `uv run --directory backend pytest tests/integration/test_migrations.py -v`
-Expected: 2 passed
+Run: `uv run --directory backend pytest tests/integration/test_migrations.py -v` (needs Docker)
+Expected: 3 passed — table shape, ORM/migration agreement, and the CHECK rejecting `'banana'`.
 
 - [ ] **Step 8: Commit**
 
