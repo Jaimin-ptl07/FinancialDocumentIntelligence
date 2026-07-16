@@ -4,7 +4,7 @@ truth, and this keeps wall-clock out of artifact bodies (Global Constraint 6).""
 import enum
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -65,3 +65,32 @@ class StageRun(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class EvalRun(Base):
+    __tablename__ = "eval_run"
+    __table_args__ = (
+        Index("ix_eval_run_dataset_metric", "dataset_name", "metric_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    candidate_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_version: Mapped[int] = mapped_column(nullable=False)
+    dataset_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_version: Mapped[int] = mapped_column(nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    aggregate: Mapped[float] = mapped_column(Float(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EvalCaseResult(Base):
+    __tablename__ = "eval_case_result"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    eval_run_id: Mapped[str] = mapped_column(
+        ForeignKey("eval_run.id"), index=True, nullable=False
+    )
+    case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    score: Mapped[float] = mapped_column(Float(), nullable=False)
