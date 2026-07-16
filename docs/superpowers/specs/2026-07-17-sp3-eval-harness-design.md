@@ -1,6 +1,6 @@
 # SP-3 — Eval Harness & Ground Truth
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. All §7 done criteria verified (unit + testcontainers + static gates; full suite 143 passed, 3 e2e skipped; ruff / mypy --strict / lint-imports 1 kept 0 broken).
 - **Depends on:** SP-2 (stage/DAG framework, content-addressed artifacts, registry) — complete.
 - **Roadmap:** `docs/architecture/ingestion-roadmap.md` §3 ("Why SP-3 exists"), §4 (build order: SP-3 before the heavy layers).
 

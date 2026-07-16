@@ -1,6 +1,22 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1 and SP-2 implemented on `feature/sp-1-project-setup`; SP-3 is next.
+- **Status:** Roadmap agreed 2026-07-15. SP-1, SP-2, SP-3 implemented on `feature/sp-1-project-setup`; SP-4 (Document Intake) is next.
+
+### What SP-3 shipped that every layer must know
+
+The eval harness is how each later layer picks its winning algorithm by measurement, not reputation:
+
+- **A candidate is `predict(given) -> output`** with `name` + `version` (`fdi.pipeline.evaluation.Candidate`),
+  self-registered into `CANDIDATES`. A layer's algorithm variants (OCR engines, reading-order strategies,
+  table parsers) are wrapped as candidates and measured before one is promoted to a pipeline `Stage`.
+- **A metric is pure `score(predicted, expected) -> [0,1]`** in `fdi.core.metrics` (ships `exact_match`;
+  each layer ADDS its metric beside it — CER/WER for OCR, cell-F1 for tables, Kendall-τ for reading order).
+- **Ground truth is a versioned dataset** — `Dataset(name, version, cases[given, expected])` stored at
+  `ground-truth/{name}/v{version}.json` via `ArtifactStore` (`fdi.pipeline.dataset_store`).
+- **`run_evaluation(...)` runs a candidate over a dataset, persists an `eval_run` + per-case results, and
+  `EvalRepository.leaderboard(dataset, metric)` ranks candidates.** API: `POST /eval`, `GET /datasets/{name}/leaderboard`.
+- **Evals are observations, not cached artifacts** — a new run row each time; intentionally NOT deduped.
+  Real datasets (annotated Indian annual reports) are authored/uploaded as the layers arrive.
 
 ### What SP-2 shipped that SP-3/SP-4 must know
 
@@ -83,7 +99,7 @@ Each row is one spec → plan → implement cycle.
 |---|---|---|---|---|
 | **SP-1** | Project setup & walking skeleton | setup | light | ✅ done |
 | **SP-2** | The base — unified schema, artifact store, registry, **stage/DAG framework** | base | medium | ✅ done |
-| **SP-3** | Eval harness & ground truth | — | medium | ⬜ |
+| **SP-3** | Eval harness & ground truth | — | medium | ✅ done |
 | **SP-4** | Document Intake | 1 | light | ⬜ |
 | **SP-5** | OCR & Layout Extraction | 2 | medium | ⬜ |
 | **SP-6** | Normalization | 3 | light | ⬜ |
