@@ -12,7 +12,7 @@ from fdi.api.deps import CorrelationIdDep, DispatcherDep, SessionDep, StoreDep
 from fdi.api.schemas import JobAccepted, JobView, ReadyView
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
-from fdi.platform.db.repository import JobRepository
+from fdi.platform.db.repository import RegistryRepository
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -38,7 +38,7 @@ async def _probe(name: str, check: Callable[[], Awaitable[object]]) -> bool:
     `except` and turn a clean 503 into a bodyless 500 -- i.e. the endpoint whose
     entire job is to report the outage becomes a second outage. This is the only
     class of place that earns the suppression: `/ready` and the 500 handler are
-    the two responses that ARE the diagnostic. `ping_job.queued` below is
+    the two responses that ARE the diagnostic. `pipeline.queued` below is
     deliberately NOT suppressed -- a broken logger on the normal path should be
     loud.
 
@@ -81,47 +81,58 @@ async def ready(session: SessionDep, store: StoreDep, response: Response) -> Rea
 async def create_ping_job(
     session: SessionDep, correlation_id: CorrelationIdDep, dispatcher: DispatcherDep
 ) -> JobAccepted:
-    """Persist the job, publish it. The worker picks it up.
+    """Persist the document, publish a "ping" stage run. The worker picks it up.
 
     The id arrives already bound and already validated from
-    `CorrelationIdMiddleware`, so it is known to fit `correlation_id`'s
-    varchar(36). Reading the header here instead -- which is where it started --
-    put an unvalidated client string into that column, and PostgreSQL raises
-    rather than truncates: a 37-character `X-Request-ID` returned a 500.
+    `CorrelationIdMiddleware`, so it is known to fit the correlation kwarg's
+    varchar(36) once the worker records a `stage_run`. Reading the header here
+    instead -- which is where it started -- put an unvalidated client string into
+    that column, and PostgreSQL raises rather than truncates: a 37-character
+    `X-Request-ID` returned a 500.
 
-    Publishing goes through an injected `JobDispatcher` rather than an inline
-    `from fdi.workers.tasks import ping_job`. That import was a real layering
-    violation, not a formality: `api` and `workers` are independent siblings, and
-    a function-local import evades the eye but not the import graph -- lint-imports
-    reported it at this line. The seam lives in `fdi.pipeline.dispatch`, below
-    both, and the concrete task is chosen in `api/app.py`'s lifespan.
+    Publishing goes through an injected `StageDispatcher` rather than an inline
+    `from fdi.workers.tasks import run_stage_task`. That import was a real
+    layering violation, not a formality: `api` and `workers` are independent
+    siblings, and a function-local import evades the eye but not the import
+    graph -- lint-imports reported it at this line. The seam lives in
+    `fdi.pipeline.dispatch`, below both, and the concrete task is chosen in
+    `api/app.py`'s lifespan.
     """
-    job_id = str(uuid.uuid4())
-    await JobRepository(session).create(job_id, correlation_id=correlation_id)
+    doc_id = str(uuid.uuid4())
+    await RegistryRepository(session).create_document(doc_id)
     await session.commit()
 
-    dispatcher.dispatch_ping(job_id=job_id, correlation_id=correlation_id)
-    log.info("ping_job.queued", job_id=job_id)
+    dispatcher.dispatch(doc_id, "ping", correlation_id)
+    log.info("pipeline.queued", doc_id=doc_id, stage="ping")
 
-    return JobAccepted(job_id=job_id, correlation_id=correlation_id, status="queued")
+    return JobAccepted(job_id=doc_id, correlation_id=correlation_id, status="queued")
 
 
 @router.get("/jobs/{job_id}", response_model=JobView)
 async def get_job(job_id: str, session: SessionDep, store: StoreDep) -> JobView:
-    job = await JobRepository(session).get(job_id)
-    if job is None:
+    repo = RegistryRepository(session)
+    if await repo.get_document(job_id) is None:
         raise HTTPException(status_code=404, detail=f"job {job_id} not found")
 
+    run = await repo.latest_run(job_id, "ping")
+    if run is None:
+        # The document exists but the worker has not yet created a stage_run for
+        # it -- these tests do not run the worker, so this is the steady state
+        # right after `/ping-job` returns 202.
+        return JobView(
+            job_id=job_id, status="queued", artifact_key=None, artifact_url=None, error=None
+        )
+
     artifact_url = None
-    if job.artifact_key:
+    if run.artifact_key:
         artifact_url = await store.presigned_get_url(
-            job.artifact_key, ttl_seconds=get_settings().artifact_url_ttl_seconds
+            run.artifact_key, ttl_seconds=get_settings().artifact_url_ttl_seconds
         )
 
     return JobView(
-        job_id=job.id,
-        status=job.status,
-        artifact_key=job.artifact_key,
+        job_id=job_id,
+        status=run.status,
+        artifact_key=run.artifact_key,
         artifact_url=artifact_url,
-        error=job.error,
+        error=run.error,
     )

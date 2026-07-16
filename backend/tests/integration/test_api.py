@@ -109,8 +109,8 @@ async def test_post_ping_job_returns_202_with_job_id(
     assert len(body["correlation_id"]) == 36
     # 36 is the uuid4 string length, but asserting the length only pins the
     # length: "a" * 36 passes it too. What both fields actually promise is a
-    # uuid, and that is also what keeps them inside jobs.id / correlation_id's
-    # varchar(36). Assert the promise, not its side effect.
+    # uuid, and that is also what keeps them inside document.id / stage_run's
+    # correlation_id varchar(36). Assert the promise, not its side effect.
     assert uuid.UUID(body["job_id"]).version == 4
     assert uuid.UUID(body["correlation_id"]).version == 4
 
@@ -199,7 +199,7 @@ async def test_empty_request_id_header_mints_rather_than_rejects(
     """`X-Request-ID:` with no value is absent, not invalid.
 
     A bare header is a proxy artefact, not a caller asserting an id. Minting
-    here is also what keeps `""` out of `jobs.correlation_id` -- the third
+    here is also what keeps `""` out of `stage_run.correlation_id` -- the third
     representation of "absent" (with NULL and a real id), and the only one that
     satisfies both the column and the repository's `str` signature while meaning
     nothing.
@@ -235,19 +235,36 @@ async def test_request_id_formats_a_real_proxy_stamps_are_accepted(
     assert r.json()["correlation_id"] == value
 
 
-async def test_accepted_request_id_reaches_postgres(
-    client: AsyncClient, _alembic_applied
+async def test_accepted_request_id_reaches_the_synchronous_response_and_log(
+    capsys, client: AsyncClient, _alembic_applied
 ) -> None:
-    """The column is the tightest sink; prove the accepted value survives it.
+    """The accepted id is real, not just validated; prove it survives to the
+    two places that are synchronously true right after `POST /ping-job`.
 
-    Without this, the length rule is asserted only against the HTTP layer that
-    enforces it -- and the 500 it exists to prevent came from the DB.
+    Under the stage framework, `/ping-job` only creates a `document` row --
+    the row that carries a `correlation_id` column is `stage_run`, and that is
+    written by the worker, which this test does not run. So the id no longer
+    reaches Postgres synchronously (a document row does not carry a
+    correlation id at all). What IS still synchronously true, and still worth
+    pinning: the accepted `X-Request-ID` is echoed as `correlation_id` in the
+    202 body, and it appears in the `pipeline.queued` log line emitted before
+    the response is returned.
+
+    `configure_logging()` here, in the test body, is load-bearing -- see
+    `test_log_line_cannot_be_forged_through_the_header` below for why.
     """
+    from fdi.platform.obs.logging import configure_logging
+
+    configure_logging("INFO")
     value = "b" * 36
     r = await client.post("/ping-job", headers={"X-Request-ID": value})
     assert r.status_code == 202
-    job = await client.get(f"/jobs/{r.json()['job_id']}")
-    assert job.status_code == 200
+    assert r.json()["correlation_id"] == value
+
+    lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln.startswith("{")]
+    entry = next(p for p in (json.loads(ln) for ln in lines) if p.get("event") == "pipeline.queued")
+    assert entry["doc_id"] == r.json()["job_id"]
+    assert entry["correlation_id"] == value
 
 
 async def test_log_line_cannot_be_forged_through_the_header(
@@ -276,7 +293,7 @@ async def test_log_line_cannot_be_forged_through_the_header(
     assert r.status_code == 202
 
     lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln.startswith("{")]
-    entry = next(p for p in (json.loads(ln) for ln in lines) if p.get("event") == "ping_job.queued")
+    entry = next(p for p in (json.loads(ln) for ln in lines) if p.get("event") == "pipeline.queued")
     assert entry["correlation_id"] == accepted
     assert entry["level"] == "info"
 

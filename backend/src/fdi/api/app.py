@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things
     # are chosen and handed to abstractions, and nothing imports it back. Routes
-    # take a JobDispatcher; only this line knows which task is inside it.
+    # take a StageDispatcher; only this line knows which task is inside it.
     #
     # Deliberately a local import, not a module-level one. At module level it
     # would import the Celery app -- which builds Settings in its own module body
@@ -81,8 +81,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # NOT make `api -> workers` legal: putting this import back in routes.py
     # breaks the contract again, which was re-run and confirmed rather than
     # inferred from the config syntax.
-    from fdi.pipeline.dispatch import JobDispatcher
-    from fdi.workers.tasks import ping_job
+    #
+    # Importing `run_stage_task` also imports `fdi.pipeline.stages` (tasks.py does
+    # `from fdi.pipeline import stages as _stages`), which is what registers the
+    # built-in stages into `REGISTRY` for THIS process -- the API never resolves a
+    # DAG itself, but the resolver's registry must still be populated for anything
+    # downstream that inspects it.
+    from fdi.pipeline.dispatch import StageDispatcher
+    from fdi.workers.tasks import run_stage_task
 
     # Re-assert the broker from THIS process's Settings, rather than inheriting
     # whatever was in os.environ the first time fdi.workers.app was imported.
@@ -98,10 +104,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # The composition root owns wiring, so it should say which broker it dispatches
     # to instead of depending on import order to be lucky.
-    ping_job.app.conf.broker_url = settings.broker_url
-    ping_job.app.conf.result_backend = settings.result_backend
+    run_stage_task.app.conf.broker_url = settings.broker_url
+    run_stage_task.app.conf.result_backend = settings.result_backend
 
-    app.state.dispatcher = JobDispatcher(ping_job)
+    app.state.dispatcher = StageDispatcher(run_stage_task)
     try:
         yield
     finally:

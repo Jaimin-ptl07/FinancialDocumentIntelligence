@@ -64,6 +64,9 @@ class RegistryRepository:
         self._s.add(Document(id=doc_id, checksum=checksum))
         await self._s.flush()
 
+    async def get_document(self, doc_id: str) -> Document | None:
+        return await self._s.get(Document, doc_id)
+
     async def start_run(
         self,
         run_id: str,
