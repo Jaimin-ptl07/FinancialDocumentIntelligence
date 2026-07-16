@@ -48,7 +48,20 @@ All commands run from the **repo root** `D:\FinancialDocumentIntelligence` unles
 | Full suite | `uv run --directory backend pytest -q` | **yes** |
 | Lint | `uv run --directory backend ruff check .` | no |
 | Types | `uv run --directory backend mypy --strict src` | no |
-| Imports | `uv run --directory backend lint-imports --config .importlinter` | no |
+| Imports | `PYTHONUTF8=1 uv run --directory backend lint-imports --config .importlinter` | no |
+
+> **`PYTHONUTF8=1` on the Imports row is load-bearing on Windows, not decoration.** import-linter
+> renders a `:brick:` emoji through `rich`; on a console without VT support `rich` takes its legacy
+> path and encodes to the ANSI code page (cp1252 here), which cannot represent it. The command then
+> dies with `UnicodeEncodeError` and **exit 1** — the same exit code as a real contract violation.
+> Measured on this box: with the flag, a deliberate `core → platform` import is reported precisely
+> (`fdi.core.serialization -> fdi.platform.config (l.16)`); without it, a violated contract and a
+> clean tree produce *identical* output. That is worse than a gate that does nothing, because it is
+> an alarm that is always on — and the way to make an always-on alarm quiet is to stop believing it.
+> `PYTHONIOENCODING=utf-8` and `TERM=dumb` also work; `NO_COLOR=1` does **not** (it suppresses
+> colour, not the emoji). Linux/CI/Docker default to UTF-8 and are unaffected, which is precisely
+> why this can only ever be caught locally. `tests/unit/test_import_contract.py` sets the flag
+> itself, so the pytest gate is honest without the developer knowing any of this.
 
 > **Bare `pytest -q` requires Docker** — integration tests are not deselected by default, and
 > that is deliberate: hiding them behind an opt-in flag is how they stop being run locally and
@@ -271,6 +284,7 @@ exhaustive = true
 ```python
 """The layered contract is the project's most important structural rule.
 This test runs it in-process so a violation fails pytest, not just CI."""
+import os
 import subprocess
 from pathlib import Path
 
@@ -287,11 +301,22 @@ def test_import_contract_holds() -> None:
     result = subprocess.run(
         ["lint-imports", "--config", str(BACKEND / ".importlinter")],
         cwd=BACKEND, capture_output=True, text=True,
+        # Both load-bearing on Windows, same root cause: import-linter renders a
+        # `:brick:` emoji via `rich`, which on a non-VT console encodes to the
+        # ANSI code page (cp1252) and dies. PYTHONUTF8=1 fixes the child;
+        # encoding="utf-8" stops OUR reader thread dying on the way back and
+        # silently blanking result.stdout.
+        encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1"}, timeout=30,
     )
-    assert result.returncode == 0, (
-        f"Layered architecture violated.\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    detail = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # A crashed linter and a real violation BOTH exit 1. Confirm the linter
+    # reached a verdict before blaming the architecture for it.
+    assert "Contracts:" in result.stdout, (
+        f"lint-imports did not run to completion, so the contract was never "
+        f"checked. This is a TOOLING failure, not an architecture violation.\n"
+        f"{detail}"
     )
+    assert result.returncode == 0, f"Layered architecture violated.\n{detail}"
 ```
 
 - [ ] **Step 4: Run it**
