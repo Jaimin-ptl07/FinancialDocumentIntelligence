@@ -3341,6 +3341,47 @@ git commit -m "build(rabbitmq): consumer_timeout headroom for multi-minute stage
 **Files:**
 - Create: `docker/compose.yml`, `.env.example`
 
+> ### ⛔ Five defects, three of which each independently prevent the round-trip. All fixed; all found only by running the stack.
+>
+> This task is the payoff of SP-1, and none of these five show up in any unit test — they are what
+> "bring it up and prove the round-trip" exists to catch. Verified end-to-end against a live `core`
+> stack (round-trip `done` in ~2s, correlation ID `586a0d3d…` in **both** api and worker logs,
+> artifact URL fetched from the host → **HTTP 200**, total RAM ~460 MiB).
+>
+> 1. **The presigned `artifact_url` was unreachable from the host** — Task 12 predicted this exactly.
+>    Under compose the API's `FDI_S3_ENDPOINT=minio:9000`, so `presigned_get_object` embedded
+>    `http://minio:9000/…` and a host GET died with `getaddrinfo failed`. Fixed by a new Settings
+>    field **`FDI_S3_PUBLIC_ENDPOINT`** and a second Minio client used *only* for signing (falls back
+>    to `s3_endpoint` when unset, so prod/tests are unchanged). **One subtlety beyond Task 12's
+>    sketch:** `presigned_get_object` is not purely local — absent a constructor `region` it issues a
+>    live `GetBucketLocation` to its endpoint, which is the deliberately-unreachable host view, so it
+>    500'd until `region="us-east-1"` (MinIO's default) was set to sign offline.
+> 2. **The RabbitMQ 4.x worker crash-loop — the whole round-trip was impossible as written.** The
+>    worker died with `RestartFreqExceeded` on `Feature transient_nonexcl_queues is deprecated. By
+>    default, this feature is not permitted anymore.` RabbitMQ 4.x denies transient non-exclusive
+>    queues by default; Celery declares exactly those for its pidbox (worker mingle, and
+>    `celery inspect ping` — which *is* the worker healthcheck). No test caught it: every worker test
+>    runs eager/in-process, none against a real 4.x broker. Fixed with
+>    `deprecated_features.permit.transient_nonexcl_queues = true` in `docker/rabbitmq.conf`.
+> 3. **`FDI_ARTIFACT_URL_TTL_SECONDS` was in the allowlist but missing from `.env.example`.** Exactly
+>    the inert-config shape the `x-backend-env` comment warns about. `docker compose config` *warns*
+>    and injects `""`; pydantic then **raises `int_parsing` on the empty string** (it does NOT fall
+>    back to the default), and since `alembic/env.py` builds Settings at import, this takes
+>    migrate → api → worker down at boot. Added to `.env.example` (=3600).
+> 4. **The F: bind mounts failed as written.** `device: "F:/fdi-data/…"` errors at `up` — the `local`
+>    driver resolves `device` *inside the WSL2 VM*, which has no `F:`. Fixed:
+>    `COMPOSE_DATA_ROOT=/run/desktop/mnt/host/f/fdi-data` (the VM-visible path; the dirs are still
+>    created Windows-side at `F:\`). Confirmed `/run/desktop/mnt/host/f`, `/mnt/host/f`, and
+>    `/host_mnt/f` all map to `F:\`.
+> 5. **Step 4's `docker compose config` (no profile) validates nothing** — every service carries a
+>    profile, so it renders `services: {}` and checks only the top-level anchors. Real validation
+>    needs `--profile core`.
+>
+> **Not a defect, but know it:** the worker never calls `configure_logging()`, so its logs are
+> structlog's console `key=value`, not the API's JSON. The correlation ID still crosses correctly
+> (proven above); the shape just differs. Pre-existing, acknowledged in `logging.py`, a candidate for
+> SP-2.
+
 - [ ] **Step 1: Write `.env.example`**
 
 ```bash
@@ -3358,7 +3399,10 @@ git commit -m "build(rabbitmq): consumer_timeout headroom for multi-minute stage
 # positive and invites weakening the validator. Every other Compose-only var here
 # (POSTGRES_*, MINIO_*, RABBITMQ_*) already sits outside FDI_; this restores that
 # rule rather than inventing one.
-COMPOSE_DATA_ROOT=F:/fdi-data
+# WSL2 path, NOT F:/fdi-data. The `local` volume driver resolves `device` inside
+# the Docker Desktop VM, which has no drive letters; /run/desktop/mnt/host/f maps
+# to F:\. Create the dirs Windows-side at F:di-data (Step 3); mount them here.
+COMPOSE_DATA_ROOT=/run/desktop/mnt/host/f/fdi-data
 
 POSTGRES_USER=fdi
 POSTGRES_PASSWORD=fdi
@@ -3380,6 +3424,14 @@ FDI_S3_BUCKET=artifacts
 FDI_S3_SECURE=false
 FDI_WORKER_CONCURRENCY=2
 FDI_LOG_LEVEL=INFO
+# REQUIRED even though it has a default. x-backend-env interpolates it
+# unconditionally, so absence here injects FDI_ARTIFACT_URL_TTL_SECONDS="" into the
+# container -- which pydantic rejects with int_parsing (it does NOT use the default
+# for an empty string), taking migrate/api/worker down at boot.
+FDI_ARTIFACT_URL_TTL_SECONDS=3600
+# Host-reachable endpoint used ONLY to presign download URLs. Distinct from
+# FDI_S3_ENDPOINT (minio:9000), which is in-network and unresolvable from a browser.
+FDI_S3_PUBLIC_ENDPOINT=localhost:9000
 ```
 
 - [ ] **Step 2: Write `docker/compose.yml`**
@@ -3398,6 +3450,10 @@ x-backend-env: &backend-env
   FDI_BROKER_URL: ${FDI_BROKER_URL}
   FDI_RESULT_BACKEND: ${FDI_RESULT_BACKEND}
   FDI_S3_ENDPOINT: ${FDI_S3_ENDPOINT}
+  # Host-reachable endpoint used ONLY for presigning download URLs. FDI_S3_ENDPOINT
+  # (minio:9000) is in-network and a browser cannot resolve it, so the artifact_url
+  # a UI needs would 404 without this. See the presigning callout.
+  FDI_S3_PUBLIC_ENDPOINT: ${FDI_S3_PUBLIC_ENDPOINT}
   FDI_S3_ACCESS_KEY: ${FDI_S3_ACCESS_KEY}
   FDI_S3_SECRET_KEY: ${FDI_S3_SECRET_KEY}
   FDI_S3_BUCKET: ${FDI_S3_BUCKET}
@@ -3608,8 +3664,10 @@ Copy-Item .env.example .env
 
 - [ ] **Step 4: Validate the compose file**
 
-Run: `docker compose -f docker/compose.yml --env-file .env config`
-Expected: renders with no errors; every `${...}` resolved.
+Run: `docker compose -f docker/compose.yml --env-file .env --profile core config`
+Expected: renders with no errors; every `${...}` resolved. **`--profile core` is required** --
+without it every service (all carry a profile) is filtered out and `config` renders `services: {}`,
+validating only the top-level anchors.
 
 - [ ] **Step 5: Bring up the core profile**
 
@@ -3625,7 +3683,10 @@ $r.job_id
 Start-Sleep -Seconds 3
 Invoke-RestMethod "http://localhost:8000/jobs/$($r.job_id)"
 ```
-Expected: `status: done`, a non-null `artifact_key`, and a usable `artifact_url`.
+Expected: `status: done`, a non-null `artifact_key`, and an `artifact_url` that is **actually
+fetchable from the host** — `curl "$($r.artifact_url)"` returns `{"kind":"ping","schema_version":1}`.
+"Usable" here means host-reachable, which is only true because of `FDI_S3_PUBLIC_ENDPOINT` (defect 1
+above); the raw `minio:9000` URL a naive build produces returns `getaddrinfo failed` from the host.
 
 - [ ] **Step 7: Prove the correlation ID crosses the process boundary**
 
