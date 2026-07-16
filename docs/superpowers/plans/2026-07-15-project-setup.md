@@ -3984,7 +3984,7 @@ git commit -m "feat(frontend): Next.js shell rendering live job status"
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Write the workflow**
+- [x] **Step 1: Write the workflow**
 
 ```yaml
 name: CI
@@ -4042,22 +4042,63 @@ jobs:
       - run: pnpm run build
 ```
 
-- [ ] **Step 2: Verify the gates pass locally first**
+- [x] **Step 2: Verify the gates pass locally first**
 
 ```powershell
+uv sync --project backend --locked
 uv run --directory backend ruff check .
 uv run --directory backend mypy --strict src
-uv run --directory backend lint-imports --config .importlinter
-uv run --directory backend pytest tests/unit backend/tests/integration -q
+$env:PYTHONUTF8=1; uv run --directory backend lint-imports --config .importlinter
+uv run --directory backend pytest tests/unit tests/integration -q
 ```
-Expected: all clean.
+Expected: all clean. (The last path was `backend/tests/integration` in the draft
+— wrong: `--directory backend` already makes `backend/` the cwd, so that resolves
+to `backend/backend/tests/integration` and collects nothing. `tests/integration`
+is correct. `PYTHONUTF8=1` is required on Windows or lint-imports dies rendering
+its report through cp1252 — a crash the plan's bare command would misread as a
+broken contract.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```powershell
 git add .github
 git commit -m "ci: ruff, mypy --strict, import contract, unit and integration tests"
 ```
+
+> **Task 23 — done. Every CI command verified locally, command-by-command:
+> backend `uv sync --locked` / ruff / mypy --strict / `lint-imports` (Contracts: 1
+> kept, 0 broken) / unit (55 passed); frontend `pnpm install --frozen-lockfile` /
+> lint / `next build` all green; the workflow YAML parses (2 jobs). What is NOT
+> verified: the GitHub runner itself (setup-uv@v5, setup-node@v4, ubuntu Docker
+> for the testcontainers integration job) — standard actions, but not executed
+> here.**
+>
+> One fix the frontend job REQUIRED to be deterministic:
+>
+> - **`package.json` had no `packageManager` field.** `corepack enable` +
+>   `pnpm install --frozen-lockfile` with no pin is non-deterministic: corepack
+>   picks whatever pnpm the runner's Node bundles, which may not match the
+>   `lockfileVersion: '9.0'` this repo's `pnpm-lock.yaml` was written with, and a
+>   frozen install then fails on a version it cannot reproduce. Pinned
+>   `"packageManager": "pnpm@9.15.9"` (the version that produced the lockfile).
+>   This also makes `docker/frontend.Dockerfile`'s `corepack enable` +
+>   `pnpm install --frozen-lockfile` reproducible for free. Confirmed the frozen
+>   install is a no-op ("Lockfile is up to date") under the pin.
+>
+> Recorded coverage gaps (stated, not silently accepted):
+>
+> - **`tests/e2e` is not in CI.** It drives a live compose stack and skips itself
+>   when absent; CI runs `tests/unit` and `tests/integration` by PATH, so a silent
+>   e2e skip can never be miscounted as a pass (the Task 21 handoff, honoured by
+>   exclusion). The walking-skeleton round-trip and the browser check are proven
+>   at build time, not by this workflow.
+> - **CI never BUILDS the Docker images.** Backend gates run under uv, frontend
+>   under pnpm; neither exercises `backend/Dockerfile`, `docker/frontend.Dockerfile`
+>   or `docker/compose.yml`. So a green CI does not prove the deployable image —
+>   including that the CORS layer is in it (Task 22's image note). Corrects the
+>   Task 22 forward-reference: this CI does NOT build the image; wiring an
+>   image-build + compose round-trip into CI is a follow-up for the first task
+>   that owns a deployment target.
 
 ---
 
