@@ -20,9 +20,17 @@ from fdi.core.serialization import canonical_json
 
 
 class ArtifactStore:
-    def __init__(self, client: Minio, bucket: str) -> None:
+    def __init__(
+        self, client: Minio, bucket: str, *, presign_client: Minio | None = None
+    ) -> None:
         self._client = client
         self._bucket = bucket
+        # Presigning embeds the signing client's endpoint in the URL. `client` is built
+        # for the in-network address (minio:9000), which a browser cannot resolve.
+        # `presign_client`, when supplied, is built for a host-reachable address and is
+        # used ONLY to sign GET URLs. Falls back to `client` when absent, so callers
+        # that never presign (the worker) pass nothing and are unaffected.
+        self._presign_client = presign_client or client
 
     async def ensure_bucket(self) -> None:
         exists = await asyncio.to_thread(self._client.bucket_exists, self._bucket)
@@ -67,7 +75,7 @@ class ArtifactStore:
 
     async def presigned_get_url(self, key: str, ttl_seconds: int) -> str:
         url: str = await asyncio.to_thread(
-            self._client.presigned_get_object,
+            self._presign_client.presigned_get_object,
             self._bucket,
             key,
             timedelta(seconds=ttl_seconds),

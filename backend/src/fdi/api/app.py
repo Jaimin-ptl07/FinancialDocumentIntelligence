@@ -34,11 +34,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         secret_key=settings.s3_secret_key,
         secure=settings.s3_secure,
     )
+    # A SECOND client, built for the host-reachable endpoint, used ONLY to sign
+    # download URLs. presigned_get_object embeds whatever endpoint its client was
+    # constructed with, and `client` above holds the in-network `minio:9000` -- a name
+    # a host browser cannot resolve, so the artifact_url a UI needs would 404. Falls
+    # back to s3_endpoint when s3_public_endpoint is unset (single-host prod / tests),
+    # so this is identical to `client` there and changes nothing.
+    #
+    # region is REQUIRED here, not cosmetic: presigned_get_object first calls
+    # _get_region, which -- absent a constructor region -- issues a live
+    # GetBucketLocation to the client's endpoint. This client's endpoint is the
+    # host's view (localhost:9000), which is deliberately NOT reachable from inside
+    # this container, so that lookup would ConnectionRefused and turn every
+    # /jobs/{id} with an artifact into a 500. Setting region makes _get_region return
+    # it offline (verified in minio/api.py), so signing touches no network. us-east-1
+    # is MinIO's default and MUST match the server's region or the signature is
+    # rejected; a non-MinIO S3 behind a public endpoint in another region would need
+    # this made configurable.
+    presign_client = Minio(
+        settings.s3_public_endpoint or settings.s3_endpoint,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
+        region="us-east-1",
+    )
 
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
     app.state.minio = client
-    app.state.artifact_store = ArtifactStore(client, bucket=settings.s3_bucket)
+    app.state.artifact_store = ArtifactStore(
+        client, bucket=settings.s3_bucket, presign_client=presign_client
+    )
 
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things

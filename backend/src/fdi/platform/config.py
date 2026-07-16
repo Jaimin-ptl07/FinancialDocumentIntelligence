@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     result_backend: str
 
     s3_endpoint: str
+    # Host-reachable endpoint used ONLY for presigning download URLs, distinct from
+    # s3_endpoint (the in-network address put/get connect to). A presigned URL embeds
+    # the endpoint its signing client was built with; under Compose that is
+    # `minio:9000`, a name only the Docker network resolves, so the URL fails to
+    # resolve in a host browser -- the one field a UI needs (the download link) is
+    # dead. Set this to e.g. `localhost:9000` to sign URLs a host can fetch. Defaults
+    # to None: where the in-network address IS reachable by clients (single-host prod,
+    # tests), presigning falls back to s3_endpoint and this is a no-op.
+    s3_public_endpoint: str | None = None
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str = "artifacts"
