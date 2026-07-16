@@ -12,3 +12,8 @@ def canonical_json(obj: Any) -> str:
     - ensure_ascii=False: emit real UTF-8 (annual reports carry ₹, é, etc.)
     """
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def canonical_json_bytes(obj: object) -> bytes:
+    """UTF-8 bytes of canonical_json — the exact bytes stored and hashed."""
+    return canonical_json(obj).encode("utf-8")
