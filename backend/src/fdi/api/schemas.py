@@ -19,3 +19,11 @@ class ReadyView(BaseModel):
     postgres: bool
     s3: bool
     broker: bool
+
+
+class StaleView(BaseModel):
+    stale: list[str]
+
+
+class ReprocessView(BaseModel):
+    dispatched: list[str]

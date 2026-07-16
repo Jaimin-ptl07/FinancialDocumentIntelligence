@@ -78,6 +78,13 @@ async def client(make_client):
         yield c
 
 
+@pytest.fixture
+def session_factory(migrated_engine):
+    from fdi.platform.db.engine import make_session_factory
+
+    return make_session_factory(migrated_engine)
+
+
 # --------------------------------------------------------------------------
 # The plan's five.
 # --------------------------------------------------------------------------
@@ -404,3 +411,46 @@ async def test_correlation_id_does_not_leak_between_requests(
     assert first.json()["correlation_id"] == "first-request-id"
     assert second.json()["correlation_id"] != "first-request-id"
     assert uuid.UUID(second.json()["correlation_id"]).version == 4
+
+
+# --------------------------------------------------------------------------
+# Task 13: staleness + reprocess.
+# --------------------------------------------------------------------------
+
+
+async def test_stale_reflects_recorded_runs(
+    client: AsyncClient, _alembic_applied, session_factory
+) -> None:
+    from fdi.pipeline.keys import root_input_hash
+    from fdi.platform.db.repository import RegistryRepository
+
+    doc_id = (await client.post("/ping-job")).json()["job_id"]
+    # No run recorded yet -> the root stage is stale.
+    assert (await client.get(f"/docs/{doc_id}/stale")).json() == {"stale": ["ping"]}
+
+    # Seed a completed ping run; now nothing is stale.
+    rid = str(uuid.uuid4())
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.start_run(rid, doc_id, "ping", 1, root_input_hash(None), None)
+        await repo.finish_run(
+            rid, output_hash="oh", artifact_key=f"artifacts/{doc_id}/ping/v1/x.json"
+        )
+        await s.commit()
+    assert (await client.get(f"/docs/{doc_id}/stale")).json() == {"stale": []}
+
+
+async def test_reprocess_dispatches_from_stage(client: AsyncClient, _alembic_applied) -> None:
+    doc_id = (await client.post("/ping-job")).json()["job_id"]
+    r = await client.post(f"/docs/{doc_id}/reprocess?from=ping")
+    assert r.status_code == 202
+    assert r.json()["dispatched"] == ["ping"]
+
+
+async def test_reprocess_unknown_document_is_404(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post(
+        "/docs/00000000-0000-0000-0000-000000000000/reprocess?from=ping"
+    )
+    assert r.status_code == 404

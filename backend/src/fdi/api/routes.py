@@ -6,10 +6,10 @@ from collections.abc import Awaitable, Callable
 
 import sqlalchemy
 import structlog
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from fdi.api.deps import CorrelationIdDep, DispatcherDep, SessionDep, StoreDep
-from fdi.api.schemas import JobAccepted, JobView, ReadyView
+from fdi.api.deps import CorrelationIdDep, DispatcherDep, ResolverDep, SessionDep, StoreDep
+from fdi.api.schemas import JobAccepted, JobView, ReadyView, ReprocessView, StaleView
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
 from fdi.platform.db.repository import RegistryRepository
@@ -136,3 +136,37 @@ async def get_job(job_id: str, session: SessionDep, store: StoreDep) -> JobView:
         artifact_url=artifact_url,
         error=run.error,
     )
+
+
+@router.get("/docs/{doc_id}/stale", response_model=StaleView)
+async def get_stale(doc_id: str, session: SessionDep, resolver: ResolverDep) -> StaleView:
+    """Which stages are stale for this document, per the resolver's topology.
+
+    Staleness is decided from recorded facts (stage_run rows), never by
+    reading artifact bodies -- see `fdi.pipeline.resolver`.
+    """
+    facts = await RegistryRepository(session).runs_for_document(doc_id)
+    return StaleView(stale=resolver.stale(facts))
+
+
+@router.post(
+    "/docs/{doc_id}/reprocess",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ReprocessView,
+)
+async def reprocess(
+    doc_id: str,
+    session: SessionDep,
+    correlation_id: CorrelationIdDep,
+    dispatcher: DispatcherDep,
+    from_: str = Query(alias="from"),
+) -> ReprocessView:
+    """Dispatch `from_stage`; its successors chain themselves once it finishes.
+
+    A thin slice of `resolver.plan(from_stage)`: only the requested stage is
+    published here, not its whole downstream plan.
+    """
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    dispatcher.dispatch(doc_id, from_, correlation_id)
+    return ReprocessView(dispatched=[from_])

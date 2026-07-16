@@ -8,6 +8,7 @@ from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.pipeline.dispatch import StageDispatcher
+from fdi.pipeline.resolver import DagResolver
 from fdi.platform.obs.logging import get_correlation_id as _get_bound_correlation_id
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -62,7 +63,20 @@ def get_dispatcher(request: Request) -> StageDispatcher:
     return dispatcher
 
 
+def get_resolver(request: Request) -> DagResolver:
+    """The resolver built in lifespan from `REGISTRY.all()`.
+
+    Built once, in lifespan, rather than per-request: the registry is
+    populated once (when `fdi.workers.tasks` is imported) and does not
+    change over the process lifetime, so re-resolving the topology on every
+    request would be pure waste.
+    """
+    resolver: DagResolver = request.app.state.resolver
+    return resolver
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
 DispatcherDep = Annotated[StageDispatcher, Depends(get_dispatcher)]
+ResolverDep = Annotated[DagResolver, Depends(get_resolver)]

@@ -10,6 +10,8 @@ from minio import Minio
 from fdi.api.errors import install_error_handlers
 from fdi.api.middleware import CorrelationIdMiddleware
 from fdi.api.routes import router
+from fdi.pipeline.registry import REGISTRY
+from fdi.pipeline.resolver import DagResolver
 from fdi.platform.config import get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.obs.logging import configure_logging
@@ -89,6 +91,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # downstream that inspects it.
     from fdi.pipeline.dispatch import StageDispatcher
     from fdi.workers.tasks import run_stage_task
+
+    # REGISTRY is populated as a side effect of the import above (tasks.py does
+    # `from fdi.pipeline import stages as _stages`), so it must be built AFTER
+    # that import, not before.
+    app.state.resolver = DagResolver(REGISTRY.all())
 
     # Re-assert the broker from THIS process's Settings, rather than inheriting
     # whatever was in os.environ the first time fdi.workers.app was imported.
