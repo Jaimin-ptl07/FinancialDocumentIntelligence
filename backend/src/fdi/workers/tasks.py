@@ -35,11 +35,16 @@ app, so a worker with broken config still fails at import, not here.
 """
 
 import asyncio
+import uuid
 from typing import Any
 
 import structlog
 from minio import Minio
 
+from fdi.pipeline import stages as _stages  # noqa: F401 - registers built-in stages
+from fdi.pipeline.registry import REGISTRY
+from fdi.pipeline.resolver import DagResolver
+from fdi.pipeline.run import run_stage
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.db.repository import JobRepository
@@ -148,3 +153,49 @@ async def _ping_job(
         raise
     finally:
         await engine.dispose()
+
+
+async def _run_stage_async(
+    doc_id: str,
+    stage_name: str,
+    run_id: str,
+    correlation_id: str,
+    *,
+    db_url: str | None = None,
+    client: Minio | None = None,
+    store_bucket: str | None = None,
+) -> list[str]:
+    """The task's I/O on one event loop. Keyword args let tests inject containers;
+    production passes none and reads Settings (mirrors _ping_job)."""
+    engine = make_engine(db_url or get_settings().database_url)
+    try:
+        session_factory = make_session_factory(engine)
+        store = ArtifactStore(
+            client or _make_client(get_settings()),
+            bucket=store_bucket or get_settings().s3_bucket,
+        )
+        await store.ensure_bucket()
+        resolver = DagResolver(REGISTRY.all())
+        return await run_stage(
+            doc_id=doc_id, stage_name=stage_name, run_id=run_id,
+            correlation_id=correlation_id, session_factory=session_factory,
+            store=store, registry=REGISTRY, resolver=resolver,
+        )
+    finally:
+        await engine.dispose()
+
+
+@app.task(name="fdi.run_stage", bind=False)  # type: ignore[untyped-decorator]
+def run_stage_task(doc_id: str, stage_name: str, correlation_id: str = "") -> None:
+    """Sync wrapper. Binds correlation BEFORE asyncio.run, clears in finally
+    (unconditional bind -- a prefork process reuses across jobs). Enqueues each
+    successor the DAG returns."""
+    corr = correlation_id or new_correlation_id()
+    bind_correlation_id(corr)
+    try:
+        run_id = str(uuid.uuid4())
+        successors = asyncio.run(_run_stage_async(doc_id, stage_name, run_id, corr))
+        for nxt in successors:
+            run_stage_task.apply_async(args=[doc_id, nxt], kwargs={"correlation_id": corr})
+    finally:
+        clear_correlation_id()

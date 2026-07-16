@@ -74,3 +74,16 @@ class JobDispatcher:
         side, before its own `asyncio.run()` (Global Constraint 4).
         """
         self._ping_task.apply_async(args=[job_id], kwargs={"correlation_id": correlation_id})
+
+
+class StageDispatcher:
+    """Publishes a stage run. Reuses TaskSender: args=[doc_id, stage_name],
+    correlation_id as a kwarg (nothing carries a contextvar across the broker)."""
+
+    def __init__(self, stage_task: TaskSender) -> None:
+        self._stage_task = stage_task
+
+    def dispatch(self, doc_id: str, stage_name: str, correlation_id: str) -> None:
+        self._stage_task.apply_async(
+            args=[doc_id, stage_name], kwargs={"correlation_id": correlation_id}
+        )

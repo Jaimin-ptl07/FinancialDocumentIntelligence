@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fdi.pipeline.dispatch import JobDispatcher
+from fdi.pipeline.dispatch import JobDispatcher, StageDispatcher
 
 REQUIRED_ENV = {
     "FDI_DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/db",
@@ -118,3 +118,18 @@ def test_dispatch_kwargs_are_real_apply_async_parameters(_worker_env: None) -> N
         f"apply_async's **options catch-all instead of a declared parameter. "
         f"Celery accepts it silently and publishes the task without arguments."
     )
+
+
+def test_stage_dispatcher_publishes_args_and_correlation_kwarg() -> None:
+    """`StageDispatcher` reuses the same `TaskSender` protocol as `JobDispatcher`:
+    args=[doc_id, stage_name], correlation_id as a kwarg -- nothing carries a
+    contextvar across the broker."""
+    calls = []
+
+    class _Rec:
+        def apply_async(self, args, kwargs):  # type: ignore[no-untyped-def]
+            calls.append((args, kwargs))
+            return object()
+
+    StageDispatcher(_Rec()).dispatch("doc1", "ping", "cid-9")
+    assert calls == [(["doc1", "ping"], {"correlation_id": "cid-9"})]
