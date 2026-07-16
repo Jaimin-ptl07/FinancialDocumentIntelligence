@@ -5,9 +5,10 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from minio import Minio
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fdi.pipeline.dispatch import StageDispatcher
+from fdi.pipeline.evaluation import CandidateRegistry
 from fdi.pipeline.resolver import DagResolver
 from fdi.platform.obs.logging import get_correlation_id as _get_bound_correlation_id
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -75,8 +76,28 @@ def get_resolver(request: Request) -> DagResolver:
     return resolver
 
 
+def get_session_factory(request: Request) -> "async_sessionmaker[AsyncSession]":
+    """The same factory `get_session` opens requests off of, exposed directly.
+
+    `run_evaluation` needs a `session_factory` rather than a single session
+    because it opens its own `async with session_factory()` block to scope
+    the eval-run's commit -- a route-scoped `SessionDep` would tie that
+    transaction to the request's lifetime instead.
+    """
+    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    return factory
+
+
+def get_candidates(request: Request) -> CandidateRegistry:
+    """The registry lifespan populated by importing `fdi.pipeline.candidates`."""
+    candidates: CandidateRegistry = request.app.state.candidates
+    return candidates
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
 DispatcherDep = Annotated[StageDispatcher, Depends(get_dispatcher)]
 ResolverDep = Annotated[DagResolver, Depends(get_resolver)]
+SessionFactoryDep = Annotated["async_sessionmaker[AsyncSession]", Depends(get_session_factory)]
+CandidatesDep = Annotated[CandidateRegistry, Depends(get_candidates)]

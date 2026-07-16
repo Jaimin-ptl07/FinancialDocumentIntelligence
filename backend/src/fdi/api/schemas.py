@@ -27,3 +27,25 @@ class StaleView(BaseModel):
 
 class ReprocessView(BaseModel):
     dispatched: list[str]
+
+
+class EvalRequest(BaseModel):
+    candidate: str
+    dataset: str
+    dataset_version: int
+    metric: str | None = None
+
+
+class EvalAccepted(BaseModel):
+    run_id: str
+    aggregate: float
+
+
+class LeaderboardEntry(BaseModel):
+    candidate: str
+    version: int
+    aggregate: float
+
+
+class LeaderboardView(BaseModel):
+    leaderboard: list[LeaderboardEntry]

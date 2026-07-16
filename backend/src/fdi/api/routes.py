@@ -8,11 +8,30 @@ import sqlalchemy
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from fdi.api.deps import CorrelationIdDep, DispatcherDep, ResolverDep, SessionDep, StoreDep
-from fdi.api.schemas import JobAccepted, JobView, ReadyView, ReprocessView, StaleView
+from fdi.api.deps import (
+    CandidatesDep,
+    CorrelationIdDep,
+    DispatcherDep,
+    ResolverDep,
+    SessionDep,
+    SessionFactoryDep,
+    StoreDep,
+)
+from fdi.api.schemas import (
+    EvalAccepted,
+    EvalRequest,
+    JobAccepted,
+    JobView,
+    LeaderboardEntry,
+    LeaderboardView,
+    ReadyView,
+    ReprocessView,
+    StaleView,
+)
+from fdi.pipeline.eval_service import run_evaluation
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
-from fdi.platform.db.repository import RegistryRepository
+from fdi.platform.db.repository import EvalRepository, RegistryRepository
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -170,3 +189,48 @@ async def reprocess(
         raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
     dispatcher.dispatch(doc_id, from_, correlation_id)
     return ReprocessView(dispatched=[from_])
+
+
+@router.post("/eval", response_model=EvalAccepted)
+async def run_eval_endpoint(
+    body: EvalRequest,
+    session_factory: SessionFactoryDep,
+    store: StoreDep,
+    candidates: CandidatesDep,
+) -> EvalAccepted:
+    """Run one candidate against one dataset version, then persist + return it.
+
+    A missing dataset is not special-cased here: `run_evaluation` calls
+    `get_dataset` before it looks up the candidate, and a missing artifact
+    surfaces as whatever `ArtifactStore.get_json` raises -- left to become a
+    500 for this thin slice, since there is no dataset-upload endpoint yet to
+    make a 404 for "no such dataset" meaningfully actionable.
+    """
+    run_id = str(uuid.uuid4())
+    try:
+        aggregate = await run_evaluation(
+            run_id=run_id,
+            candidate_name=body.candidate,
+            dataset_name=body.dataset,
+            dataset_version=body.dataset_version,
+            session_factory=session_factory,
+            store=store,
+            candidates=candidates,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"candidate {body.candidate!r} not found"
+        ) from exc
+    return EvalAccepted(run_id=run_id, aggregate=aggregate)
+
+
+@router.get("/datasets/{name}/leaderboard", response_model=LeaderboardView)
+async def leaderboard_endpoint(
+    name: str, session: SessionDep, metric: str = Query(default="exact_match")
+) -> LeaderboardView:
+    rows = await EvalRepository(session).leaderboard(name, metric)
+    return LeaderboardView(
+        leaderboard=[
+            LeaderboardEntry(candidate=c, version=v, aggregate=a) for (c, v, a) in rows
+        ]
+    )

@@ -115,6 +115,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     run_stage_task.app.conf.result_backend = settings.result_backend
 
     app.state.dispatcher = StageDispatcher(run_stage_task)
+
+    # `api -> pipeline` is a legal edge in the import contract (only
+    # `api -> workers` is the one exemption carved out above), so this import
+    # is ordinary, not a composition-root special case. It is still done here,
+    # not at module level, so that importing `fdi.api.app` for its FastAPI type
+    # alone does not have the side effect of registering candidates.
+    #
+    # `fdi.pipeline.candidates` is imported for its side effect: importing
+    # `uppercase` registers `UppercaseCandidate` into the module-level
+    # `CANDIDATES` registry. Without this import the registry stays empty in
+    # this process and every `/eval` call 404s with "candidate not found",
+    # even for `"uppercase"`.
+    import fdi.pipeline.candidates  # noqa: F401
+    from fdi.pipeline.evaluation import CANDIDATES
+
+    app.state.candidates = CANDIDATES
     try:
         yield
     finally:

@@ -454,3 +454,58 @@ async def test_reprocess_unknown_document_is_404(
         "/docs/00000000-0000-0000-0000-000000000000/reprocess?from=ping"
     )
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Task 9: POST /eval + GET /datasets/{name}/leaderboard
+# --------------------------------------------------------------------------
+
+
+async def test_eval_endpoint_runs_and_ranks(
+    client: AsyncClient, minio_client, _alembic_applied
+) -> None:
+    """Seed the toy dataset into the APP's bucket -- not the test `store` fixture's.
+
+    `make_client` never sets `FDI_S3_BUCKET`, so the app's `ArtifactStore` opens
+    `settings.s3_bucket`'s default, `"artifacts"` -- a different bucket than the
+    `test-artifacts` the plain `store` fixture writes to. Seeding through that
+    fixture would leave the dataset invisible to the running app and turn this
+    into a 500 from `get_dataset`, not the 200 this test wants.
+    """
+    from fdi.pipeline.candidates.uppercase import toy_dataset
+    from fdi.pipeline.dataset_store import put_dataset
+    from fdi.platform.storage.artifact_store import ArtifactStore
+
+    seed_store = ArtifactStore(minio_client, bucket="artifacts")
+    await seed_store.ensure_bucket()
+    await put_dataset(seed_store, toy_dataset())
+
+    r = await client.post(
+        "/eval", json={"candidate": "uppercase", "dataset": "toy", "dataset_version": 1}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["aggregate"] == 1.0
+    assert uuid.UUID(body["run_id"]).version == 4
+
+    board = (await client.get("/datasets/toy/leaderboard?metric=exact_match")).json()
+    assert board["leaderboard"][0]["candidate"] == "uppercase"
+    assert board["leaderboard"][0]["version"] == 1
+    assert board["leaderboard"][0]["aggregate"] == 1.0
+
+
+async def test_eval_endpoint_unknown_candidate_is_404(
+    client: AsyncClient, minio_client, _alembic_applied
+) -> None:
+    from fdi.pipeline.candidates.uppercase import toy_dataset
+    from fdi.pipeline.dataset_store import put_dataset
+    from fdi.platform.storage.artifact_store import ArtifactStore
+
+    seed_store = ArtifactStore(minio_client, bucket="artifacts")
+    await seed_store.ensure_bucket()
+    await put_dataset(seed_store, toy_dataset())
+
+    r = await client.post(
+        "/eval", json={"candidate": "no-such-candidate", "dataset": "toy", "dataset_version": 1}
+    )
+    assert r.status_code == 404
