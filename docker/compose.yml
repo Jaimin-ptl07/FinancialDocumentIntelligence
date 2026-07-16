@@ -1,0 +1,215 @@
+name: fdi
+
+# This allowlist MUST contain every Settings field, or the field is inert: the var
+# is set in .env, never reaches the container, and the app silently uses its
+# default. That is the same silent-misbehaviour class the config validator exists
+# to prevent, arriving through Compose instead of through os.environ -- and the
+# validator cannot catch it, because it only sees what is already inside the
+# container. Add a Settings field, add it here.
+x-backend-env: &backend-env
+  FDI_DATABASE_URL: ${FDI_DATABASE_URL}
+  FDI_BROKER_URL: ${FDI_BROKER_URL}
+  FDI_RESULT_BACKEND: ${FDI_RESULT_BACKEND}
+  FDI_S3_ENDPOINT: ${FDI_S3_ENDPOINT}
+  # Host-reachable endpoint used ONLY for presigning download URLs. FDI_S3_ENDPOINT
+  # (minio:9000) is an in-network name a host browser cannot resolve, so a presigned
+  # artifact_url signed with it is dead in the address bar. This signs URLs a host
+  # can fetch. A Settings field, so it MUST live in this allowlist.
+  FDI_S3_PUBLIC_ENDPOINT: ${FDI_S3_PUBLIC_ENDPOINT}
+  FDI_S3_ACCESS_KEY: ${FDI_S3_ACCESS_KEY}
+  FDI_S3_SECRET_KEY: ${FDI_S3_SECRET_KEY}
+  FDI_S3_BUCKET: ${FDI_S3_BUCKET}
+  FDI_S3_SECURE: ${FDI_S3_SECURE}
+  FDI_LOG_LEVEL: ${FDI_LOG_LEVEL}
+  FDI_WORKER_CONCURRENCY: ${FDI_WORKER_CONCURRENCY}
+  FDI_ARTIFACT_URL_TTL_SECONDS: ${FDI_ARTIFACT_URL_TTL_SECONDS}
+
+x-backend-build: &backend-build
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+
+services:
+  postgres:
+    image: postgres:18.4
+    profiles: [core]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    ports: ["5432:5432"]
+    healthcheck:
+      # $$ escapes compose interpolation so the shell expands it in-container.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  minio:
+    # NOT RELEASE.2025-10-15T17-29-55Z: that release exists but was never published
+    # as an image. This is the newest pullable tag, and is knowingly unpatched for
+    # CVE-2025-62506. Local dev only -- never production. See spec 3.4.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: [core]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports: ["9000:9000", "9001:9001"]
+    healthcheck:
+      # `mc`, not curl -- MinIO's UBI-micro base has no curl.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8.8.0
+    profiles: [core]
+    volumes:
+      - redisdata:/data
+    ports: ["6379:6379"]
+    healthcheck:
+      # grep PONG: redis-cli can exit 0 while the server is still loading.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:4.3.2-management
+    profiles: [core]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/conf.d/20-fdi.conf:ro
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  migrate:
+    <<: *backend-build
+    profiles: [core]
+    environment: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *backend-build
+    profiles: [core]
+    environment: *backend-env
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    healthcheck:
+      # Python, not curl: the image ships no curl (Task 18 dropped the apt layer).
+      # urlopen raises on any non-2xx or connection failure, so a bare exit code is
+      # a sufficient liveness signal.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    <<: *backend-build
+    profiles: [core]
+    environment: *backend-env
+    # No --concurrency flag, deliberately. Concurrency comes from
+    # FDI_WORKER_CONCURRENCY -> Settings -> app.conf.worker_concurrency (Task 13).
+    # A CLI flag here would be a SECOND source of truth that silently wins over the
+    # env var, making FDI_WORKER_CONCURRENCY look configurable while doing nothing.
+    command:
+      - celery
+      - -A
+      - fdi.workers.app
+      - worker
+      - --pool=prefork
+      - --loglevel=INFO
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A fdi.workers.app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  neo4j:
+    # Pinned exactly: neo4j:latest is the CalVer line, a DIFFERENT lineage from
+    # 5.26 LTS. Defined now; wired at SP-9.
+    image: neo4j:5.26.28
+    profiles: [graph]
+    environment:
+      NEO4J_AUTH: neo4j/fdipassword
+    volumes:
+      - neo4jdata:/data
+    ports: ["7474:7474", "7687:7687"]
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    profiles: [vector]
+    command:
+      - etcd
+      - --advertise-client-urls=http://127.0.0.1:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    volumes:
+      - etcddata:/etcd
+
+  milvus:
+    # NEVER :latest -- it is months stale. And do NOT copy the master-branch
+    # compose: it points at v3.0-beta. Defined now; wired at SP-13.
+    image: milvusdb/milvus:v2.6.20
+    profiles: [vector]
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvusdata:/var/lib/milvus
+    ports: ["19530:19530"]
+    depends_on: [etcd, minio]
+
+  frontend:
+    profiles: [ui]
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend.Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports: ["3000:3000"]
+
+volumes:
+  pgdata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/postgres"}
+  miniodata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/minio"}
+  redisdata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/redis"}
+  rabbitdata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/rabbitmq"}
+  neo4jdata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/neo4j"}
+  etcddata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/etcd"}
+  milvusdata:
+    driver_opts: {type: none, o: bind, device: "${COMPOSE_DATA_ROOT}/milvus"}
