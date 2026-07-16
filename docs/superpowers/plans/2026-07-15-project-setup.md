@@ -823,6 +823,16 @@ Two verified traps here. (1) The common `LoggerFactory` + `JSONRenderer` chain *
 **Files:**
 - Create: `backend/src/fdi/platform/obs/__init__.py`, `backend/src/fdi/platform/obs/logging.py`
 - Test: `backend/tests/unit/test_logging.py`
+- Also created (deviation, see below): `backend/tests/conftest.py`
+
+> **Added during execution: an autouse `clear_contextvars()` fixture in `backend/tests/conftest.py`.**
+> Measured, not assumed: a `correlation_id` bound in `test_logging.py` is readable from a
+> *different test file* — pytest shares one thread and one Context across the whole session.
+> Nothing depends on the leak today, so this buys isolation rather than fixing a live bug. It is
+> in because the failure it prevents is the expensive kind: once SP-2 asserts an ID is *absent* or
+> holds a specific value, the result depends on which tests ran first, and that gets debugged as a
+> logging bug rather than a fixture bug. It also matches production, where every Celery task binds
+> a fresh ID from its message header before `asyncio.run()`.
 
 - [ ] **Step 1: Write the failing test**
 
