@@ -33,3 +33,32 @@ layers =
 # forces every child of `fdi` to be either a declared layer or an explicit
 # `exhaustive_ignores` entry. It requires `containers`.
 exhaustive = true
+# ONE edge, named in full on both sides. Not a general `api -> workers` amnesty.
+#
+# `api/app.py` is the composition root: it is the only module allowed to know
+# both that `JobDispatcher` exists and which task goes in it. Routes take a
+# JobDispatcher and never name the task. Without this line the wiring itself is
+# the violation; with it -- and ONLY with this exact pair of module names -- the
+# wiring is legal and everything else is not.
+#
+# Both sides are spelled out in full, and that is the whole safety property.
+# Wildcards are what would make this theatre, and this is MEASURED, not a style
+# preference: with `fdi.api.* -> fdi.workers.*` here instead, routes.py importing
+# the task reports "Contracts: 1 kept, 0 broken" -- a green build with the exact
+# violation Task 17 exists to remove sitting in the tree. With the narrow pair
+# below, the same experiment reports
+#   fdi.api.routes -> fdi.workers.tasks (l.103)
+# and exits 1. Re-run that experiment before ever widening this line; a passing
+# build is not evidence the exemption is still narrow.
+#
+# The reverse (`fdi.workers.tasks -> fdi.api.deps`) is likewise still BROKEN, and
+# `exhaustive` still flags a new undeclared `fdi.utils`. Both re-checked with this
+# line in place.
+#
+# This entry is also self-cleaning: import-linter's default
+# `unmatched_ignore_imports_alerting = error` fails the run if the named import
+# stops existing, so a stale exemption cannot outlive the wiring it excuses.
+# Verified by deleting the lifespan import:
+#   "No matches for ignored import fdi.api.app -> fdi.workers.tasks." -> exit 1
+ignore_imports =
+    fdi.api.app -> fdi.workers.tasks

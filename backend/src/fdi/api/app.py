@@ -39,6 +39,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = make_session_factory(engine)
     app.state.minio = client
     app.state.artifact_store = ArtifactStore(client, bucket=settings.s3_bucket)
+
+    # THE one place `api` may name `fdi.workers`, and the reason it is legal here
+    # is that this function is the composition root: it is where concrete things
+    # are chosen and handed to abstractions, and nothing imports it back. Routes
+    # take a JobDispatcher; only this line knows which task is inside it.
+    #
+    # Deliberately a local import, not a module-level one. At module level it
+    # would import the Celery app -- which builds Settings in its own module body
+    # -- at `import fdi.api.app` time, i.e. during test COLLECTION, before any
+    # fixture has set the environment.
+    #
+    # `.importlinter` exempts exactly `fdi.api.app -> fdi.workers.tasks`. It does
+    # NOT make `api -> workers` legal: putting this import back in routes.py
+    # breaks the contract again, which was re-run and confirmed rather than
+    # inferred from the config syntax.
+    from fdi.pipeline.dispatch import JobDispatcher
+    from fdi.workers.tasks import ping_job
+
+    app.state.dispatcher = JobDispatcher(ping_job)
     try:
         yield
     finally:

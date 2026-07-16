@@ -8,7 +8,7 @@ import sqlalchemy
 import structlog
 from fastapi import APIRouter, HTTPException, Response, status
 
-from fdi.api.deps import CorrelationIdDep, SessionDep, StoreDep
+from fdi.api.deps import CorrelationIdDep, DispatcherDep, SessionDep, StoreDep
 from fdi.api.schemas import JobAccepted, JobView, ReadyView
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
@@ -78,7 +78,9 @@ async def ready(session: SessionDep, store: StoreDep, response: Response) -> Rea
 
 
 @router.post("/ping-job", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
-async def create_ping_job(session: SessionDep, correlation_id: CorrelationIdDep) -> JobAccepted:
+async def create_ping_job(
+    session: SessionDep, correlation_id: CorrelationIdDep, dispatcher: DispatcherDep
+) -> JobAccepted:
     """Persist the job, publish it. The worker picks it up.
 
     The id arrives already bound and already validated from
@@ -86,14 +88,19 @@ async def create_ping_job(session: SessionDep, correlation_id: CorrelationIdDep)
     varchar(36). Reading the header here instead -- which is where it started --
     put an unvalidated client string into that column, and PostgreSQL raises
     rather than truncates: a 37-character `X-Request-ID` returned a 500.
+
+    Publishing goes through an injected `JobDispatcher` rather than an inline
+    `from fdi.workers.tasks import ping_job`. That import was a real layering
+    violation, not a formality: `api` and `workers` are independent siblings, and
+    a function-local import evades the eye but not the import graph -- lint-imports
+    reported it at this line. The seam lives in `fdi.pipeline.dispatch`, below
+    both, and the concrete task is chosen in `api/app.py`'s lifespan.
     """
     job_id = str(uuid.uuid4())
     await JobRepository(session).create(job_id, correlation_id=correlation_id)
     await session.commit()
 
-    from fdi.workers.tasks import ping_job
-
-    ping_job.apply_async(args=[job_id], kwargs={"correlation_id": correlation_id})
+    dispatcher.dispatch_ping(job_id=job_id, correlation_id=correlation_id)
     log.info("ping_job.queued", job_id=job_id)
 
     return JobAccepted(job_id=job_id, correlation_id=correlation_id, status="queued")

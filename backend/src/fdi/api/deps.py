@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.pipeline.dispatch import JobDispatcher
 from fdi.platform.obs.logging import get_correlation_id as _get_bound_correlation_id
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -50,6 +51,18 @@ def get_minio(request: Request) -> Minio:
     return client
 
 
+def get_dispatcher(request: Request) -> JobDispatcher:
+    """The dispatcher built in lifespan, which is the only thing that knows the task.
+
+    `api` may not import `fdi.workers`, so the route cannot reach the task itself.
+    It asks for a JobDispatcher and stays ignorant of what is inside it -- which
+    is also what lets the route be tested without a broker.
+    """
+    dispatcher: JobDispatcher = request.app.state.dispatcher
+    return dispatcher
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
+DispatcherDep = Annotated[JobDispatcher, Depends(get_dispatcher)]
