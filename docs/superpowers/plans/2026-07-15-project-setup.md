@@ -1146,8 +1146,7 @@ def test_make_session_factory_is_callable() -> None:
 
 def test_no_module_level_engine() -> None:
     """Global Constraint 3. A pool built at import is inherited across fork(),
-    handing two interpreters one socket — corrupting SILENTLY. This module must
-    expose factories only, never a ready-made engine."""
+    handing two interpreters one socket — corrupting SILENTLY."""
     tree = ast.parse(ENGINE_SRC.read_text(encoding="utf-8"))
     for node in tree.body:
         assert not isinstance(node, ast.Assign), (
@@ -1157,6 +1156,53 @@ def test_no_module_level_engine() -> None:
             f"module-level call at line {node.lineno} in engine.py"
         )
 ```
+
+> ### ⛔ The guard above is INERT. Do not ship it. It is kept here only as the specimen.
+>
+> Measured during execution, by writing each violating form into the real `engine.py` and running
+> the real guard against it: **it catches 2 of 12 forms, and false-positives on 2 innocent ones.**
+>
+> | Form | Plan's guard | Shipped guard |
+> |---|---|---|
+> | `_e = create_async_engine(...)` | CAUGHT | CAUGHT |
+> | `_e: AsyncEngine = create_async_engine(...)` | **MISSED** | CAUGHT |
+> | bare `create_async_engine(...)` | CAUGHT | CAUGHT |
+> | `_engines += [create_async_engine(...)]` | **MISSED** | CAUGHT |
+> | `(_e := create_async_engine(...))` | **MISSED** | CAUGHT |
+> | nested in `if` / `try` / `with` / `for` | **MISSED** | CAUGHT |
+> | nested in `if TYPE_CHECKING:` | **MISSED** | CAUGHT |
+> | `def f(e=create_async_engine(...))` | **MISSED** | CAUGHT |
+> | `class C: engine = create_async_engine(...)` | **MISSED** | CAUGHT |
+> | *innocent* `__all__ = [...]` | **FIRES** | allowed |
+> | *innocent* `DEFAULT_POOL_SIZE = 5` | **FIRES** | allowed |
+>
+> **The miss that matters is `AnnAssign`.** This project runs `mypy --strict`, so the natural way to
+> write a module-level engine *here* is `_engine: AsyncEngine = create_async_engine(url)` — a
+> different AST node from `ast.Assign`. The guard had a hole shaped exactly like the codebase's own
+> house style. Every nested form escaped for one reason: `tree.body` is flat and the guard never
+> descends. `def`-defaults and class bodies build a pool at import **while looking deferred**.
+>
+> Three corrections went into the shipped version, each of which the specimen gets wrong:
+>
+> 1. **Match engine *construction*, not assignment-in-general.** The false positives are the more
+>    dangerous direction: a guard that rejects `__all__` gets deleted by the first person it annoys,
+>    and takes the real enforcement with it.
+> 2. **Walk every node evaluated at import** — descending through `if`/`try`/`with`/`for` and class
+>    bodies, stopping at function and lambda bodies (where an engine is *supposed* to be built), but
+>    still checking their decorators and default args, which run at `def` time.
+> 3. **Scan the whole package, not `engine.py`.** `engine.py` is the file *least* likely to offend —
+>    it exports factories by construction. The accident happens in a **consumer** reaching for a
+>    module-level `_engine` to avoid threading one through, and that consumer is what Celery forks.
+>    Proven: a module-level engine planted in `fdi/workers/__init__.py` is caught, and is
+>    structurally invisible to a file-scoped guard.
+>
+> **Known limits, stated rather than hidden:** aliased imports (`create_async_engine as cae`) evade
+> name matching, and `if TYPE_CHECKING:` is flagged though it never executes. This stops the
+> accident, not the adversary — which is the correct goal for this guard.
+>
+> **See `backend/tests/unit/test_engine.py` for the shipped version.** It carries the same
+> `assert files` self-check as `test_no_async_celery_tasks.py`: a wrong `SRC` makes `rglob()` return
+> empty rather than raise, and `assert not offenders` would then pass having read nothing, forever.
 
 - [ ] **Step 2: Run to verify it fails**
 
