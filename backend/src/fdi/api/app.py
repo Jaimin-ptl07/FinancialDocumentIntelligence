@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 
 from fdi.api.errors import install_error_handlers
@@ -107,6 +108,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
+# The one browser origin this walking skeleton serves: the Next.js dev server
+# (Task 22), which fetches this API cross-origin. Without CORS the browser lets
+# the request go out but forbids the JS from READING the response -- even a simple
+# GET -- so the UI's job view never populates and done-criterion 6 silently fails,
+# while curl/httpx (which enforce no origin policy) pass. That gap is exactly why
+# the e2e httpx test cannot catch this and a real browser must.
+#
+# Hardcoded, dev-scoped, like `region="us-east-1"` in the lifespan above: a single
+# known origin, not `"*"`. A real deployment serves the UI same-origin (behind one
+# proxy) or needs a configurable origin allowlist -- a Settings field carrying its
+# own x-backend-env / .env.example / consistency-test ripple, deferred to when
+# there is a deployment topology to configure it against.
+_DEV_ORIGINS = ["http://localhost:3000"]
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Financial Document Intelligence", version="0.1.0", lifespan=lifespan)
     install_error_handlers(app)
@@ -115,6 +131,16 @@ def create_app() -> FastAPI:
     # for `instance`. add_middleware() prepends, so this is exactly where a
     # user middleware goes; there is no arrangement that puts it outside.
     app.add_middleware(CorrelationIdMiddleware)
+    # Added last, so it is the OUTERMOST user middleware: a preflight OPTIONS is
+    # answered here and short-circuits before it can reach correlation binding or
+    # routing, and the ACAO header is attached to every response on the way out,
+    # including the ones the correlation middleware wrapped.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_DEV_ORIGINS,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(router)
     return app
 
