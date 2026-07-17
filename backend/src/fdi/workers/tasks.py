@@ -46,6 +46,7 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
+from fdi.platform.embeddings import AzureOpenAIEmbeddingClient
 from fdi.platform.obs.logging import (
     bind_correlation_id,
     clear_correlation_id,
@@ -91,11 +92,14 @@ async def _run_stage_async(
         resolver = DagResolver(REGISTRY.all())
         oc = AzureOcrClient.from_settings(get_settings())
         sc = AzureOpenAIClient.from_settings(get_settings())
+        ec = AzureOpenAIEmbeddingClient.from_settings(get_settings())
         services: dict[str, object] = {}
         if oc is not None:
             services["ocr"] = oc
         if sc is not None:
             services["semantic"] = sc
+        if ec is not None:
+            services["embedder"] = ec
         return await run_stage(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,
