@@ -1,6 +1,43 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-10, SP-11, SP-17, SP-17b** — landed across two parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, and figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures (with captions) and footnote paragraphs into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact; Neo4j loading deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM; an LLM mapper is an SP-3 candidate); `QualityStage` (v2) validates the AST AND the structure artifact's tables in one merged report (SP-17b). **Next: SP-12 provenance, SP-13 embeddings → SP-14 indexes, SP-15–SP-16.** A future sub-project must add the `graph` Compose profile (Neo4j container) and a loader projecting SP-9's JSON artifact (`{schema_version, nodes[{id,type,label}], edges[{source,target,type}]}`) into Neo4j, keyed by the same `id`s — no schema change anticipated. All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-10, SP-11, SP-12, SP-17, SP-17b** — landed across three parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, and figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures (with captions) and footnote paragraphs into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact; Neo4j loading deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM; an LLM mapper is an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure artifact's tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins the graph's nodes to OCR page/geometry (SP-12) — `QualityStage` and `ProvenanceStage` are the pipeline's first two-dependency stages. **Next: SP-13 embeddings → SP-14 indexes, SP-15–SP-16.** A future sub-project must add the `graph` Compose profile (Neo4j container) and a loader projecting SP-9's JSON artifact (`{schema_version, nodes[{id,type,label}], edges[{source,target,type}]}`) into Neo4j, keyed by the same `id`s — no schema change anticipated. All measured via SP-3's harness.
+
+### What SP-12 shipped that its follow-ons (span-offset join, richer node types) must know
+
+- **The provenance artifact** `{schema_version:1, node_provenance:[{node_id, page, bounding_regions}]}`
+  (`fdi.core.provenance.build_provenance`) at the `provenance` artifact key traces every SP-9 graph
+  node (`document`/`section`/`paragraph` — the only node types SP-9's graph emits today) back to the
+  enriched OCR artifact's paragraph page + `bounding_regions`, via a **label-based join** (not a
+  span-offset join — SP-9's graph doesn't carry OCR span offsets today): `paragraph` nodes match by
+  `content.startswith(label)` (the label is an 80-char truncation), `section` nodes match by exact
+  `content == label` equality, and the `doc` node takes the page of the first OCR paragraph with any
+  geometry at all. A node with no match, or whose match has empty/unusable `bounding_regions`, is
+  OMITTED from `node_provenance` — never emitted with a null/placeholder page. `build_provenance`
+  never raises; every malformed-input case (non-`Mapping` entries, non-`str` content, missing/malformed
+  `bounding_regions`, a non-`int` `page_number`) degrades to a smaller (possibly empty) result.
+- **`ProvenanceStage` is the pipeline's first stage (among those actually implemented) to declare two
+  dependencies** — `deps=("graph", "ocr")`, in that fixed order (part of the artifact's cache identity:
+  `input_hash = derived_input_hash([graph.output_hash, ocr.output_hash])`). SP-2's resolver/run-stage
+  machinery needed NO change to support this — `successors(name)` and `input_hash` already iterated
+  `stage.deps` generically. Registering `ProvenanceStage` adds `"provenance"` to BOTH
+  `successors("graph")` and `successors("ocr")`; every test asserting on either successor list uses
+  membership (`"provenance" in ...`), not exact-list equality (audited — none needed fixing). The chain
+  `intake → ocr → normalize → ast → {graph, ontology, quality, semantic} ; graph + ocr → provenance` is
+  automatic from a single `run_stage("ocr", ...)` plus `run_stage("graph", ...)`.
+- **Ambiguous matches (shared 80-char prefixes, duplicate headings) resolve to "first in document
+  order"** — deterministic, but a documented thin-slice limitation, not a bug. **Deferred, each blocked
+  on a named upstream change:** span-offset-based exact matching (needs `build_ast`/`build_graph` to
+  carry OCR span offsets through to the graph node — removes the ambiguous-match failure mode
+  entirely); provenance for table-cell/figure/footnote graph nodes (blocked on SP-9's graph gaining
+  those node types); cross-reference edge provenance (needs SP-7d's `linking` output wired into the
+  graph as edges); polygon-level (sub-paragraph) provenance (needs word-level geometry not carried into
+  `normalize_ocr`'s paragraph shape today).
+- **Note for SP-17b:** SP-17b's own spec (`docs/superpowers/specs/2026-07-17-sp17b-structure-quality-design.md`,
+  still Draft/not implemented as of this writing) independently calls its planned
+  `QualityStage.deps = ("ast", "structure")` "the pipeline's first two-dependency stage." SP-12 landed
+  first in code, so that claim in SP-17b's spec should be corrected post-hoc when SP-17b is implemented
+  (SP-17b would be the *second* two-dependency stage, not the first) — not treated as a contradiction to
+  resolve now.
 
 ### What SP-17b shipped that the next quality follow-on must know
 
@@ -217,7 +254,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ✅ done (JSON graph; Neo4j loading deferred) |
 | **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ✅ done (thin) |
-| **SP-12** | Provenance Graph | 9 | medium | ⬜ |
+| **SP-12** | Provenance Graph | 9 | medium | ✅ done (thin: document/section/paragraph nodes; table-cell/figure/footnote + edge provenance deferred) |
 | **SP-13** | Embeddings → Milvus | 10 | **heavy** | ⬜ |
 | **SP-14** | Retrieval Indexes | 11 | **heavy** | ⬜ |
 | **SP-15** | Knowledge Store consolidation | 12 | light | ⬜ |

@@ -18,6 +18,9 @@ from fdi.pipeline.stages import (
 )
 from fdi.pipeline.stages import ping as ping  # noqa: F401 - import for its registration side effect
 from fdi.pipeline.stages import (
+    provenance as provenance,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     quality as quality,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
