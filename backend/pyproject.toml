@@ -23,6 +23,7 @@ dependencies = [
     "structlog>=26.1",
     "python-multipart>=0.0.32",
     "azure-ai-documentintelligence>=1.0.2",
+    "openai>=2.46.0",
 ]
 
 [dependency-groups]
@@ -75,5 +76,5 @@ asyncio_mode = "auto"
 markers = [
     "integration: needs Docker containers",
     "e2e: needs the compose stack running",
-    "azure: needs live Azure Document Intelligence credentials + a sample PDF",
+    "azure: needs live Azure credentials (Document Intelligence and/or OpenAI)",
 ]

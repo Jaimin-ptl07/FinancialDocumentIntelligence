@@ -29,6 +29,7 @@ from fdi.api.schemas import (
     OcrTriggerView,
     ReadyView,
     ReprocessView,
+    SemanticTriggerView,
     StageStatusView,
     StagesView,
     StaleView,
@@ -312,6 +313,20 @@ async def trigger_ocr(
         raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
     dispatcher.dispatch(doc_id, "ocr", correlation_id)
     return OcrTriggerView(doc_id=doc_id, stage="ocr")
+
+
+@router.post(
+    "/documents/{doc_id}/semantic",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=SemanticTriggerView,
+)
+async def trigger_semantic(
+    doc_id: str, session: SessionDep, correlation_id: CorrelationIdDep, dispatcher: DispatcherDep
+) -> SemanticTriggerView:
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    dispatcher.dispatch(doc_id, "semantic", correlation_id)
+    return SemanticTriggerView(doc_id=doc_id, stage="semantic")
 
 
 # --------------------------------------------------------------------------

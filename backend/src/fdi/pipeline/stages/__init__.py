@@ -12,5 +12,8 @@ from fdi.pipeline.stages import (
     quality as quality,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    semantic as semantic,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     structure as structure,  # noqa: F401 - import for its registration side effect
 )

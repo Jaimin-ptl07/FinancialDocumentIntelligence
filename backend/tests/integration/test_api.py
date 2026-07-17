@@ -610,6 +610,29 @@ async def test_trigger_ocr_unknown_document_is_404(
 
 
 # --------------------------------------------------------------------------
+# Task 7 (SP-10): POST /documents/{id}/semantic
+# --------------------------------------------------------------------------
+
+
+async def test_trigger_semantic_on_a_document(client: AsyncClient, _alembic_applied) -> None:
+    pdf = f"PDF-SEMANTIC-{uuid.uuid4()}".encode()
+    up = await client.post(
+        "/documents", files={"file": ("a.pdf", pdf, "application/pdf")}
+    )
+    doc_id = up.json()["id"]
+    r = await client.post(f"/documents/{doc_id}/semantic")
+    assert r.status_code == 202
+    assert r.json() == {"doc_id": doc_id, "stage": "semantic"}
+
+
+async def test_trigger_semantic_unknown_document_is_404(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/documents/00000000-0000-0000-0000-000000000000/semantic")
+    assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
 # Task 1 (SP-18): GET /documents/{id}/stages + GET /documents/{id}/artifacts/{stage}
 # --------------------------------------------------------------------------
 

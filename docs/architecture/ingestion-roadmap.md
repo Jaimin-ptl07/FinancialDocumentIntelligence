@@ -1,12 +1,42 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a + SP-7b + SP-7c done** — OCR enriched to `schema_version 3`; StructureStage stitches cross-page tables + removes header/footer (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2; StructureStage now also canonicalizes every table's internal shape (`fdi.core.table_grid.canonicalize_table` — spanning-cell grid expansion + joined-path nested-header resolution), `StructureStage.version`/`schema_version` bumped to 2. Deferred out of 7c: grid-accuracy measurement (cell-F1/GriTS, a SP-3 candidate), row-header canonicalization, projected-row-header handling, header-path text normalization (SP-10/11 concern). **Next: SP-7d (linking: captions/footnotes/cross-references)**, alongside the independent parallel wave SP-10 (semantic), SP-17 (quality) — measured via SP-3. Then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-10, SP-17** — the last three landed in parallel via git worktrees. OCR enriched to `schema_version 3`; `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `QualityStage` validates the AST. **Next: SP-7d (linking: captions/footnotes/cross-refs)**; then SP-9 graph → SP-12 provenance, SP-11 ontology (consumes SP-10's `semantic` artifact), SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on). All measured via SP-3's harness.
 
 ### What SP-17 shipped that its follow-on (structure-aware quality) must know
 
 - **A quality report** `{schema_version:1, issues[{severity,code,message}], error_count, warning_count, ok}` (`fdi.core.quality.validate`) at the `quality` artifact key is the internal-defect check — distinct from SP-3's ground-truth comparison (§1.1 of the spec). `ok = error_count == 0`; warnings never gate `ok`.
 - **`QualityStage` is a DERIVED stage** (`deps=("ast",)`), auto-scheduled after `ast` by the DAG (`successors("ast")` now includes `"quality"`), running `AST_VALIDATORS = (ast_has_sections, sections_have_content, title_present)` over the AST via `validate`. Chain `ocr → normalize → ast → quality` is automatic from a single `run_stage("ocr", ...)`.
 - **`tables_are_rectangular`** is written and unit-tested in `fdi.core.quality` now (operates on SP-7's structure artifact: a cell's `column_index >= column_count` is a torn table, `warning`), but deliberately NOT wired into `QualityStage` yet — no new API surface either (the report is read via the existing artifact-store path). The follow-on needs `QualityStage.deps = ("ast", "structure")` plus a decision on how the AST-level and structure-level issue lists merge into one report. Numeric-total reconciliation waits on SP-11 (ontology) + real numeric extraction; cross-document consistency waits on SP-16.
+
+### What SP-10 shipped that SP-11 must know
+
+- **The semantic artifact** `{schema_version:1, sections:[{heading, type, paragraph_count}]}`
+  (`fdi.pipeline.stages.semantic.SemanticStage`) at the `semantic` artifact key — one entry per AST
+  section, in the same order, `type` a `fdi.core.semantic.SectionType` value (`BALANCE_SHEET`,
+  `INCOME_STATEMENT`, `CASH_FLOW`, `NOTES`, `MDNA`, `AUDITORS_REPORT`, `DIRECTORS_REPORT`, `OTHER`).
+  **SP-11 (Ontology Mapping) consumes this** to map line items onto canonical concepts within each
+  classified section — SP-11 should read `semantic` alongside `ast` (same `heading` order) rather than
+  re-deriving section type itself.
+- **`SemanticStage` is a DERIVED stage** (`deps=("ast",)`), auto-scheduled after `ast` by the DAG
+  (`"semantic" in successors("ast")`), content-addressed on `derived_input_hash([ast.output_hash])` +
+  `SemanticStage.version` — a deliberate exception to root-stage determinism (GPT is non-deterministic;
+  "run once, cache" avoids re-paying for a re-classification). **Bump `SemanticStage.version`** when the
+  prompt, `FDI_GPT_DEPLOYMENT`, or the label set changes, to force regeneration.
+- **The LLM is an injected `SemanticClient` protocol** (`fdi.pipeline.semantic.SemanticClient`,
+  `classify(heading, text) -> str`), with `fdi.platform.semantic.AzureOpenAIClient` (real, `openai` SDK's
+  `AzureOpenAI` client) and `FakeSemanticClient` (test double) as the two implementations — same seam
+  shape as SP-5's `OcrClient`. This means SP-3's harness can later measure prompt variants or a cheap
+  non-LLM classifier as alternate `Candidate`s without touching the stage.
+- **Config:** `FDI_GPT_ENDPOINT` / `FDI_GPT_KEY` / `FDI_GPT_DEPLOYMENT` / `FDI_GPT_MODEL` /
+  `FDI_GPT_API_VERSION` in Settings + `docker/compose.yml` `x-backend-env` + `.env.example`; endpoint/key
+  default `None` so the stack boots without Azure OpenAI configured (the worker only wires
+  `services["semantic"]` when `AzureOpenAIClient.from_settings(...)` returns non-`None`).
+- **Trigger:** `POST /documents/{id}/semantic` (202; 404 for an unknown document), mirroring SP-5's OCR
+  trigger; the generic `POST /docs/{doc_id}/reprocess?from=semantic` also works.
+- **No live Azure OpenAI call anywhere in the suite** — `FakeSemanticClient` proves the stage end-to-end;
+  `AzureOpenAIClient`'s unit test monkeypatches `fdi.platform.semantic.AzureOpenAI`; the real deployment is
+  exercised only by the opt-in `tests/azure/test_real_semantic.py` (`@pytest.mark.azure`, skipped unless
+  `FDI_GPT_ENDPOINT`/`FDI_GPT_KEY` are set).
 
 ### What SP-8 shipped that SP-18 / SP-7 must know
 
@@ -141,7 +171,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ⬜ |
-| **SP-10** | Semantic Intelligence | 7 | **heavy** | ⬜ |
+| **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ⬜ |
 | **SP-12** | Provenance Graph | 9 | medium | ⬜ |
 | **SP-13** | Embeddings → Milvus | 10 | **heavy** | ⬜ |

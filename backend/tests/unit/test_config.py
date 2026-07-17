@@ -57,3 +57,15 @@ def test_azure_di_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.azure_di_model == "prebuilt-layout"
     assert s.azure_di_api_version == "2024-11-30"
     assert s.azure_di_polling_timeout_s == 600
+
+
+def test_gpt_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Azure OpenAI (GPT) fields have safe defaults so the stack boots without it."""
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.gpt_endpoint is None
+    assert s.gpt_key is None
+    assert s.gpt_deployment == "gpt-4o"
+    assert s.gpt_model == "gpt-4o"
+    assert s.gpt_api_version == "2024-10-21"
