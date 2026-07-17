@@ -1,6 +1,6 @@
 # SP-14 — Vector Retrieval (Milvus)
 
-- **Status:** Not yet implemented. Spec + TDD plan drafted 2026-07-18 (no code executed). Companion plan:
+- **Status:** Implemented 2026-07-18. Companion plan:
   `docs/superpowers/plans/2026-07-17-sp14-retrieval.md`.
 - **Depends on:** SP-2 (stage framework — `StageContext.services`, content-addressed derived-stage
   caching), SP-13 (the embedding artifact this sub-project consumes — `fdi.pipeline.stages.embedding`,

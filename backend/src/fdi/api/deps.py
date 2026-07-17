@@ -8,8 +8,10 @@ from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fdi.pipeline.dispatch import StageDispatcher
+from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.evaluation import CandidateRegistry
 from fdi.pipeline.resolver import DagResolver
+from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.obs.logging import get_correlation_id as _get_bound_correlation_id
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -94,6 +96,16 @@ def get_candidates(request: Request) -> CandidateRegistry:
     return candidates
 
 
+def get_embedder(request: Request) -> EmbeddingClient | None:
+    embedder: EmbeddingClient | None = request.app.state.embedder
+    return embedder
+
+
+def get_vector_store(request: Request) -> VectorStore | None:
+    vector_store: VectorStore | None = request.app.state.vector_store
+    return vector_store
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
@@ -101,3 +113,5 @@ DispatcherDep = Annotated[StageDispatcher, Depends(get_dispatcher)]
 ResolverDep = Annotated[DagResolver, Depends(get_resolver)]
 SessionFactoryDep = Annotated["async_sessionmaker[AsyncSession]", Depends(get_session_factory)]
 CandidatesDep = Annotated[CandidateRegistry, Depends(get_candidates)]
+EmbedderDep = Annotated[EmbeddingClient | None, Depends(get_embedder)]
+VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]

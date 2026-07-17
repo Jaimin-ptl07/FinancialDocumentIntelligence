@@ -89,3 +89,11 @@ def test_neo4j_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.neo4j_uri is None
     assert s.neo4j_user == "neo4j"
     assert s.neo4j_password is None
+
+
+def test_milvus_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.milvus_uri is None
+    assert s.milvus_collection == "fdi_sections"

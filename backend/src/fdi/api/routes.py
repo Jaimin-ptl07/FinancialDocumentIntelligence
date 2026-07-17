@@ -2,7 +2,8 @@
 
 import contextlib
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from typing import cast
 
 import sqlalchemy
 import structlog
@@ -12,10 +13,12 @@ from fdi.api.deps import (
     CandidatesDep,
     CorrelationIdDep,
     DispatcherDep,
+    EmbedderDep,
     ResolverDep,
     SessionDep,
     SessionFactoryDep,
     StoreDep,
+    VectorStoreDep,
 )
 from fdi.api.schemas import (
     DocumentVersionsView,
@@ -31,6 +34,9 @@ from fdi.api.schemas import (
     OcrTriggerView,
     ReadyView,
     ReprocessView,
+    SearchRequest,
+    SearchResultsView,
+    SearchResultView,
     SemanticTriggerView,
     StageStatusView,
     StagesView,
@@ -387,3 +393,47 @@ async def document_artifact(
         raise HTTPException(status_code=404, detail=f"no {stage} artifact for document {doc_id}")
     body = await store.get_json(run.artifact_key)
     return dict(body)
+
+
+# --------------------------------------------------------------------------
+# Task 6 (SP-14): POST /search -- the first synchronous, task-free route.
+# --------------------------------------------------------------------------
+
+
+@router.post("/search", response_model=SearchResultsView)
+async def search(
+    body: SearchRequest, embedder: EmbedderDep, vector_store: VectorStoreDep
+) -> SearchResultsView:
+    missing = [
+        name
+        for name, svc in (("embedder", embedder), ("vector_store", vector_store))
+        if svc is None
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"search is not configured: missing {', '.join(missing)} "
+                "(set FDI_EMBED_ENDPOINT/FDI_EMBED_KEY and/or FDI_MILVUS_URI)"
+            ),
+        )
+    # `missing` above is a runtime check across a name/value tuple, which
+    # mypy --strict cannot use to narrow `embedder`/`vector_store` themselves
+    # (it only sees `svc is None` inside a comprehension, not a check against
+    # either specific variable) -- these asserts are the narrowing, not a new
+    # runtime possibility: `missing` being empty already guarantees both are
+    # non-None.
+    assert embedder is not None
+    assert vector_store is not None
+    [vector] = embedder.embed([body.query])
+    hits = vector_store.search(vector, body.k)
+    return SearchResultsView(
+        results=[
+            SearchResultView(
+                id=str(h["id"]),
+                score=float(h["score"]),  # type: ignore[arg-type]
+                metadata=dict(cast(Mapping[str, object], h["metadata"])),
+            )
+            for h in hits
+        ]
+    )

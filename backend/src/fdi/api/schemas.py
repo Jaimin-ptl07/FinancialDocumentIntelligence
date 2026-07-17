@@ -93,3 +93,18 @@ class StageStatusView(BaseModel):
 
 class StagesView(BaseModel):
     stages: list[StageStatusView]
+
+
+class SearchRequest(BaseModel):
+    query: str
+    k: int = 5
+
+
+class SearchResultView(BaseModel):
+    id: str
+    score: float
+    metadata: dict[str, object]
+
+
+class SearchResultsView(BaseModel):
+    results: list[SearchResultView]
