@@ -23,6 +23,7 @@ from fdi.api.schemas import (
     EmbeddingTriggerView,
     EvalAccepted,
     EvalRequest,
+    GraphLoadTriggerView,
     JobAccepted,
     JobView,
     LeaderboardEntry,
@@ -342,6 +343,20 @@ async def trigger_embedding(
         raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
     dispatcher.dispatch(doc_id, "embedding", correlation_id)
     return EmbeddingTriggerView(doc_id=doc_id, stage="embedding")
+
+
+@router.post(
+    "/documents/{doc_id}/graph_load",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=GraphLoadTriggerView,
+)
+async def trigger_graph_load(
+    doc_id: str, session: SessionDep, correlation_id: CorrelationIdDep, dispatcher: DispatcherDep
+) -> GraphLoadTriggerView:
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    dispatcher.dispatch(doc_id, "graph_load", correlation_id)
+    return GraphLoadTriggerView(doc_id=doc_id, stage="graph_load")
 
 
 # --------------------------------------------------------------------------

@@ -1,7 +1,22 @@
 # SP-9b — Neo4j Graph Loader (SP-9's deferred follow-on)
 
-- **Status:** Draft 2026-07-17 (spec + TDD plan only; not yet implemented). When implemented: branch
-  `feature/sp-9b-neo4j-loader`, worktree `D:\fdi-wt\sp9b` (mirrors SP-10's worktree convention).
+- **Status:** Implemented 2026-07-18. Branch `feature/sp-9b-neo4j-loader`, worktree `D:\fdi-wt\sp9b`
+  (mirrors SP-10's worktree convention). All 8 §7 done criteria met: (1) `GraphStore`/`FakeGraphStore`
+  (`fdi.pipeline.graphstore`, `test_graphstore.py`); (2) `Neo4jGraphStore` (`fdi.platform.graphstore`,
+  driver monkeypatched, `test_neo4j_graphstore.py`); (3) `GraphLoadStage` registered
+  (`fdi.pipeline.stages.graphload`); (4) content-addressed receipt + cache-hit-does-not-reload proven
+  (`fake_store.calls == 1` after two runs, `test_graphload_stage.py`); (5) `FDI_NEO4J_*` wired in
+  Settings + compose `x-backend-env` + `.env.example` + the `neo4j` service's `NEO4J_AUTH` +
+  healthcheck (`test_config.py`, manual `docker compose --profile graph up` verified `healthy`); (6)
+  `POST /documents/{id}/graph_load` (202/404, `test_api.py`); (7) opt-in `@pytest.mark.neo4j` smoke test
+  skips cleanly unconfigured (`tests/neo4j/test_real_graph_load.py`); (8) all four gates green (`ruff`,
+  `mypy --strict src`, `lint-imports` 1 kept/0 broken, full suite 284 passed/6 skipped, no live Neo4j
+  call). One real defect found and fixed during the Task 6 manual smoke check, not anticipated by the
+  plan: the `neo4j` service's healthcheck could not expand `$${FDI_NEO4J_USER}`/
+  `$${FDI_NEO4J_PASSWORD}` inside the container because only `NEO4J_AUTH` (not the two source vars) was
+  in that service's `environment:` block; fixed by re-exposing both vars there, same pattern
+  `postgres`'s healthcheck already uses. See `docs/architecture/ingestion-roadmap.md`'s new "What SP-9b
+  shipped" section for the full handoff note.
 - **Depends on:** SP-9 (the canonical graph JSON artifact, `fdi.core.graph.build_graph` →
   `{schema_version, nodes:[{id,type,label}], edges:[{source,target,type}]}`, and
   `fdi.pipeline.stages.graph.GraphStage`, `deps=("ast",)`), SP-2 (stage framework — `StageContext.services`,

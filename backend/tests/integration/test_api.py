@@ -656,6 +656,27 @@ async def test_trigger_embedding_unknown_document_is_404(
 
 
 # --------------------------------------------------------------------------
+# Task 5 (SP-9b): POST /documents/{id}/graph_load
+# --------------------------------------------------------------------------
+
+
+async def test_trigger_graph_load_on_a_document(client: AsyncClient, _alembic_applied) -> None:
+    pdf = f"PDF-GRAPHLOAD-{uuid.uuid4()}".encode()
+    up = await client.post("/documents", files={"file": ("a.pdf", pdf, "application/pdf")})
+    doc_id = up.json()["id"]
+    r = await client.post(f"/documents/{doc_id}/graph_load")
+    assert r.status_code == 202
+    assert r.json() == {"doc_id": doc_id, "stage": "graph_load"}
+
+
+async def test_trigger_graph_load_unknown_document_is_404(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/documents/00000000-0000-0000-0000-000000000000/graph_load")
+    assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
 # Task 1 (SP-18): GET /documents/{id}/stages + GET /documents/{id}/artifacts/{stage}
 # --------------------------------------------------------------------------
 

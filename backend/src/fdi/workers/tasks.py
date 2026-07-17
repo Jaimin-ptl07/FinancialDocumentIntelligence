@@ -47,6 +47,7 @@ from fdi.pipeline.run import run_stage
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.embeddings import AzureOpenAIEmbeddingClient
+from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import (
     bind_correlation_id,
     clear_correlation_id,
@@ -93,6 +94,7 @@ async def _run_stage_async(
         oc = AzureOcrClient.from_settings(get_settings())
         sc = AzureOpenAIClient.from_settings(get_settings())
         ec = AzureOpenAIEmbeddingClient.from_settings(get_settings())
+        gsc = Neo4jGraphStore.from_settings(get_settings())
         services: dict[str, object] = {}
         if oc is not None:
             services["ocr"] = oc
@@ -100,6 +102,8 @@ async def _run_stage_async(
             services["semantic"] = sc
         if ec is not None:
             services["embedder"] = ec
+        if gsc is not None:
+            services["graph_store"] = gsc
         return await run_stage(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,

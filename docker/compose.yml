@@ -39,6 +39,9 @@ x-backend-env: &backend-env
   FDI_EMBED_DEPLOYMENT: ${FDI_EMBED_DEPLOYMENT}
   FDI_EMBED_API_VERSION: ${FDI_EMBED_API_VERSION}
   FDI_EMBED_DIM: ${FDI_EMBED_DIM}
+  FDI_NEO4J_URI: ${FDI_NEO4J_URI}
+  FDI_NEO4J_USER: ${FDI_NEO4J_USER}
+  FDI_NEO4J_PASSWORD: ${FDI_NEO4J_PASSWORD}
 
 x-backend-build: &backend-build
   build:
@@ -171,14 +174,33 @@ services:
 
   neo4j:
     # Pinned exactly: neo4j:latest is the CalVer line, a DIFFERENT lineage from
-    # 5.26 LTS. Defined now; wired at SP-9.
+    # 5.26 LTS. Wired at SP-9b: NEO4J_AUTH derives from the same FDI_NEO4J_USER/
+    # FDI_NEO4J_PASSWORD the app connects with -- one source of truth, not a
+    # hardcoded credential that happens to agree with Settings by coincidence.
     image: neo4j:5.26.28
     profiles: [graph]
     environment:
-      NEO4J_AUTH: neo4j/fdipassword
+      NEO4J_AUTH: ${FDI_NEO4J_USER}/${FDI_NEO4J_PASSWORD}
+      # Re-exposed so the healthcheck below can expand them INSIDE the
+      # container via $$ -- NEO4J_AUTH alone only reaches the neo4j process's
+      # own bootstrap, it is not itself a shell-visible var to split on ``/``.
+      # Same reasoning as postgres's own POSTGRES_USER/POSTGRES_PASSWORD lines
+      # above, which exist for their healthcheck for the identical reason.
+      FDI_NEO4J_USER: ${FDI_NEO4J_USER}
+      FDI_NEO4J_PASSWORD: ${FDI_NEO4J_PASSWORD}
     volumes:
       - neo4jdata:/data
     ports: ["7474:7474", "7687:7687"]
+    healthcheck:
+      # $$ escapes compose interpolation so the shell expands it in-container,
+      # same discipline as the postgres/worker healthchecks above. cypher-shell
+      # ships in the official neo4j image (no curl needed, same reasoning as
+      # minio's `mc`-based healthcheck).
+      test: ["CMD-SHELL", "cypher-shell -u $${FDI_NEO4J_USER} -p $${FDI_NEO4J_PASSWORD} 'RETURN 1'"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.25
