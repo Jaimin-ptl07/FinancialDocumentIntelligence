@@ -14,8 +14,10 @@ from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.platform.config import get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
+from fdi.platform.embeddings import AzureOpenAIEmbeddingClient
 from fdi.platform.obs.logging import configure_logging
 from fdi.platform.storage.artifact_store import ArtifactStore
+from fdi.platform.vectorstore import MilvusVectorStore
 
 
 @asynccontextmanager
@@ -68,6 +70,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.artifact_store = ArtifactStore(
         client, bucket=settings.s3_bucket, presign_client=presign_client
     )
+    app.state.embedder = AzureOpenAIEmbeddingClient.from_settings(settings)
+    app.state.vector_store = MilvusVectorStore.from_settings(settings)
 
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things

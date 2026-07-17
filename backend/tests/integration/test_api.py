@@ -43,7 +43,12 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
     """
 
     @asynccontextmanager
-    async def _make(*, raise_app_exceptions: bool = True, **overrides: str):
+    async def _make(
+        *,
+        raise_app_exceptions: bool = True,
+        dependency_overrides: dict[object, object] | None = None,
+        **overrides: str,
+    ):
         env = {
             "FDI_DATABASE_URL": postgres_url,
             "FDI_BROKER_URL": amqp_url,
@@ -60,6 +65,8 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
         from fdi.api.app import create_app
 
         app = create_app()
+        if dependency_overrides:
+            app.dependency_overrides.update(dependency_overrides)
         # ASGITransport does NOT drive the lifespan protocol -- it only ever
         # sends an `http` scope. Without this the engine, session factory and
         # artifact store are never created and every backend-touching route
@@ -719,3 +726,59 @@ async def test_stages_and_artifact_proxy(
 
     assert (await client.get(f"/documents/{doc}/artifacts/normalize")).status_code == 404
     assert (await client.get("/documents/nope/stages")).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Task 6 (SP-14): POST /search
+# --------------------------------------------------------------------------
+
+
+async def test_search_503_when_unconfigured(client: AsyncClient, _alembic_applied) -> None:
+    r = await client.post("/search", json={"query": "Balance Sheet"})
+    assert r.status_code == 503
+    assert "embedder" in r.json()["detail"]
+    assert "vector_store" in r.json()["detail"]
+
+
+async def test_search_returns_the_best_match_first(make_client, _alembic_applied) -> None:
+    from fdi.api.deps import get_embedder, get_vector_store
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
+    from fdi.pipeline.vectorstore import FakeVectorStore
+
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_store = FakeVectorStore()
+    fake_store.upsert(
+        [
+            {
+                "id": "doc1:s0",
+                "vector": fake_embedder.embed(["Balance Sheet\nAssets 100"])[0],
+                "metadata": {"heading": "Balance Sheet", "chunk_id": "s0"},
+            },
+            {
+                "id": "doc1:s1",
+                "vector": fake_embedder.embed(["Notes\nSee appendix"])[0],
+                "metadata": {"heading": "Notes", "chunk_id": "s1"},
+            },
+        ]
+    )
+
+    async with make_client(
+        dependency_overrides={
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_store,
+        }
+    ) as client:
+        r = await client.post("/search", json={"query": "Balance Sheet\nAssets 100", "k": 1})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["results"]) == 1
+    assert body["results"][0]["id"] == "doc1:s0"
+    assert body["results"][0]["metadata"]["heading"] == "Balance Sheet"
+    # A real (non-trivial) embedding vector's self-similarity is only
+    # approximately 1.0 in floating point: `_cosine` divides by
+    # `sqrt(sum(x*x))`, and `sqrt(x)**2 != x` bit-for-bit in IEEE754 except
+    # for perfect squares -- measured here as `1.0000000000000002`, not `1.0`
+    # exactly. `test_vectorstore.py`'s own `== 1.0` assertions only hold
+    # because THAT test's vectors ([1.0, 0.0]) have an exact unit norm.
+    assert body["results"][0]["score"] == pytest.approx(1.0)
