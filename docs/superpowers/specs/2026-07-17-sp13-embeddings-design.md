@@ -1,6 +1,6 @@
 # SP-13 — Embeddings via Azure OpenAI
 
-- **Status:** Draft 2026-07-17 (design + TDD plan only; not yet implemented). Companion plan:
+- **Status:** Implemented 2026-07-18. Companion plan:
   `docs/superpowers/plans/2026-07-17-sp13-embeddings.md`.
 - **Depends on:** SP-2 (stage framework — `StageContext.services`, content-addressed derived-stage
   caching), SP-8 (Document AST — provides `{schema_version, title, sections:[{heading, paragraphs}]}`),
