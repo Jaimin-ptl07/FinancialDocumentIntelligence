@@ -69,3 +69,12 @@ def test_gpt_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.gpt_deployment == "gpt-4o"
     assert s.gpt_model == "gpt-4o"
     assert s.gpt_api_version == "2024-10-21"
+
+
+def test_neo4j_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.neo4j_uri is None
+    assert s.neo4j_user == "neo4j"
+    assert s.neo4j_password is None

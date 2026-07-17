@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     gpt_model: str = "gpt-4o"
     gpt_api_version: str = "2024-10-21"
 
+    # Neo4j (graph loader, SP-9b). URI/password default to None so the stack boots
+    # without Neo4j configured (the `graph` Compose profile is opt-in, never part
+    # of `core`); the graph_load stage using them is wired separately. See
+    # docker/compose.yml x-backend-env, the `neo4j` service's NEO4J_AUTH, and
+    # .env.example. Unlike FDI_AZURE_DI_*/FDI_GPT_* (external SaaS, blank by
+    # default), .env.example ships REAL working values here: this var also drives
+    # the self-hosted `neo4j` Compose service's own bootstrap credential.
+    neo4j_uri: str | None = None
+    neo4j_user: str = "neo4j"
+    neo4j_password: str | None = None
+
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":
         """Fail loudly on a typo'd FDI_ variable.
