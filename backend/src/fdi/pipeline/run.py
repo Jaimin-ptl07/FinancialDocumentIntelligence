@@ -1,9 +1,12 @@
 """The framework around a Stage: hashing, the content-addressed cache, persistence,
 and successor scheduling. A stage stays a pure transform; all of that lives here."""
 
+from collections.abc import Mapping
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fdi.core.schema import validate_finite
+from fdi.pipeline.intake import document_key
 from fdi.pipeline.keys import (
     artifact_key,
     derived_input_hash,
@@ -22,14 +25,23 @@ async def run_stage(
     *, doc_id: str, stage_name: str, run_id: str, correlation_id: str | None,
     session_factory: async_sessionmaker[AsyncSession], store: ArtifactStore,
     registry: StageRegistry, resolver: DagResolver,
+    services: Mapping[str, object] | None = None,
 ) -> list[str]:
     stage = registry.get(stage_name)
+    svcs = services if services is not None else {}
 
     async def read_artifact(d: str, upstream: str) -> object:
         async with session_factory() as s:
             run = await RegistryRepository(s).latest_run(d, upstream)
         assert run is not None and run.artifact_key is not None
         return await store.get_json(run.artifact_key)
+
+    async def read_source() -> bytes:
+        async with session_factory() as s:
+            d = await RegistryRepository(s).get_document(doc_id)
+        if d is None or d.checksum is None:
+            raise ValueError(f"document {doc_id} has no source")
+        return await store.get_bytes(document_key(d.checksum))
 
     # 1. input_hash from recorded upstream output_hashes (root: document checksum).
     async with session_factory() as s:
@@ -60,7 +72,12 @@ async def run_stage(
 
     # 3. cache miss: run, validate, store, record.
     try:
-        body = await stage.run(StageContext(doc_id=doc_id, read_artifact=read_artifact))
+        body = await stage.run(
+            StageContext(
+                doc_id=doc_id, read_artifact=read_artifact,
+                read_source=read_source, services=svcs,
+            )
+        )
         validate_finite(body)
         await store.put_json(key, body)
     except Exception as exc:
