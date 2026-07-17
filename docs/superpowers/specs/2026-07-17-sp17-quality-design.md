@@ -1,6 +1,6 @@
 # SP-17 — Quality Validation
 
-- **Status:** Draft 2026-07-17 (design + TDD plan; not yet implemented — no code on any branch).
+- **Status:** Implemented 2026-07-17 (`fdi.core.quality` + `QualityStage`, `feature/sp-17-quality`).
 - **Depends on:** SP-2 (stage/DAG framework), SP-8 (the AST artifact, `fdi.core.ast.build_ast` →
   `{schema_version, title, sections:[{heading, paragraphs:[str]}]}`). References but does not depend
   on SP-7's structure artifact (`{schema_version, blocks:[{role,text}], tables:[...]}`) — see §2.3.
