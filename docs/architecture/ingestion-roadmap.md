@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-6 implemented on `feature/sp-1-project-setup`; SP-7 (Structural Intelligence — the heavy tier) is next.
+- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-6 implemented on `feature/sp-1-project-setup`. Per the §4 build order ("spine first, then deepen"), **SP-8 (Document AST, naive) is next**, then SP-18 (thin UI) to complete the demoable Stage-1 spine; SP-7 (Structural Intelligence — the heavy tier) follows in Stage 2 with its own deep-research pass.
 
 ### What SP-6 shipped that SP-7 must know
 
