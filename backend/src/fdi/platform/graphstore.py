@@ -12,9 +12,8 @@ no live Neo4j call in the suite."""
 
 from collections.abc import Mapping
 
-from neo4j import Driver, GraphDatabase, ManagedTransaction
-
 from fdi.platform.config import Settings
+from neo4j import Driver, GraphDatabase, ManagedTransaction
 
 
 class Neo4jGraphStore:
