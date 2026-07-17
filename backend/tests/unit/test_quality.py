@@ -2,11 +2,13 @@ import pytest
 
 from fdi.core.quality import (
     AST_VALIDATORS,
+    STRUCTURE_VALIDATORS,
     ast_has_sections,
     sections_have_content,
     tables_are_rectangular,
     title_present,
     validate,
+    validate_all,
 )
 
 _CLEAN_AST = {
@@ -138,3 +140,64 @@ def test_validate_raises_on_unknown_severity() -> None:
 
     with pytest.raises(ValueError, match="critical"):
         validate(_CLEAN_AST, (_bogus,))
+
+
+# --- validate_all ---
+
+_CLEAN_STRUCTURE = {
+    "tables": [{"column_count": 2, "cells": [{"column_index": 0}, {"column_index": 1}]}],
+}
+
+_TORN_STRUCTURE = {
+    "tables": [{"column_count": 2, "cells": [{"column_index": 0}, {"column_index": 2}]}],
+}
+
+
+def test_validate_all_merges_two_clean_artifacts_into_one_ok_report() -> None:
+    report = validate_all(
+        [(_CLEAN_AST, AST_VALIDATORS), (_CLEAN_STRUCTURE, STRUCTURE_VALIDATORS)]
+    )
+    assert report == {
+        "schema_version": 1,
+        "issues": [],
+        "error_count": 0,
+        "warning_count": 0,
+        "ok": True,
+    }
+
+
+def test_validate_all_unions_counts_ast_issues_before_structure_issues() -> None:
+    sparse_ast = {"sections": [], "title": None}
+    report = validate_all(
+        [(sparse_ast, AST_VALIDATORS), (_TORN_STRUCTURE, STRUCTURE_VALIDATORS)]
+    )
+    codes = [issue["code"] for issue in report["issues"]]
+    assert codes == ["ast.no_sections", "ast.missing_title", "structure.torn_table"]
+    assert report["error_count"] == 1
+    assert report["warning_count"] == 2
+    assert report["ok"] is False
+
+
+def test_validate_all_single_pair_matches_validate() -> None:
+    assert validate_all([(_CLEAN_AST, AST_VALIDATORS)]) == validate(_CLEAN_AST, AST_VALIDATORS)
+
+    sparse_ast = {"sections": [], "title": "T"}
+    assert validate_all([(sparse_ast, AST_VALIDATORS)]) == validate(sparse_ast, AST_VALIDATORS)
+
+
+def test_validate_all_raises_on_unknown_severity_from_either_pair() -> None:
+    def _bogus(_artifact: object) -> list[dict[str, object]]:
+        return [{"severity": "critical", "code": "x.bogus", "message": "m"}]
+
+    with pytest.raises(ValueError, match="critical"):
+        validate_all([(_CLEAN_AST, AST_VALIDATORS), (_CLEAN_STRUCTURE, (_bogus,))])
+
+
+def test_validate_all_empty_pairs_is_ok_with_no_issues() -> None:
+    assert validate_all([]) == {
+        "schema_version": 1,
+        "issues": [],
+        "error_count": 0,
+        "warning_count": 0,
+        "ok": True,
+    }
