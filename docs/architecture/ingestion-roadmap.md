@@ -1,6 +1,36 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a + SP-7b done** — OCR enriched to `schema_version 3`; StructureStage stitches cross-page tables + removes header/footer (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2. **Next (parallelized via worktrees): SP-7c (table canonicalization), SP-10 (semantic), SP-17 (quality)** — independent, measured via SP-3. Then 7c (table internals / nested-header canonicalization), 7d (linking); then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a + SP-7b done** — OCR enriched to `schema_version 3`; StructureStage stitches cross-page tables + removes header/footer (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2. **SP-10 (semantic) done** — `SemanticStage` classifies each AST section into one of 8 `SectionType`s via an injected `SemanticClient` (Azure OpenAI in production, fake in tests); see handoff below. **Remaining of the parallelized wave:** SP-7c (table canonicalization), SP-17 (quality) — independent, measured via SP-3. Then 7c (table internals / nested-header canonicalization), 7d (linking); then SP-9 graph → SP-12 provenance, SP-11 ontology (consumes SP-10's `semantic` artifact), SP-13 embeddings → SP-14 indexes, SP-15–17.
+
+### What SP-10 shipped that SP-11 must know
+
+- **The semantic artifact** `{schema_version:1, sections:[{heading, type, paragraph_count}]}`
+  (`fdi.pipeline.stages.semantic.SemanticStage`) at the `semantic` artifact key — one entry per AST
+  section, in the same order, `type` a `fdi.core.semantic.SectionType` value (`BALANCE_SHEET`,
+  `INCOME_STATEMENT`, `CASH_FLOW`, `NOTES`, `MDNA`, `AUDITORS_REPORT`, `DIRECTORS_REPORT`, `OTHER`).
+  **SP-11 (Ontology Mapping) consumes this** to map line items onto canonical concepts within each
+  classified section — SP-11 should read `semantic` alongside `ast` (same `heading` order) rather than
+  re-deriving section type itself.
+- **`SemanticStage` is a DERIVED stage** (`deps=("ast",)`), auto-scheduled after `ast` by the DAG
+  (`"semantic" in successors("ast")`), content-addressed on `derived_input_hash([ast.output_hash])` +
+  `SemanticStage.version` — a deliberate exception to root-stage determinism (GPT is non-deterministic;
+  "run once, cache" avoids re-paying for a re-classification). **Bump `SemanticStage.version`** when the
+  prompt, `FDI_GPT_DEPLOYMENT`, or the label set changes, to force regeneration.
+- **The LLM is an injected `SemanticClient` protocol** (`fdi.pipeline.semantic.SemanticClient`,
+  `classify(heading, text) -> str`), with `fdi.platform.semantic.AzureOpenAIClient` (real, `openai` SDK's
+  `AzureOpenAI` client) and `FakeSemanticClient` (test double) as the two implementations — same seam
+  shape as SP-5's `OcrClient`. This means SP-3's harness can later measure prompt variants or a cheap
+  non-LLM classifier as alternate `Candidate`s without touching the stage.
+- **Config:** `FDI_GPT_ENDPOINT` / `FDI_GPT_KEY` / `FDI_GPT_DEPLOYMENT` / `FDI_GPT_MODEL` /
+  `FDI_GPT_API_VERSION` in Settings + `docker/compose.yml` `x-backend-env` + `.env.example`; endpoint/key
+  default `None` so the stack boots without Azure OpenAI configured (the worker only wires
+  `services["semantic"]` when `AzureOpenAIClient.from_settings(...)` returns non-`None`).
+- **Trigger:** `POST /documents/{id}/semantic` (202; 404 for an unknown document), mirroring SP-5's OCR
+  trigger; the generic `POST /docs/{doc_id}/reprocess?from=semantic` also works.
+- **No live Azure OpenAI call anywhere in the suite** — `FakeSemanticClient` proves the stage end-to-end;
+  `AzureOpenAIClient`'s unit test monkeypatches `fdi.platform.semantic.AzureOpenAI`; the real deployment is
+  exercised only by the opt-in `tests/azure/test_real_semantic.py` (`@pytest.mark.azure`, skipped unless
+  `FDI_GPT_ENDPOINT`/`FDI_GPT_KEY` are set).
 
 ### What SP-8 shipped that SP-18 / SP-7 must know
 
@@ -135,7 +165,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ⬜ |
-| **SP-10** | Semantic Intelligence | 7 | **heavy** | ⬜ |
+| **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ⬜ |
 | **SP-12** | Provenance Graph | 9 | medium | ⬜ |
 | **SP-13** | Embeddings → Milvus | 10 | **heavy** | ⬜ |

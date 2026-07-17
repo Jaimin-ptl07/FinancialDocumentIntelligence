@@ -1,6 +1,10 @@
 # SP-10 — Semantic Intelligence via Azure OpenAI (GPT)
 
-- **Status:** Drafted 2026-07-17 on `feature/sp-1-project-setup`. NOT implemented — spec + plan only.
+- **Status:** Implemented 2026-07-17 on `feature/sp-10-semantic` (worktree `D:\fdi-wt\sp10`). All 9 plan
+  tasks done via strict TDD; full non-e2e/non-azure suite green (198 tests); all four static gates green;
+  no live Azure OpenAI call anywhere in the suite (`FakeSemanticClient` proves the whole path; the
+  monkeypatched-SDK unit test proves `AzureOpenAIClient`; the opt-in `@pytest.mark.azure` smoke test
+  skips cleanly unconfigured).
 - **Depends on:** SP-2 (stage framework — `StageContext.services`, content-addressed derived-stage
   caching), SP-8 (Document AST — provides `{schema_version, title, sections:[{heading, paragraphs}]}`).
 - **Decision carried from roadmap memory (`external-services-azure`):** OCR = Azure Document Intelligence
@@ -296,3 +300,16 @@ Add `openai` (the official Python SDK, current stable) to `backend/pyproject.tom
 7. The opt-in real-Azure-OpenAI smoke test exists and skips cleanly when unconfigured.
 8. All four static gates green; `core` stays pure (`SectionType` + `build_snippet` have no SDK import);
    full suite passes with NO live Azure OpenAI call (fake client only).
+
+## 8. Done-criteria audit (2026-07-17)
+
+| # | Criterion | Proven by |
+|---|---|---|
+| 1 | `SectionType` pure `StrEnum` (8 labels) + `build_snippet` | `tests/unit/test_semantic_core.py` |
+| 2 | `SemanticClient` protocol + `FakeSemanticClient` (records calls) | `tests/unit/test_semantic_client.py` |
+| 3 | `SemanticStage` (`deps=("ast",)`), coercion via `SectionType(label)` | `tests/integration/test_semantic_stage.py` |
+| 4 | Content-addressed on `derived_input_hash([ast.output_hash])`; 2nd run = cache hit, no 2nd LLM call | `tests/integration/test_semantic_stage.py::test_semantic_stage_runs_and_caches` (`fake_semantic.calls == 1` after two `run_stage` calls) |
+| 5 | `FDI_GPT_*` in Settings + compose + `.env.example`; stack boots unconfigured | `tests/unit/test_config.py::test_gpt_settings_default`; `backend/src/fdi/platform/config.py`; `docker/compose.yml`; `.env.example` |
+| 6 | `POST /documents/{id}/semantic` → 202; unknown id → 404 | `tests/integration/test_api.py::test_trigger_semantic_on_a_document`, `::test_trigger_semantic_unknown_document_is_404` |
+| 7 | Opt-in real-Azure-OpenAI smoke test skips cleanly unconfigured | `tests/azure/test_real_semantic.py` (skipped: "Azure OpenAI not configured") |
+| 8 | Static gates green; `core` pure; no live Azure OpenAI call in the suite | `ruff check .`, `mypy --strict src`, `PYTHONUTF8=1 lint-imports` (1 kept, 0 broken); full run `pytest -m "not e2e and not azure"` — 198 passed |
