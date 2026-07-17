@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-10, SP-17** — the last three landed in parallel via git worktrees. OCR enriched to `schema_version 3`; `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `QualityStage` validates the AST. **Next: SP-7d (linking: captions/footnotes/cross-refs)**; then SP-9 graph → SP-12 provenance, SP-11 ontology (consumes SP-10's `semantic` artifact), SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on). All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-9, SP-10, SP-17** — the last four landed in parallel via git worktrees. OCR enriched to `schema_version 3`; `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact; Neo4j loading deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `QualityStage` validates the AST. **Next: SP-7d (linking: captions/footnotes/cross-refs)**; then SP-12 provenance, SP-11 ontology (consumes SP-10's `semantic` artifact), SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on). A future sub-project must add the `graph` Compose profile (Neo4j container) and a loader projecting SP-9's JSON artifact (`{schema_version, nodes[{id,type,label}], edges[{source,target,type}]}`) into Neo4j, keyed by the same `id`s — no schema change anticipated. All measured via SP-3's harness.
 
 ### What SP-17 shipped that its follow-on (structure-aware quality) must know
 
@@ -170,7 +170,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ✅ done |
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
-| **SP-9** | Canonical Graph → Neo4j | 6 | medium | ⬜ |
+| **SP-9** | Canonical Graph → Neo4j | 6 | medium | ✅ done (JSON graph; Neo4j loading deferred) |
 | **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ⬜ |
 | **SP-12** | Provenance Graph | 9 | medium | ⬜ |
@@ -287,8 +287,10 @@ Every sub-project must honor these. They are cheap now and expensive to retrofit
 ## 6. Deployment Posture
 
 **Now:** local Docker Compose on a 19.8 GB / 4-core laptop, using Compose profiles so only the
-services a sub-project needs are running (`core` ≈ 5 GB; `graph` at SP-9; `vector` at SP-13).
-Volumes live on **F:** (202 GB free), never D: (29 GB free). Corpus: ~5–20 real reports.
+services a sub-project needs are running (`core` ≈ 5 GB; `graph` (Neo4j) deferred past SP-9 — the
+JSON graph artifact ships now, the Compose profile + loader land with the follow-on Neo4j
+sub-project; `vector` at SP-13). Volumes live on **F:** (202 GB free), never D: (29 GB free).
+Corpus: ~5–20 real reports.
 
 **Later:** the same images lift to cloud — managed Postgres, S3/Blob, hosted Neo4j, managed vector
 store, autoscaled workers. Expected around SP-13/SP-14, when the 5000-document run becomes real.
