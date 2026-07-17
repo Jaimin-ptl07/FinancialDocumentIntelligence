@@ -7,6 +7,9 @@ from fdi.pipeline.stages import (
     graph as graph,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    linking as linking,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     normalize as normalize,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import ocr as ocr  # noqa: F401 - import for its registration side effect

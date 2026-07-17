@@ -15,7 +15,8 @@ class OcrStage:
     # normalize_ocr's schema changes. version=2: SP-7a enriched the artifact with the
     # structural payload (bounding_regions, spans, cells, sections) as schema_version 2.
     # version=3: SP-7b added table spans (offset/length) as schema_version 3.
-    version = 3
+    # version=4: SP-7d added figures (caption + bounding_regions) as schema_version 4.
+    version = 4
     deps: tuple[str, ...] = ()
 
     async def run(self, ctx: StageContext) -> object:

@@ -1,12 +1,33 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-9, SP-10, SP-11, SP-17** — landed across two parallel git-worktree waves. OCR enriched to `schema_version 3`; `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact; Neo4j loading deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM; an LLM mapper is an SP-3 candidate); `QualityStage` validates the AST. **Next: SP-7d (linking: captions/footnotes/cross-refs)**; then SP-12 provenance, SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on). A future sub-project must add the `graph` Compose profile (Neo4j container) and a loader projecting SP-9's JSON artifact (`{schema_version, nodes[{id,type,label}], edges[{source,target,type}]}`) into Neo4j, keyed by the same `id`s — no schema change anticipated. All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-10, SP-11, SP-17** — landed across two parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, and figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures (with captions) and footnote paragraphs into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact; Neo4j loading deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM; an LLM mapper is an SP-3 candidate); `QualityStage` validates the AST. **Next: SP-12 provenance, SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on).** A future sub-project must add the `graph` Compose profile (Neo4j container) and a loader projecting SP-9's JSON artifact (`{schema_version, nodes[{id,type,label}], edges[{source,target,type}]}`) into Neo4j, keyed by the same `id`s — no schema change anticipated. All measured via SP-3's harness.
 
 ### What SP-17 shipped that its follow-on (structure-aware quality) must know
 
 - **A quality report** `{schema_version:1, issues[{severity,code,message}], error_count, warning_count, ok}` (`fdi.core.quality.validate`) at the `quality` artifact key is the internal-defect check — distinct from SP-3's ground-truth comparison (§1.1 of the spec). `ok = error_count == 0`; warnings never gate `ok`.
 - **`QualityStage` is a DERIVED stage** (`deps=("ast",)`), auto-scheduled after `ast` by the DAG (`successors("ast")` now includes `"quality"`), running `AST_VALIDATORS = (ast_has_sections, sections_have_content, title_present)` over the AST via `validate`. Chain `ocr → normalize → ast → quality` is automatic from a single `run_stage("ocr", ...)`.
 - **`tables_are_rectangular`** is written and unit-tested in `fdi.core.quality` now (operates on SP-7's structure artifact: a cell's `column_index >= column_count` is a torn table, `warning`), but deliberately NOT wired into `QualityStage` yet — no new API surface either (the report is read via the existing artifact-store path). The follow-on needs `QualityStage.deps = ("ast", "structure")` plus a decision on how the AST-level and structure-level issue lists merge into one report. Numeric-total reconciliation waits on SP-11 (ontology) + real numeric extraction; cross-document consistency waits on SP-16.
+
+### What SP-7d shipped that SP-9 (canonical graph) must know
+
+- **OCR enrichment now carries `figures`** (`fdi.core.ocr_schema.normalize_ocr`, `schema_version` 3→4):
+  each Azure `figures[]` entry → `{"caption": str, "bounding_regions": [...]}` (missing `caption` key or
+  missing `.content` → `""`). `OcrStage.version == 4` — this regenerated the OCR artifact (and, via the
+  version-stamp mechanism, its derived `normalize`/`ast`/`structure` artifacts) once, same pattern as every
+  prior 7-series bump.
+- **The `linking` artifact** `{schema_version:1, figures:[{caption}], footnotes:[{text}]}`
+  (`fdi.core.links.extract_links`, wired by `fdi.pipeline.stages.linking.LinkingStage`) sits at the
+  `linking` artifact key, a DERIVED stage (`deps=("ocr",)`) alongside `normalize`/`structure` — an
+  additional artifact off the same OCR root, auto-chained (`successors("ocr")` includes `"linking"`).
+  Figures come straight from Azure's own caption grouping; footnotes are paragraphs with
+  `role == "footnote"` — no spatial re-derivation or marker parsing in this slice.
+- **Deferred, each a MEASURED (SP-3) candidate, not built here:** cross-reference detection (resolving an
+  in-text marker like "see Note 5" to its target section/figure/footnote); footnote-marker →
+  referencing-paragraph linking (associating a footnote's number/symbol with the body paragraph(s) that cite
+  it); caption → nearest-figure spatial re-association beyond Azure's own `.caption` grouping (only worth
+  building once ground truth shows Azure's grouping fails often enough to matter). SP-9's canonical graph
+  should treat `linking`'s figures/footnotes as leaf nodes for now — cross-reference EDGES between them and
+  body content are a later addition once the resolver above exists.
 
 ### What SP-10 shipped that SP-11 must know
 
@@ -191,7 +212,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | 🔨 OCR enriched |
 | **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | 🔨 table stitching + header/footer done |
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ✅ done |
-| **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
+| **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ✅ done (captions + footnotes; cross-refs deferred) |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ✅ done (JSON graph; Neo4j loading deferred) |
 | **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
