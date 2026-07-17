@@ -1,6 +1,14 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-4 implemented on `feature/sp-1-project-setup`; SP-5 (OCR via Azure Document Intelligence) is next.
+- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-5 implemented on `feature/sp-1-project-setup`; SP-6 (Normalization) is next.
+
+### What SP-5 shipped that SP-6 must know
+
+- **The OCR artifact is a normalized subset** `{schema_version:1, content, pages[], paragraphs[{role,content}], tables[{row_count,column_count,cell_count}]}` (`fdi.core.ocr_schema.normalize_ocr`), stored at the content-addressed key for stage `ocr` — SP-6 (Normalization) consumes THIS, not Azure's wire format, so an Azure schema change is absorbed in `normalize_ocr` alone.
+- **`OcrStage` is a root stage** (`deps=()`, `version=1`) over the intake'd PDF. Its `version` encodes the DI model + api_version — bump it when `FDI_AZURE_DI_MODEL`/`FDI_AZURE_DI_API_VERSION` change (they define the output). Content-addressed on (PDF checksum + version); DI output is non-deterministic so it runs once and caches.
+- **The stage framework now has `StageContext.read_source()` (raw PDF) + `ctx.services["..."]`** (injected services bag). SP-6's NormalizeStage is a DERIVED stage: `deps=("ocr",)`, reads the OCR artifact via `ctx.read("ocr")`, needs no external service.
+- **OCR runs via `POST /documents/{id}/ocr`** → `run_stage(doc, "ocr")`. The `OcrClient` protocol (fake in tests, `AzureOcrClient` in prod) means SP-3's harness can measure `read` vs `layout` (or non-Azure) OCR candidates against ground truth.
+- **Azure config is `FDI_AZURE_DI_*`** (endpoint/key optional → stack boots without Azure; OCR then fails cleanly). Creds copied from the sibling `D:\FinancialDocIntelligence\.env`. Real DI is exercised only by the opt-in `@pytest.mark.azure` smoke test.
 
 ### What SP-4 shipped that SP-5 must know
 
@@ -107,7 +115,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-2** | The base — unified schema, artifact store, registry, **stage/DAG framework** | base | medium | ✅ done |
 | **SP-3** | Eval harness & ground truth | — | medium | ✅ done |
 | **SP-4** | Document Intake | 1 | light | ✅ done |
-| **SP-5** | OCR & Layout Extraction | 2 | medium | ⬜ |
+| **SP-5** | OCR & Layout Extraction | 2 | medium | ✅ done |
 | **SP-6** | Normalization | 3 | light | ⬜ |
 | **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | ⬜ |
 | **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | ⬜ |

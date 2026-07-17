@@ -1,6 +1,6 @@
 # SP-5 — OCR & Layout Extraction via Azure Document Intelligence
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. All §7 done criteria verified (unit + testcontainers with a FAKE DI client + static gates; full suite 162 passed, 4 skipped [e2e + the opt-in azure smoke test]; ruff / mypy --strict / lint-imports 1 kept 0 broken). NO live Azure call in the suite.
 - **Depends on:** SP-2 (stage framework), SP-4 (intake — provides the checksummed PDF at `documents/{checksum}.pdf`).
 - **Research:** `.../tasks/wud6997io.output` (deep-research 2026-07-17, 25 claims verified 3-0 from MS Learn + azure-sdk-for-python). Key facts in memory `external-services-azure` and roadmap §7.
 
