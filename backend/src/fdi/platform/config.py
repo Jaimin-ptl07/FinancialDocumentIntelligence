@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     azure_di_api_version: str = "2024-11-30"
     azure_di_polling_timeout_s: int = 600
 
+    # Azure OpenAI (GPT). Endpoint/key default to None so the stack boots without
+    # it configured; the semantic stage using them is wired separately. See
+    # docker/compose.yml x-backend-env and .env.example. Real values come from the
+    # sibling D:\FinancialDocIntelligence\.env (there named bare GPT_*), renamed
+    # on the way in: GPT_SUBSCRIPTION_KEY -> FDI_GPT_KEY, GPT_ENDPOINT ->
+    # FDI_GPT_ENDPOINT, GPT_DEPLOYMENT -> FDI_GPT_DEPLOYMENT, GPT_MODEL_NAME ->
+    # FDI_GPT_MODEL, GPT_API_VERSION -> FDI_GPT_API_VERSION.
+    gpt_endpoint: str | None = None
+    gpt_key: str | None = None
+    gpt_deployment: str = "gpt-4o"
+    gpt_model: str = "gpt-4o"
+    gpt_api_version: str = "2024-10-21"
+
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":
         """Fail loudly on a typo'd FDI_ variable.
