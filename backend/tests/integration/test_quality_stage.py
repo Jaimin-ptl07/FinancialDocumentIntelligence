@@ -1,6 +1,10 @@
-"""QualityStage auto-chains off AstStage: `quality` is a DERIVED stage
-(`deps=("ast",)`) that validates the naive AST for internal defects and emits a
-quality report, against real Postgres + MinIO with a FAKE OCR client."""
+# backend/tests/integration/test_quality_stage.py
+"""QualityStage auto-chains off AstStage AND StructureStage: `quality` is a
+DERIVED stage (`deps=("ast","structure")`) that validates the naive AST for
+internal defects AND the structure artifact's tables for shape defects,
+merging both into ONE report via `validate_all`. Against real Postgres +
+MinIO with a FAKE OCR client. (SP-17b: the pipeline's first
+two-dependency stage.)"""
 
 import uuid
 
@@ -18,6 +22,7 @@ from fdi.pipeline.stages.ast import AstStage
 from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
 from fdi.pipeline.stages.quality import QualityStage
+from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -37,7 +42,7 @@ async def store(minio_client: Minio) -> ArtifactStore:
     return s
 
 
-async def test_quality_chains_off_ast(session_factory, store) -> None:  # fixtures from conftest
+async def test_quality_chains_off_ast_and_structure(session_factory, store) -> None:
     doc = await intake_document(
         pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
         filename="a.pdf",
@@ -64,10 +69,12 @@ async def test_quality_chains_off_ast(session_factory, store) -> None:  # fixtur
     reg.register(OcrStage())
     reg.register(NormalizeStage())
     reg.register(AstStage())
+    reg.register(StructureStage())
     reg.register(QualityStage())
     resolver = DagResolver(reg.all())
 
     assert "quality" in resolver.successors("ast")  # the chain is automatic
+    assert "quality" in resolver.successors("structure")  # NEW: second dep also schedules quality
 
     common = {
         "doc_id": doc.id,
@@ -80,13 +87,15 @@ async def test_quality_chains_off_ast(session_factory, store) -> None:  # fixtur
     await run_stage(stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake}, **common)
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     quality_key = artifact_key(
-        doc.id, "quality", 1, derived_input_hash([facts["ast"].output_hash])
+        doc.id, "quality", 2,
+        derived_input_hash([facts["ast"].output_hash, facts["structure"].output_hash]),
     )
     body = await store.get_json(quality_key)
     assert body == {
@@ -98,7 +107,9 @@ async def test_quality_chains_off_ast(session_factory, store) -> None:  # fixtur
     }
 
 
-async def test_quality_reports_defects_on_a_sparse_document(session_factory, store) -> None:
+async def test_quality_merges_ast_and_structure_defects_into_one_report(
+    session_factory, store
+) -> None:
     doc = await intake_document(
         pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
         filename="b.pdf",
@@ -109,12 +120,30 @@ async def test_quality_reports_defects_on_a_sparse_document(session_factory, sto
     )
 
     # No title, no heading, no paragraphs -> normalize/ast produce an empty AST.
-    fake = FakeOcrClient({"content": "", "pages": [], "paragraphs": [], "tables": []})
+    # ONE table whose second cell's column_index (2) >= its column_count (2) -> a torn grid.
+    fake = FakeOcrClient(
+        {
+            "content": "",
+            "pages": [],
+            "paragraphs": [],
+            "tables": [
+                {
+                    "rowCount": 1,
+                    "columnCount": 2,
+                    "cells": [
+                        {"rowIndex": 0, "columnIndex": 0, "content": "Q1"},
+                        {"rowIndex": 0, "columnIndex": 2, "content": "Q2"},
+                    ],
+                },
+            ],
+        }
+    )
 
     reg = StageRegistry()
     reg.register(OcrStage())
     reg.register(NormalizeStage())
     reg.register(AstStage())
+    reg.register(StructureStage())
     reg.register(QualityStage())
     resolver = DagResolver(reg.all())
 
@@ -129,16 +158,20 @@ async def test_quality_reports_defects_on_a_sparse_document(session_factory, sto
     await run_stage(stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake}, **common)
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     quality_key = artifact_key(
-        doc.id, "quality", 1, derived_input_hash([facts["ast"].output_hash])
+        doc.id, "quality", 2,
+        derived_input_hash([facts["ast"].output_hash, facts["structure"].output_hash]),
     )
     body = await store.get_json(quality_key)
+
+    codes = [issue["code"] for issue in body["issues"]]
+    assert codes == ["ast.no_sections", "ast.missing_title", "structure.torn_table"]
+    assert body["error_count"] == 1  # only ast.no_sections is an error
+    assert body["warning_count"] == 2  # ast.missing_title + structure.torn_table
     assert body["ok"] is False
-    assert body["error_count"] == 1
-    codes = {issue["code"] for issue in body["issues"]}
-    assert "ast.no_sections" in codes
