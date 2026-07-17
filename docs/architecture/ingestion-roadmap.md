@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-10, SP-11, SP-12, SP-17, SP-17b** — landed across three parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, and figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures (with captions) and footnote paragraphs into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact; Neo4j loading deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM; an LLM mapper is an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure artifact's tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins the graph's nodes to OCR page/geometry (SP-12) — `QualityStage` and `ProvenanceStage` are the pipeline's first two-dependency stages. **Next: SP-13 embeddings → SP-14 indexes, SP-15–SP-16.** A future sub-project must add the `graph` Compose profile (Neo4j container) and a loader projecting SP-9's JSON artifact (`{schema_version, nodes[{id,type,label}], edges[{source,target,type}]}`) into Neo4j, keyed by the same `id`s — no schema change anticipated. All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-9b, SP-10, SP-11, SP-12, SP-17, SP-17b** — landed across three parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, and figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures (with captions) and footnote paragraphs into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact); `GraphLoadStage` (`deps=("graph",)`, SP-9b) projects that JSON graph into a real Neo4j instance via an injected `GraphStore` (idempotent Cypher `MERGE`, `FakeGraphStore` in the default suite, `Neo4jGraphStore` in prod, the `graph` Compose profile now wired end to end with a healthcheck) — Neo4j loading is no longer deferred; `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM; an LLM mapper is an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure artifact's tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins the graph's nodes to OCR page/geometry (SP-12) — `QualityStage` and `ProvenanceStage` are the pipeline's first two-dependency stages. **Next: SP-13 embeddings → SP-14 indexes, SP-15–SP-16.** A future sub-project should build a read/query API over the now-populated Neo4j graph (deferred by SP-9b, roadmap phase 11/SP-14 territory) — no schema change anticipated. All measured via SP-3's harness.
 
 ### What SP-12 shipped that its follow-ons (span-offset join, richer node types) must know
 
@@ -38,6 +38,60 @@
   first in code, so that claim in SP-17b's spec should be corrected post-hoc when SP-17b is implemented
   (SP-17b would be the *second* two-dependency stage, not the first) — not treated as a contradiction to
   resolve now.
+
+### What SP-9b shipped that a future read/query API and SP-16 must know
+
+- **`GraphLoadStage`** (`fdi.pipeline.stages.graphload`, `name="graph_load"`, `version=1`,
+  `deps=("graph",)`) projects the SP-9 graph JSON artifact into a real Neo4j graph database via an
+  injected `GraphStore` protocol (`fdi.pipeline.graphstore`) — a `FakeGraphStore` proves the stage in
+  the default suite (no live Neo4j anywhere in it); `Neo4jGraphStore` (`fdi.platform.graphstore`, wraps
+  the official `neo4j` driver) is the production implementation, wired into the worker
+  (`_run_stage_async`) exactly like `AzureOcrClient`/`AzureOpenAIClient`. The stored artifact is a small
+  deterministic receipt (`{schema_version:1, loaded_nodes, loaded_edges}`) — Neo4j itself is the side
+  effect and the actual point, mirroring SP-9's own "JSON artifact is the source of truth" call one
+  level down. `POST /documents/{id}/graph_load` dispatches it (202; 404 unknown doc), mirroring SP-5's
+  OCR trigger and SP-10's semantic trigger.
+- **The write is idempotent `MERGE`, not `CREATE`**: one `MERGE (n:Node {id: $id})` per node, one
+  `MATCH ... MERGE (a)-[r:REL {type: $type}]->(b)` per edge, all inside one `session.execute_write`
+  transaction — the SP-9 `type` (`"document"`/`"section"`/`"paragraph"`, `"CONTAINS"`/
+  `"READING_ORDER"`) is carried as a property on a single generic `:Node` label / `:REL` relationship
+  type, not as a dynamic Cypher label (labels/rel-types cannot be parameter-bound in Neo4j; a dynamic
+  label would need string-interpolated Cypher, an injection surface this slice avoids).
+- **A cache hit on `graph_load` does NOT re-run the Neo4j write** — SP-2's generic content-addressed
+  derived-stage caching (`derived_input_hash([graph.output_hash])` + `GraphLoadStage.version`) means a
+  second dispatch against an unchanged `graph` artifact finds the receipt already stored and skips
+  `GraphStore.load` entirely (proved by `fake_store.calls == 1` after two runs in
+  `test_graphload_stage.py`). If an operator wipes Neo4j and wants to reload, re-running `graph_load` on
+  the SAME document is a no-op — **bump `GraphLoadStage.version`** to force every document's
+  `graph_load` to regenerate (and thus re-`MERGE`) against whatever Neo4j instance is currently live.
+  Because `load` is idempotent, re-running against the same live instance once the bump fires is always
+  safe.
+- **Node ids are only unique PER-DOCUMENT** — SP-9's positional ids (`s0`, `s0p0`, ...) collide across
+  documents by design, so loading two different documents into the same Neo4j instance silently aliases
+  their `s0` nodes onto each other today. Real, known, flagged explicitly (not swept under "later"):
+  cross-document graph merging / entity resolution is **SP-16's job**, not this loader's — any consumer
+  loading a multi-document corpus into one Neo4j instance before SP-16 lands should expect this
+  collision.
+- **The `graph` Compose profile is now wired, not just provisioned**: the `neo4j` service's
+  `NEO4J_AUTH` derives from `FDI_NEO4J_USER`/`FDI_NEO4J_PASSWORD` (one source of truth with the app's
+  own connection settings, no more hardcoded credential coincidentally agreeing with Settings) and it
+  gained a `cypher-shell`-based healthcheck. **Real defect found and fixed during the Task 6 manual
+  smoke check** (`docker compose --profile graph up neo4j`, `docker inspect .State.Health`): a
+  healthcheck that expands `$${FDI_NEO4J_USER}`/`$${FDI_NEO4J_PASSWORD}` inside the container needs
+  those two vars ALSO present in the `neo4j` service's own `environment:` block (Neo4j's `NEO4J_AUTH`
+  alone is not itself a shell-visible variable to split on `/`) — without the fix the container ran
+  Neo4j successfully but the healthcheck itself failed every attempt (`cypher-shell: error: argument
+  -u/--username: expected one argument`) and the container never reported `healthy`. Fixed by
+  re-exposing `FDI_NEO4J_USER`/`FDI_NEO4J_PASSWORD` in that block, the same pattern `postgres`'s
+  healthcheck already used for `POSTGRES_USER`/`POSTGRES_PASSWORD`. Verified healthy end to end
+  post-fix.
+- **Deferred, each a later sub-project, not built here:** a read/query API over the loaded graph
+  (Cypher-backed search/traversal — roadmap phase 11, SP-14 territory, once a retrieval use case
+  exists); loading SP-12's provenance (page/geometry) or SP-10/SP-11's semantic/ontology properties onto
+  the Neo4j nodes as a follow-on enrichment pass; cross-reference edges from SP-7d's `linking` artifact
+  (nothing to project until they exist upstream as graph edges); `UNWIND`-based batched `MERGE` for
+  very large graphs (deferred until corpus-scale ingestion, SP-13/14, makes per-row round-trips
+  measurably slow).
 
 ### What SP-17b shipped that the next quality follow-on must know
 
@@ -251,7 +305,8 @@ Each row is one spec → plan → implement cycle.
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ✅ done |
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ✅ done (captions + footnotes; cross-refs deferred) |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
-| **SP-9** | Canonical Graph → Neo4j | 6 | medium | ✅ done (JSON graph; Neo4j loading deferred) |
+| **SP-9** | Canonical Graph → Neo4j | 6 | medium | ✅ done (JSON graph) |
+| **SP-9b** | Neo4j Graph Loader (SP-9 follow-on) | 6 | medium | ✅ done |
 | **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ✅ done (thin) |
 | **SP-12** | Provenance Graph | 9 | medium | ✅ done (thin: document/section/paragraph nodes; table-cell/figure/footnote + edge provenance deferred) |
