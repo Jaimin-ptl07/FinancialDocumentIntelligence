@@ -126,6 +126,7 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
                     "column_count": table.get("columnCount"),
                     "bounding_regions": _normalize_bounding_regions(table.get("boundingRegions")),
                     "cells": cells_data,
+                    "spans": _normalize_spans(table.get("spans")),
                 }
                 tables_data.append(table_dict)
 
@@ -141,7 +142,7 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
 
     # Build result
     result: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "content": content,
         "pages": pages_data,
         "paragraphs": paragraphs_data,

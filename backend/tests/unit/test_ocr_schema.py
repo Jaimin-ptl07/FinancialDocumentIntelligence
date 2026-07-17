@@ -21,14 +21,15 @@ _RAW = {
                     {"pageNumber": 1, "polygon": [1.0, 1.0, 2.0, 1.0, 2.0, 1.5, 1.0, 1.5]}
                 ],
                 "cells": [{"rowIndex": 0, "columnIndex": 0, "rowSpan": 1, "columnSpan": 2,
-                           "kind": "columnHeader", "content": "Year ended 31 March"}]}],
+                           "kind": "columnHeader", "content": "Year ended 31 March"}],
+                "spans": [{"offset": 40, "length": 25}]}],
     "sections": [{"elements": ["/paragraphs/0", "/sections/1"]}],
 }
 
 
 def test_normalize_preserves_structural_payload() -> None:
     out = normalize_ocr(_RAW)
-    assert out["schema_version"] == 2
+    assert out["schema_version"] == 3
     assert out["content"].startswith("ACME LTD")
     assert out["paragraphs"][0] == {
         "role": "title", "content": "ACME LTD",
@@ -43,12 +44,13 @@ def test_normalize_preserves_structural_payload() -> None:
         "kind": "columnHeader", "content": "Year ended 31 March",
     }
     assert out["tables"][0]["bounding_regions"][0]["page_number"] == 1
+    assert out["tables"][0]["spans"] == [{"offset": 40, "length": 25}]
     assert out["sections"] == [{"elements": ["/paragraphs/0", "/sections/1"]}]
 
 
 def test_empty_structure_is_empty_lists() -> None:
     out = normalize_ocr({"content": "x"})
-    assert out["schema_version"] == 2
+    assert out["schema_version"] == 3
     assert out["paragraphs"] == []
     assert out["tables"] == []
     assert out["sections"] == []

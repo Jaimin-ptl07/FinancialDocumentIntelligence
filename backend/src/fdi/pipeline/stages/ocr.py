@@ -14,7 +14,8 @@ class OcrStage:
     # BUMP when FDI_AZURE_DI_MODEL or api_version changes (they define the output), or when
     # normalize_ocr's schema changes. version=2: SP-7a enriched the artifact with the
     # structural payload (bounding_regions, spans, cells, sections) as schema_version 2.
-    version = 2
+    # version=3: SP-7b added table spans (offset/length) as schema_version 3.
+    version = 3
     deps: tuple[str, ...] = ()
 
     async def run(self, ctx: StageContext) -> object:
