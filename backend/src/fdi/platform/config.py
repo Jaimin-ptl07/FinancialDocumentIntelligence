@@ -61,6 +61,20 @@ class Settings(BaseSettings):
     gpt_model: str = "gpt-4o"
     gpt_api_version: str = "2024-10-21"
 
+    # Azure OpenAI embeddings. Endpoint/key default to None so the stack boots
+    # without it configured; the embedding stage using them is wired separately.
+    # See docker/compose.yml x-backend-env and .env.example. Unlike azure_di_*/
+    # gpt_*, there is no pre-existing bare-named source in the sibling .env for
+    # these -- an operator provisioning a real embeddings deployment sets these
+    # directly here. embed_dim is passed to the SDK call as `dimensions=`
+    # (text-embedding-3-* models only); it must match a dimension the deployed
+    # model actually supports.
+    embed_endpoint: str | None = None
+    embed_key: str | None = None
+    embed_deployment: str = "text-embedding-3-small"
+    embed_api_version: str = "2024-10-21"
+    embed_dim: int = 1536
+
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":
         """Fail loudly on a typo'd FDI_ variable.
