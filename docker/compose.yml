@@ -42,6 +42,8 @@ x-backend-env: &backend-env
   FDI_NEO4J_URI: ${FDI_NEO4J_URI}
   FDI_NEO4J_USER: ${FDI_NEO4J_USER}
   FDI_NEO4J_PASSWORD: ${FDI_NEO4J_PASSWORD}
+  FDI_MILVUS_URI: ${FDI_MILVUS_URI}
+  FDI_MILVUS_COLLECTION: ${FDI_MILVUS_COLLECTION}
 
 x-backend-build: &backend-build
   build:

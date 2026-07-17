@@ -85,6 +85,20 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str | None = None
 
+    # Milvus (vector index, SP-14). URI defaults to None so the stack boots
+    # without Milvus configured (the `vector` Compose profile is opt-in, never
+    # part of `core`); the index stage and the /search route using it are wired
+    # separately. See docker/compose.yml x-backend-env and .env.example. Like
+    # FDI_NEO4J_* (self-hosted via Compose), .env.example ships a REAL working
+    # value here -- but unlike Neo4j, Milvus standalone has no bootstrap
+    # credential of its own to keep in sync, so there is no auth pairing to get
+    # wrong. Dimension is deliberately NOT a separate Milvus-specific field: the
+    # collection is created with FDI_EMBED_DIM (SP-13) -- the same
+    # dimensionality the embedder actually produces -- so a second,
+    # independently-set "Milvus dim" can never silently disagree with it.
+    milvus_uri: str | None = None
+    milvus_collection: str = "fdi_sections"
+
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":
         """Fail loudly on a typo'd FDI_ variable.
