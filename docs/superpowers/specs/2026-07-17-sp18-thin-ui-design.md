@@ -1,6 +1,6 @@
 # SP-18 — Thin UI (document journey)
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. Backend endpoints verified (testcontainers; full suite 179 passed, 4 skipped; ruff / mypy --strict / lint-imports 1 kept 0 broken); frontend `page.tsx` builds + lints clean. Live browser round-trip DEFERRED (needs the api/worker image rebuilt — ghcr unreachable — plus Azure creds + a running worker), per §2 decision 3.
 - **Depends on:** SP-1 (Next.js shell + CORS), SP-4 (intake), SP-5 (OCR trigger), SP-6/8 (normalize/ast artifacts).
 - **Roadmap:** build order §4 — SP-18 (thin UI) completes the demoable Stage-1 spine.
 

@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-6 + SP-8 (naive AST) implemented on `feature/sp-1-project-setup`. The ingestion spine now runs `intake → ocr → normalize → ast`. Per the §4 build order, **SP-18 (thin UI) is next** to complete the demoable Stage-1 spine; then Stage 2 opens with SP-7 (Structural Intelligence — the heavy tier) + its own deep-research pass.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** — SP-1–SP-6, SP-8 (naive AST), SP-18 (thin UI) implemented on `feature/sp-1-project-setup`. The demoable spine runs `upload → ocr → normalize → ast` with a browser UI. **Stage 2 is next: SP-7 (Structural Intelligence — the heavy tier), which gets its own deep-research pass** (reading-order + table-structure algorithms for Indian annual reports), enriches the OCR artifact (words/cells/bboxes → bump `OcrStage.version`), and deepens the AST — candidates measured via SP-3's harness. Then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
 
 ### What SP-8 shipped that SP-18 / SP-7 must know
 
@@ -143,7 +143,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-15** | Knowledge Store consolidation | 12 | light | ⬜ |
 | **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ⬜ |
 | **SP-17** | Quality validation framework | enterprise | medium | ⬜ |
-| **SP-18** | Next.js frontend | — | light | ⬜ |
+| **SP-18** | Next.js frontend | — | light | ✅ done (thin) |
 
 ### What SP-1 shipped that SP-2 must know
 
