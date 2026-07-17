@@ -25,6 +25,7 @@ dependencies = [
     "azure-ai-documentintelligence>=1.0.2",
     "openai>=2.46.0",
     "neo4j>=5.26",
+    "pymilvus>=2.6",
 ]
 
 [dependency-groups]
