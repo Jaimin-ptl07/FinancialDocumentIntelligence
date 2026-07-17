@@ -34,6 +34,11 @@ class OcrTriggerView(BaseModel):
     stage: str
 
 
+class SemanticTriggerView(BaseModel):
+    doc_id: str
+    stage: str
+
+
 class EvalRequest(BaseModel):
     candidate: str
     dataset: str
