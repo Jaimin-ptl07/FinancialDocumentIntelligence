@@ -1,6 +1,6 @@
 # SP-11 — Ontology Mapping (dictionary-based)
 
-- **Status:** Draft 2026-07-17.
+- **Status:** Implemented 2026-07-17.
 - **Depends on:** SP-8 (Document AST — `{schema_version, title, sections:[{heading, paragraphs}]}`), SP-10
   (Semantic Intelligence — `{schema_version, sections:[{heading, type, paragraph_count}]}`; consumed
   conceptually, not read by the thin slice — see §2.4).
