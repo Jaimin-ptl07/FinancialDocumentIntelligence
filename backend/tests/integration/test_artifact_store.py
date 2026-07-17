@@ -191,6 +191,12 @@ async def test_exists_reflects_presence(store: ArtifactStore) -> None:
     assert await store.exists(key) is True
 
 
+async def test_put_and_get_bytes(store: ArtifactStore) -> None:
+    key = await store.put_bytes("documents/deadbeef.pdf", b"%PDF-1.7 ...", "application/pdf")
+    assert key == "documents/deadbeef.pdf"
+    assert await store.get_bytes("documents/deadbeef.pdf") == b"%PDF-1.7 ..."
+
+
 # There is deliberately NO test that `get_raw`'s `finally: close(); release_conn()`
 # prevents a connection leak, because on this code path it provably does not do
 # anything -- and a green test claiming otherwise would be worse than no test.

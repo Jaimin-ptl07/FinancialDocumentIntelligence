@@ -49,6 +49,20 @@ class ArtifactStore:
         )
         return key
 
+    async def put_bytes(self, key: str, data: bytes, content_type: str) -> str:
+        await asyncio.to_thread(
+            self._client.put_object,
+            self._bucket,
+            key,
+            io.BytesIO(data),
+            len(data),
+            content_type=content_type,
+        )
+        return key
+
+    async def get_bytes(self, key: str) -> bytes:
+        return await self.get_raw(key)
+
     async def get_raw(self, key: str) -> bytes:
         def _get() -> bytes:
             # get_object OUTSIDE the try: it can raise, and `response` would then be
