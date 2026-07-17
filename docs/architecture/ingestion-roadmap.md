@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-10, SP-17** — the last three landed in parallel via git worktrees. OCR enriched to `schema_version 3`; `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `QualityStage` validates the AST. **Next: SP-7d (linking: captions/footnotes/cross-refs)**; then SP-9 graph → SP-12 provenance, SP-11 ontology (consumes SP-10's `semantic` artifact), SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on). All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-10, SP-11, SP-17** — landed in parallel via git worktrees. OCR enriched to `schema_version 3`; `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps AST headings/paragraphs onto 10 `CanonicalConcept`s via a pure dictionary lookup (deterministic, no LLM); `QualityStage` validates the AST. **Next: SP-7d (linking: captions/footnotes/cross-refs)**; then SP-9 graph → SP-12 provenance, SP-13 embeddings → SP-14 indexes, SP-15–SP-16, and structure-aware quality (SP-17 follow-on). All measured via SP-3's harness.
 
 ### What SP-17 shipped that its follow-on (structure-aware quality) must know
 
@@ -37,6 +37,29 @@
   `AzureOpenAIClient`'s unit test monkeypatches `fdi.platform.semantic.AzureOpenAI`; the real deployment is
   exercised only by the opt-in `tests/azure/test_real_semantic.py` (`@pytest.mark.azure`, skipped unless
   `FDI_GPT_ENDPOINT`/`FDI_GPT_KEY` are set).
+
+### What SP-11 shipped that SP-9 / SP-16 must know
+
+- **The mappings artifact** `{schema_version:1, mappings:[{label, concept}]}` (`fdi.core.ontology.map_document`)
+  at the `ontology` artifact key is the canonical-concept contract — `concept` is one of 10
+  `fdi.core.ontology.CanonicalConcept` values (`REVENUE`, `COST_OF_GOODS_SOLD`, `GROSS_PROFIT`,
+  `OPERATING_EXPENSE`, `NET_PROFIT`, `TOTAL_ASSETS`, `TOTAL_LIABILITIES`, `EQUITY`, `CASH`, `UNKNOWN`).
+  `map_label(label) -> CanonicalConcept` is a pure, total, dictionary-based classifier (normalize →
+  synonym lookup → `UNKNOWN` if unrecognized); never raises.
+- **`OntologyStage` is a DERIVED stage** (`deps=("ast",)`), auto-scheduled after `ast` by the DAG
+  (`"ontology" in successors("ast")` alongside `"quality"` and `"semantic"`); content-addressed on
+  `derived_input_hash([ast.output_hash])` + `OntologyStage.version` — a real, unconditional determinism
+  property (no LLM, no wall-clock, no RNG), unlike SP-10's semantic stage which had to special-case
+  non-determinism. The full chain `intake → ocr → normalize → ast → {quality, semantic, ontology}` is
+  automatic from a single `run_stage("ocr", ...)`.
+- **Dictionary-based, thin slice — no LLM.** This slice maps every section heading AND every paragraph as
+  a whole string, keeping non-`UNKNOWN` results; a real OCR line item like `"Revenue  12,345"` won't match
+  (the trailing number breaks the exact lookup) — only bare labels map today. **SP-9 (Canonical Graph)**
+  and **SP-16 (cross-document layer)** should consume `CanonicalConcept` as the comparison key across
+  documents/sections instead of raw label text. Concrete follow-ons for the next iteration: an LLM-based
+  mapper is a candidate for SP-3's harness once a label→concept ground-truth dataset exists; scoping
+  mappings by `SectionType` (widen `deps` to `("ast", "semantic")`) and numeric-value extraction (feeding
+  SP-17's numeric-total quality checks) are the two concrete accuracy/coverage follow-ons.
 
 ### What SP-8 shipped that SP-18 / SP-7 must know
 
@@ -172,7 +195,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ⬜ |
 | **SP-10** | Semantic Intelligence | 7 | **heavy** | ✅ done |
-| **SP-11** | Ontology Mapping | 8 | **heavy** | ⬜ |
+| **SP-11** | Ontology Mapping | 8 | **heavy** | ✅ done (thin) |
 | **SP-12** | Provenance Graph | 9 | medium | ⬜ |
 | **SP-13** | Embeddings → Milvus | 10 | **heavy** | ⬜ |
 | **SP-14** | Retrieval Indexes | 11 | **heavy** | ⬜ |
