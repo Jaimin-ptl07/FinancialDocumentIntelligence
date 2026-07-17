@@ -1,6 +1,6 @@
 # SP-9 — Canonical Structure Graph (JSON, Neo4j loading deferred)
 
-- **Status:** Draft 2026-07-17 — spec + TDD plan only, not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-9-graph` (worktree `D:\fdi-wt\sp9`). All §7 done criteria verified (unit + testcontainers + static gates; full non-e2e/non-azure suite 229 passed, 5 deselected; ruff / mypy --strict / lint-imports 1 kept 0 broken).
 - **Depends on:** SP-8 (the AST artifact, `fdi.core.ast.build_ast` →
   `{schema_version, title, sections:[{heading, paragraphs:[str]}]}`), SP-2 (stage/DAG framework).
 - **Roadmap:** `docs/architecture/ingestion-roadmap.md` §3 table — SP-9 "Canonical Graph → Neo4j",
