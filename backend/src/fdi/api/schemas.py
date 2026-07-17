@@ -39,6 +39,11 @@ class SemanticTriggerView(BaseModel):
     stage: str
 
 
+class GraphLoadTriggerView(BaseModel):
+    doc_id: str
+    stage: str
+
+
 class EvalRequest(BaseModel):
     candidate: str
     dataset: str
