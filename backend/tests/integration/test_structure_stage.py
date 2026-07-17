@@ -72,7 +72,20 @@ async def test_structure_stitches_and_filters(  # fixtures from conftest
                     "columnCount": 3,
                     "spans": [{"offset": 9, "length": 10}],
                     "boundingRegions": [{"pageNumber": 1, "polygon": []}],
-                    "cells": [],
+                    "cells": [
+                        {
+                            "rowIndex": 0, "columnIndex": 0,
+                            "kind": "columnHeader", "content": "Year",
+                        },
+                        {
+                            "rowIndex": 0, "columnIndex": 1,
+                            "kind": "columnHeader", "content": "Q1",
+                        },
+                        {
+                            "rowIndex": 0, "columnIndex": 2,
+                            "kind": "columnHeader", "content": "Q2",
+                        },
+                    ],
                 },
                 {
                     "rowCount": 3,
@@ -108,8 +121,13 @@ async def test_structure_stitches_and_filters(  # fixtures from conftest
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     structure_key = artifact_key(
-        doc.id, "structure", 1, derived_input_hash([facts["ocr"].output_hash])
+        doc.id, "structure", 2, derived_input_hash([facts["ocr"].output_hash])
     )
     body = await store.get_json(structure_key)
     assert len(body["tables"]) == 1 and body["tables"][0]["row_count"] == 5  # 2-page table stitched
     assert [b["role"] for b in body["blocks"]] == ["title"]  # footer removed
+
+    grid = body["tables"][0]["grid"]
+    assert grid["n_rows"] == 5 and grid["n_cols"] == 3
+    assert grid["header_row_count"] == 1
+    assert grid["column_headers"] == ["Year", "Q1", "Q2"]
