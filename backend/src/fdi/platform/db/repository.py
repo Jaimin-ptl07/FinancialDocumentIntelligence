@@ -82,6 +82,20 @@ class RegistryRepository:
             )
         ).scalars().first()
 
+    async def latest_runs(self, doc_id: str) -> dict[str, StageRun]:
+        """The latest `stage_run` per `stage_name` for this document, any status."""
+        rows = (
+            await self._s.execute(
+                sqlalchemy.select(StageRun)
+                .where(StageRun.doc_id == doc_id)
+                .order_by(StageRun.created_at)
+            )
+        ).scalars().all()
+        latest: dict[str, StageRun] = {}
+        for r in rows:  # later row (by created_at) wins per stage_name
+            latest[r.stage_name] = r
+        return latest
+
 
 class EvalRepository:
     """Eval run + case_result persistence. The caller owns the transaction."""

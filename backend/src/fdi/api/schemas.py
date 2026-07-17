@@ -68,3 +68,13 @@ class DocumentView(BaseModel):
 
 class DocumentVersionsView(BaseModel):
     versions: list[DocumentView]
+
+
+class StageStatusView(BaseModel):
+    name: str
+    status: str
+    error: str | None = None
+
+
+class StagesView(BaseModel):
+    stages: list[StageStatusView]

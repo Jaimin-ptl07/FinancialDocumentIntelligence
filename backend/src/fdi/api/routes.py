@@ -29,6 +29,8 @@ from fdi.api.schemas import (
     OcrTriggerView,
     ReadyView,
     ReprocessView,
+    StageStatusView,
+    StagesView,
     StaleView,
 )
 from fdi.pipeline.eval_service import run_evaluation
@@ -310,3 +312,33 @@ async def trigger_ocr(
         raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
     dispatcher.dispatch(doc_id, "ocr", correlation_id)
     return OcrTriggerView(doc_id=doc_id, stage="ocr")
+
+
+# --------------------------------------------------------------------------
+# Task 1 (SP-18): per-document stage status + artifact-body proxy.
+# --------------------------------------------------------------------------
+
+
+@router.get("/documents/{doc_id}/stages", response_model=StagesView)
+async def document_stages(doc_id: str, session: SessionDep) -> StagesView:
+    repo = RegistryRepository(session)
+    if await repo.get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    runs = await repo.latest_runs(doc_id)
+    return StagesView(
+        stages=[
+            StageStatusView(name=name, status=run.status, error=run.error)
+            for name, run in sorted(runs.items())
+        ]
+    )
+
+
+@router.get("/documents/{doc_id}/artifacts/{stage}")
+async def document_artifact(
+    doc_id: str, stage: str, session: SessionDep, store: StoreDep
+) -> dict[str, object]:
+    run = await RegistryRepository(session).latest_run(doc_id, stage)
+    if run is None or run.artifact_key is None:
+        raise HTTPException(status_code=404, detail=f"no {stage} artifact for document {doc_id}")
+    body = await store.get_json(run.artifact_key)
+    return dict(body)

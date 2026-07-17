@@ -85,6 +85,26 @@ def session_factory(migrated_engine):
     return make_session_factory(migrated_engine)
 
 
+@pytest.fixture
+async def store(minio_client):
+    """Bucket `"artifacts"` -- the same bucket `make_client`'s app opens by
+    default (Global Constraint: `make_client` never sets `FDI_S3_BUCKET`).
+
+    `test_eval_endpoint_runs_and_ranks` above hit this exact pitfall with the
+    OTHER convention (`ArtifactStore(minio_client, bucket="test-artifacts")`
+    used by every other integration test file's `store` fixture): seeding
+    through that bucket is invisible to this file's `client`, which reads
+    through `settings.s3_bucket`'s default. This fixture targets the app's
+    bucket directly instead, so `store.put_json` here and the app's
+    `document_artifact` route see the same object.
+    """
+    from fdi.platform.storage.artifact_store import ArtifactStore
+
+    s = ArtifactStore(minio_client, bucket="artifacts")
+    await s.ensure_bucket()
+    return s
+
+
 # --------------------------------------------------------------------------
 # The plan's five.
 # --------------------------------------------------------------------------
@@ -587,3 +607,48 @@ async def test_trigger_ocr_unknown_document_is_404(
 ) -> None:
     r = await client.post("/documents/00000000-0000-0000-0000-000000000000/ocr")
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Task 1 (SP-18): GET /documents/{id}/stages + GET /documents/{id}/artifacts/{stage}
+# --------------------------------------------------------------------------
+
+
+async def test_stages_and_artifact_proxy(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.platform.db.repository import DocumentRepository, RegistryRepository
+
+    doc = str(uuid.uuid4())
+    checksum = str(uuid.uuid4())
+    async with session_factory() as s:
+        await DocumentRepository(s).create(
+            id=doc,
+            checksum=checksum,
+            filename="a.pdf",
+            byte_size=3,
+            content_type="application/pdf",
+            doc_key=doc,
+            version=1,
+        )
+        await s.commit()
+
+    # an OCR run that finished with an artifact, and a queued normalize run
+    await store.put_json(f"artifacts/{doc}/ocr/v1/x.json", {"content": "ACME", "schema_version": 1})
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        r1 = str(uuid.uuid4())
+        await repo.start_run(r1, doc, "ocr", 1, "ih", None)
+        await repo.finish_run(r1, output_hash="oh", artifact_key=f"artifacts/{doc}/ocr/v1/x.json")
+        await repo.start_run(str(uuid.uuid4()), doc, "normalize", 1, "ih2", None)  # left running
+        await s.commit()
+
+    stages = (await client.get(f"/documents/{doc}/stages")).json()["stages"]
+    by = {st["name"]: st["status"] for st in stages}
+    assert by["ocr"] == "done" and by["normalize"] == "running"
+
+    art = await client.get(f"/documents/{doc}/artifacts/ocr")
+    assert art.status_code == 200 and art.json() == {"content": "ACME", "schema_version": 1}
+
+    assert (await client.get(f"/documents/{doc}/artifacts/normalize")).status_code == 404
+    assert (await client.get("/documents/nope/stages")).status_code == 404
