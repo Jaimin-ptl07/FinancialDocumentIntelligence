@@ -20,6 +20,7 @@ from fdi.api.deps import (
 from fdi.api.schemas import (
     DocumentVersionsView,
     DocumentView,
+    EmbeddingTriggerView,
     EvalAccepted,
     EvalRequest,
     JobAccepted,
@@ -327,6 +328,20 @@ async def trigger_semantic(
         raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
     dispatcher.dispatch(doc_id, "semantic", correlation_id)
     return SemanticTriggerView(doc_id=doc_id, stage="semantic")
+
+
+@router.post(
+    "/documents/{doc_id}/embedding",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=EmbeddingTriggerView,
+)
+async def trigger_embedding(
+    doc_id: str, session: SessionDep, correlation_id: CorrelationIdDep, dispatcher: DispatcherDep
+) -> EmbeddingTriggerView:
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    dispatcher.dispatch(doc_id, "embedding", correlation_id)
+    return EmbeddingTriggerView(doc_id=doc_id, stage="embedding")
 
 
 # --------------------------------------------------------------------------
