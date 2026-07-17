@@ -70,7 +70,7 @@ async def test_ocr_stage_runs_and_caches(session_factory, store) -> None:  # fix
 
     assert fake.calls == 1, "cache hit must NOT call Azure DI a second time"
 
-    key = artifact_key(doc.id, "ocr", 1, root_input_hash(doc.checksum.encode()))
+    key = artifact_key(doc.id, "ocr", 2, root_input_hash(doc.checksum.encode()))
     body = await store.get_json(key)
     assert body["content"] == "ACME"
-    assert body["schema_version"] == 1
+    assert body["schema_version"] == 2
