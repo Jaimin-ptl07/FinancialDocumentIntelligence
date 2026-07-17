@@ -2,6 +2,12 @@
 
 - **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a + SP-7b done** — OCR enriched to `schema_version 3`; StructureStage stitches cross-page tables + removes header/footer (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2. **Next (parallelized via worktrees): SP-7c (table canonicalization), SP-10 (semantic), SP-17 (quality)** — independent, measured via SP-3. Then 7c (table internals / nested-header canonicalization), 7d (linking); then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
 
+### What SP-17 shipped that its follow-on (structure-aware quality) must know
+
+- **A quality report** `{schema_version:1, issues[{severity,code,message}], error_count, warning_count, ok}` (`fdi.core.quality.validate`) at the `quality` artifact key is the internal-defect check — distinct from SP-3's ground-truth comparison (§1.1 of the spec). `ok = error_count == 0`; warnings never gate `ok`.
+- **`QualityStage` is a DERIVED stage** (`deps=("ast",)`), auto-scheduled after `ast` by the DAG (`successors("ast")` now includes `"quality"`), running `AST_VALIDATORS = (ast_has_sections, sections_have_content, title_present)` over the AST via `validate`. Chain `ocr → normalize → ast → quality` is automatic from a single `run_stage("ocr", ...)`.
+- **`tables_are_rectangular`** is written and unit-tested in `fdi.core.quality` now (operates on SP-7's structure artifact: a cell's `column_index >= column_count` is a torn table, `warning`), but deliberately NOT wired into `QualityStage` yet — no new API surface either (the report is read via the existing artifact-store path). The follow-on needs `QualityStage.deps = ("ast", "structure")` plus a decision on how the AST-level and structure-level issue lists merge into one report. Numeric-total reconciliation waits on SP-11 (ontology) + real numeric extraction; cross-document consistency waits on SP-16.
+
 ### What SP-8 shipped that SP-18 / SP-7 must know
 
 - **The AST** `{schema_version:1, title, sections[{heading, paragraphs[]}]}` (`fdi.core.ast.build_ast`) at the `ast` artifact key is the walkable document tree. The full pipeline chain is `intake → ocr → normalize → ast` (each derived stage auto-scheduled by the DAG).
@@ -142,7 +148,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-14** | Retrieval Indexes | 11 | **heavy** | ⬜ |
 | **SP-15** | Knowledge Store consolidation | 12 | light | ⬜ |
 | **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ⬜ |
-| **SP-17** | Quality validation framework | enterprise | medium | ⬜ |
+| **SP-17** | Quality validation framework | enterprise | medium | ✅ done (thin) |
 | **SP-18** | Next.js frontend | — | light | ✅ done (thin) |
 
 ### What SP-1 shipped that SP-2 must know
