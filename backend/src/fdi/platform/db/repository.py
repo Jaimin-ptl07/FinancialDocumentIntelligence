@@ -4,6 +4,7 @@ theirs, not ours."""
 import uuid
 
 import sqlalchemy
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
@@ -150,3 +151,58 @@ class EvalRepository:
 
         ranked = sorted(latest.values(), key=lambda r: r.aggregate, reverse=True)
         return [(r.candidate_name, r.candidate_version, r.aggregate) for r in ranked]
+
+
+class DocumentRepository:
+    """Document intake persistence. The caller owns the transaction."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get(self, doc_id: str) -> Document | None:
+        return await self._s.get(Document, doc_id)
+
+    async def get_by_checksum(self, checksum: str) -> Document | None:
+        return (
+            await self._s.execute(select(Document).where(Document.checksum == checksum))
+        ).scalars().first()
+
+    async def next_version(self, doc_key: str) -> int:
+        max_version = (
+            await self._s.execute(
+                select(func.max(Document.version)).where(Document.doc_key == doc_key)
+            )
+        ).scalar_one()
+        return (max_version or 0) + 1
+
+    async def create(
+        self,
+        *,
+        id: str,
+        checksum: str,
+        filename: str,
+        byte_size: int,
+        content_type: str,
+        doc_key: str,
+        version: int,
+    ) -> Document:
+        doc = Document(
+            id=id,
+            checksum=checksum,
+            filename=filename,
+            byte_size=byte_size,
+            content_type=content_type,
+            doc_key=doc_key,
+            version=version,
+        )
+        self._s.add(doc)
+        await self._s.flush()
+        return doc
+
+    async def list_by_doc_key(self, doc_key: str) -> list[Document]:
+        rows = (
+            await self._s.execute(
+                select(Document).where(Document.doc_key == doc_key).order_by(Document.version)
+            )
+        ).scalars().all()
+        return list(rows)
