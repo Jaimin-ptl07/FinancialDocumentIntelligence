@@ -509,3 +509,56 @@ async def test_eval_endpoint_unknown_candidate_is_404(
         "/eval", json={"candidate": "no-such-candidate", "dataset": "toy", "dataset_version": 1}
     )
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Task 6: POST /documents upload (dedup+versioning) + reads
+# --------------------------------------------------------------------------
+
+
+async def test_document_upload_dedup_and_versions(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    # Unique content + doc_key per test run: the migrated DB and MinIO bucket
+    # are session-scoped (Global Constraint), and `UNIQUE(checksum)` is real --
+    # literal bytes like b"PDF-A" would collide with test_intake.py's fixture
+    # of the same name and silently dedup against ITS row instead of creating
+    # this test's own.
+    doc_key = f"annual-{uuid.uuid4()}"
+    pdf_a = f"PDF-A-{uuid.uuid4()}".encode()
+    pdf_b = f"PDF-B-{uuid.uuid4()}".encode()
+
+    r = await client.post(
+        "/documents",
+        files={"file": ("a.pdf", pdf_a, "application/pdf")},
+        data={"doc_key": doc_key},
+    )
+    assert r.status_code == 201, r.text
+    doc = r.json()
+    assert doc["version"] == 1 and doc["checksum"]
+
+    same = await client.post(
+        "/documents",
+        files={"file": ("a2.pdf", pdf_a, "application/pdf")},
+        data={"doc_key": doc_key},
+    )
+    assert same.json()["id"] == doc["id"]  # dedup
+
+    r2 = await client.post(
+        "/documents",
+        files={"file": ("b.pdf", pdf_b, "application/pdf")},
+        data={"doc_key": doc_key},
+    )
+    assert r2.json()["version"] == 2
+
+    got = await client.get(f"/documents/{doc['id']}")
+    assert got.status_code == 200 and got.json()["filename"] == "a.pdf"
+    versions = (await client.get(f"/documents?doc_key={doc_key}")).json()["versions"]
+    assert [v["version"] for v in versions] == [1, 2]
+
+
+async def test_non_pdf_is_415(client: AsyncClient, _alembic_applied) -> None:
+    r = await client.post(
+        "/documents", files={"file": ("x.txt", b"hi", "text/plain")}
+    )
+    assert r.status_code == 415

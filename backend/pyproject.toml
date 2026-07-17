@@ -21,6 +21,7 @@ dependencies = [
     "redis>=5.2",
     "minio>=7.2.20",
     "structlog>=26.1",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]
@@ -50,7 +51,10 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "C4", "SIM"]
 
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+    "fastapi.File", "fastapi.Form",
+]
 
 [tool.mypy]
 python_version = "3.13"

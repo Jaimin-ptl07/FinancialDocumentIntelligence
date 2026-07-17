@@ -49,3 +49,17 @@ class LeaderboardEntry(BaseModel):
 
 class LeaderboardView(BaseModel):
     leaderboard: list[LeaderboardEntry]
+
+
+class DocumentView(BaseModel):
+    id: str
+    checksum: str | None
+    filename: str | None
+    byte_size: int | None
+    doc_key: str | None
+    version: int | None
+    content_type: str | None
+
+
+class DocumentVersionsView(BaseModel):
+    versions: list[DocumentView]

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     worker_concurrency: int = 2
     log_level: str = "INFO"
     artifact_url_ttl_seconds: int = 3600
+    max_upload_mb: int = 50
 
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":

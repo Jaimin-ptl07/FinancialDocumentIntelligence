@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 
 import sqlalchemy
 import structlog
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from fdi.api.deps import (
     CandidatesDep,
@@ -18,6 +18,8 @@ from fdi.api.deps import (
     StoreDep,
 )
 from fdi.api.schemas import (
+    DocumentVersionsView,
+    DocumentView,
     EvalAccepted,
     EvalRequest,
     JobAccepted,
@@ -29,9 +31,11 @@ from fdi.api.schemas import (
     StaleView,
 )
 from fdi.pipeline.eval_service import run_evaluation
+from fdi.pipeline.intake import intake_document
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
-from fdi.platform.db.repository import EvalRepository, RegistryRepository
+from fdi.platform.db.models import Document
+from fdi.platform.db.repository import DocumentRepository, EvalRepository, RegistryRepository
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -234,3 +238,60 @@ async def leaderboard_endpoint(
             LeaderboardEntry(candidate=c, version=v, aggregate=a) for (c, v, a) in rows
         ]
     )
+
+
+# --------------------------------------------------------------------------
+# Task 6: document intake (upload + reads).
+# --------------------------------------------------------------------------
+
+
+def _view(doc: Document) -> DocumentView:
+    return DocumentView(
+        id=doc.id,
+        checksum=doc.checksum,
+        filename=doc.filename,
+        byte_size=doc.byte_size,
+        doc_key=doc.doc_key,
+        version=doc.version,
+        content_type=doc.content_type,
+    )
+
+
+@router.post("/documents", status_code=status.HTTP_201_CREATED, response_model=DocumentView)
+async def upload_document(
+    session_factory: SessionFactoryDep,
+    store: StoreDep,
+    file: UploadFile = File(...),
+    doc_key: str | None = Form(default=None),
+) -> DocumentView:
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=415, detail="only application/pdf is accepted")
+    data = await file.read()
+    cap = get_settings().max_upload_mb * 1024 * 1024
+    if len(data) > cap:
+        raise HTTPException(
+            status_code=413, detail=f"file exceeds {get_settings().max_upload_mb} MB"
+        )
+    doc = await intake_document(
+        pdf=data,
+        filename=file.filename or "upload.pdf",
+        doc_key=doc_key or file.filename or "upload.pdf",
+        content_type="application/pdf",
+        session_factory=session_factory,
+        store=store,
+    )
+    return _view(doc)
+
+
+@router.get("/documents/{doc_id}", response_model=DocumentView)
+async def get_document(doc_id: str, session: SessionDep) -> DocumentView:
+    doc = await DocumentRepository(session).get(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    return _view(doc)
+
+
+@router.get("/documents", response_model=DocumentVersionsView)
+async def list_documents(session: SessionDep, doc_key: str) -> DocumentVersionsView:
+    docs = await DocumentRepository(session).list_by_doc_key(doc_key)
+    return DocumentVersionsView(versions=[_view(d) for d in docs])
