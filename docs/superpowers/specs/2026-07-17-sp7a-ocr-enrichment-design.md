@@ -1,6 +1,6 @@
 # SP-7a — Enrich the OCR artifact (structural payload)
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. All §7 done criteria verified (unit + testcontainers + static gates; full suite 180 passed, 4 skipped; ruff / mypy --strict / lint-imports 1 kept 0 broken). `normalize`/`ast` self-adjusted via runtime-derived keys as designed.
 - **Depends on:** SP-5 (OCR stage + `normalize_ocr`), SP-2 (version-stamped stages).
 - **Research:** `docs/architecture/research/2026-07-17-sp7-structural.md` ("First, enrich the OCR artifact").
 - **Part of:** SP-7 Structural Intelligence. This is 7a's foundation; 7b (cross-page stitching), 7c (table

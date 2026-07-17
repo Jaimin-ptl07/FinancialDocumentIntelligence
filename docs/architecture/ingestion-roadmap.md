@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** — SP-1–SP-6, SP-8 (naive AST), SP-18 (thin UI) implemented on `feature/sp-1-project-setup`. The demoable spine runs `upload → ocr → normalize → ast` with a browser UI. **Stage 2 is next: SP-7 (Structural Intelligence — the heavy tier), which gets its own deep-research pass** (reading-order + table-structure algorithms for Indian annual reports), enriches the OCR artifact (words/cells/bboxes → bump `OcrStage.version`), and deepens the AST — candidates measured via SP-3's harness. Then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a done** — the OCR artifact is enriched to `schema_version 2` (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2. **Next: SP-7b (cross-page stitching)** — a `StructureStage` consuming the enriched artifact: header/footer removal, cross-page reading-order + section + table stitching (Microsoft's merge heuristic in the research doc), candidates measured via SP-3. Then 7c (table internals / nested-header canonicalization), 7d (linking); then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
 
 ### What SP-8 shipped that SP-18 / SP-7 must know
 
@@ -129,7 +129,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-4** | Document Intake | 1 | light | ✅ done |
 | **SP-5** | OCR & Layout Extraction | 2 | medium | ✅ done |
 | **SP-6** | Normalization | 3 | light | ✅ done |
-| **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | ⬜ |
+| **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | 🔨 OCR enriched |
 | **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | ⬜ |
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ⬜ |
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
