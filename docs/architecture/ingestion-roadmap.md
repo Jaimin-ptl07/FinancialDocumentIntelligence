@@ -1,6 +1,12 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-6 implemented on `feature/sp-1-project-setup`. Per the §4 build order ("spine first, then deepen"), **SP-8 (Document AST, naive) is next**, then SP-18 (thin UI) to complete the demoable Stage-1 spine; SP-7 (Structural Intelligence — the heavy tier) follows in Stage 2 with its own deep-research pass.
+- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-6 + SP-8 (naive AST) implemented on `feature/sp-1-project-setup`. The ingestion spine now runs `intake → ocr → normalize → ast`. Per the §4 build order, **SP-18 (thin UI) is next** to complete the demoable Stage-1 spine; then Stage 2 opens with SP-7 (Structural Intelligence — the heavy tier) + its own deep-research pass.
+
+### What SP-8 shipped that SP-18 / SP-7 must know
+
+- **The AST** `{schema_version:1, title, sections[{heading, paragraphs[]}]}` (`fdi.core.ast.build_ast`) at the `ast` artifact key is the walkable document tree. The full pipeline chain is `intake → ocr → normalize → ast` (each derived stage auto-scheduled by the DAG).
+- **SP-18 (thin UI):** show a document's journey — upload (`POST /documents`), trigger OCR (`POST /documents/{id}/ocr`), poll `/jobs/{id}`, and render the `ast`/`normalize`/`ocr` artifacts (fetch via the presigned `artifact_url`). The Next.js shell + CORS from SP-1/SP-2 are the base.
+- **SP-7 (structural, Stage 2)** will DEEPEN this: enrich the OCR artifact (words/cells/bboxes — bump `OcrStage.version`), correct reading order, detect (not just trust) header/footer, stitch multi-page tables, and produce a richer AST (nested subsections, page spans, table nodes) under a new AST `schema_version`. It gets a dedicated deep-research pass; candidates measured via SP-3's harness.
 
 ### What SP-6 shipped that SP-7 must know
 
@@ -127,7 +133,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | ⬜ |
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ⬜ |
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
-| **SP-8** | Document AST | 5 | medium | ⬜ |
+| **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ⬜ |
 | **SP-10** | Semantic Intelligence | 7 | **heavy** | ⬜ |
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ⬜ |

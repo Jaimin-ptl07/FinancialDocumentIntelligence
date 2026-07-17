@@ -1,6 +1,6 @@
 # SP-8 — Document AST (naive)
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. All §7 done criteria verified (unit + testcontainers + static gates; full suite 178 passed, 4 skipped; ruff / mypy --strict / lint-imports 1 kept 0 broken).
 - **Depends on:** SP-6 (unified document), SP-2 (stage framework).
 - **Roadmap:** phase 5 "Document AST — hierarchical tree · sections · page spans". Build order §4 puts a NAIVE AST here (before the heavy SP-7 structural work), then deepens later.
 
