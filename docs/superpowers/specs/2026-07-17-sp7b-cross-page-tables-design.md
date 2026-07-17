@@ -1,6 +1,6 @@
 # SP-7b — Cross-page table stitching (StructureStage)
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup` (7b core). All §7 done criteria verified (unit + testcontainers + gates; full suite 187 passed, 4 skipped; ruff / mypy --strict / lint-imports 1 kept 0 broken).
 - **Depends on:** SP-7a (enriched OCR artifact), SP-2 (stage framework), SP-3 (harness — for later candidates).
 - **Research:** `docs/architecture/research/2026-07-17-sp7-structural.md` §"multi-page tables" (Microsoft's official merge heuristic, verbatim thresholds).
 - **Part of:** SP-7 Structural Intelligence. This is 7b's core (vertical table stitching); horizontal-split merge, cross-page section/reading-order stitching, and reorder candidates are 7b-continuation / 7c.

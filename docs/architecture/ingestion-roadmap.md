@@ -130,7 +130,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-5** | OCR & Layout Extraction | 2 | medium | ✅ done |
 | **SP-6** | Normalization | 3 | light | ✅ done |
 | **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | 🔨 OCR enriched |
-| **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | ⬜ |
+| **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | 🔨 table stitching + header/footer done |
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ⬜ |
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
