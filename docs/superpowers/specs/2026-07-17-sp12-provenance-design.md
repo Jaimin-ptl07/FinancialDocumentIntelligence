@@ -1,6 +1,10 @@
 # SP-12 — Provenance (node → page → geometry)
 
-- **Status:** Draft 2026-07-17 (spec + plan only; not yet implemented).
+- **Status:** Implemented 2026-07-17. `build_provenance` (`fdi.core.provenance`, 8 unit tests) +
+  `ProvenanceStage` (`deps=("graph", "ocr")`, integration test proving the `graph`+`ocr` → `provenance`
+  chain and `"provenance" in successors("graph")`/`successors("ocr")` membership) both land as
+  specified; all four gates green (`ruff`, `mypy --strict`, `lint-imports` 1 kept/0 broken, full
+  non-e2e suite 271 passed).
 - **Depends on:** SP-9 (`fdi.core.graph.build_graph` → `{schema_version, nodes:[{id,type,label}],
   edges:[{source,target,type}]}`; node ids `"doc"`, `"s{i}"`, `"s{i}p{j}"`; paragraph-node `label` =
   paragraph text truncated to 80 chars; section-node `label` = heading; document-node `label` =
