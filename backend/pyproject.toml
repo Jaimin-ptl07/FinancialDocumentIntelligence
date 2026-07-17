@@ -75,4 +75,5 @@ asyncio_mode = "auto"
 markers = [
     "integration: needs Docker containers",
     "e2e: needs the compose stack running",
+    "azure: needs live Azure Document Intelligence credentials + a sample PDF",
 ]
