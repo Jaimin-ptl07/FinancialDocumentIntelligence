@@ -56,6 +56,7 @@ from fdi.platform.obs.logging import (
 from fdi.platform.ocr import AzureOcrClient
 from fdi.platform.semantic import AzureOpenAIClient
 from fdi.platform.storage.artifact_store import ArtifactStore
+from fdi.platform.vectorstore import MilvusVectorStore
 from fdi.workers.app import app
 
 log = structlog.get_logger(__name__)
@@ -95,6 +96,7 @@ async def _run_stage_async(
         sc = AzureOpenAIClient.from_settings(get_settings())
         ec = AzureOpenAIEmbeddingClient.from_settings(get_settings())
         gsc = Neo4jGraphStore.from_settings(get_settings())
+        vsc = MilvusVectorStore.from_settings(get_settings())
         services: dict[str, object] = {}
         if oc is not None:
             services["ocr"] = oc
@@ -104,6 +106,8 @@ async def _run_stage_async(
             services["embedder"] = ec
         if gsc is not None:
             services["graph_store"] = gsc
+        if vsc is not None:
+            services["vector_store"] = vsc
         return await run_stage(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,
