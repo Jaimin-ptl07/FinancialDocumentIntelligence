@@ -140,14 +140,33 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
                 elements_list = cast(list[object], elements) if isinstance(elements, list) else []
                 sections_data.append({"elements": elements_list})
 
+    # Extract and normalize figures
+    figures_data: list[dict[str, object]] = []
+    figures_raw = raw.get("figures")
+    if isinstance(figures_raw, list):
+        for fig in figures_raw:
+            if isinstance(fig, dict):
+                caption_raw = fig.get("caption")
+                caption_content = ""
+                if isinstance(caption_raw, dict):
+                    content_val = caption_raw.get("content")
+                    caption_content = content_val if isinstance(content_val, str) else ""
+                figures_data.append(
+                    {
+                        "caption": caption_content,
+                        "bounding_regions": _normalize_bounding_regions(fig.get("boundingRegions")),
+                    }
+                )
+
     # Build result
     result: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "content": content,
         "pages": pages_data,
         "paragraphs": paragraphs_data,
         "tables": tables_data,
         "sections": sections_data,
+        "figures": figures_data,
     }
 
     return result
