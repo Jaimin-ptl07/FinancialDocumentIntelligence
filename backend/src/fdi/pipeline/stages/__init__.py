@@ -7,6 +7,9 @@ from fdi.pipeline.stages import (
     normalize as normalize,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import ocr as ocr  # noqa: F401 - import for its registration side effect
+from fdi.pipeline.stages import (
+    ontology as ontology,  # noqa: F401 - import for its registration side effect
+)
 from fdi.pipeline.stages import ping as ping  # noqa: F401 - import for its registration side effect
 from fdi.pipeline.stages import (
     quality as quality,  # noqa: F401 - import for its registration side effect
