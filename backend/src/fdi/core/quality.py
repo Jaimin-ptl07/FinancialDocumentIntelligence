@@ -61,10 +61,18 @@ def tables_are_rectangular(structure: Mapping[str, object]) -> list[Issue]:
 
 
 AST_VALIDATORS: tuple[Validator, ...] = (ast_has_sections, sections_have_content, title_present)
+STRUCTURE_VALIDATORS: tuple[Validator, ...] = (tables_are_rectangular,)
 
 
-def validate(artifact: Mapping[str, object], validators: Sequence[Validator]) -> dict[str, object]:
-    issues: list[Issue] = [issue for validator in validators for issue in validator(artifact)]
+def validate_all(
+    pairs: Sequence[tuple[Mapping[str, object], Sequence[Validator]]],
+) -> dict[str, object]:
+    issues: list[Issue] = [
+        issue
+        for artifact, validators in pairs
+        for validator in validators
+        for issue in validator(artifact)
+    ]
     for issue in issues:
         if issue["severity"] not in _KNOWN_SEVERITIES:
             raise ValueError(f"unknown issue severity: {issue['severity']!r}")
@@ -77,3 +85,8 @@ def validate(artifact: Mapping[str, object], validators: Sequence[Validator]) ->
         "warning_count": warning_count,
         "ok": error_count == 0,
     }
+
+
+def validate(artifact: Mapping[str, object], validators: Sequence[Validator]) -> dict[str, object]:
+    """Single-artifact convenience wrapper: `validate_all` generalized to one pair."""
+    return validate_all([(artifact, validators)])
