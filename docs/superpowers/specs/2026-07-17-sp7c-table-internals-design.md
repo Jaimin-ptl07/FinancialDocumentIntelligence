@@ -1,6 +1,8 @@
 # SP-7c — Table internals: grid canonicalization + nested-header resolution
 
-- **Status:** Drafted 2026-07-17 on `feature/sp-1-project-setup`. Spec + TDD plan only — NOT yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-7c-table-internals`. All §7 done criteria verified (unit +
+  testcontainers + gates; full suite 193 passed, 4 skipped; ruff / mypy --strict / lint-imports 1 kept 0
+  broken).
 - **Depends on:** SP-7a (enriched OCR artifact — table `cells` with `kind`/spans/content), SP-7b (`StructureStage`,
   cross-page-stitched tables), SP-3 (harness — for the deferred grid-accuracy candidate).
 - **Research:** `docs/architecture/research/2026-07-17-sp7-structural.md` §4 "Nested / multi-row headers" — the
