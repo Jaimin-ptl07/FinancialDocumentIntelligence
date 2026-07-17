@@ -22,6 +22,7 @@ dependencies = [
     "minio>=7.2.20",
     "structlog>=26.1",
     "python-multipart>=0.0.32",
+    "azure-ai-documentintelligence>=1.0.2",
 ]
 
 [dependency-groups]
