@@ -24,6 +24,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "azure-ai-documentintelligence>=1.0.2",
     "openai>=2.46.0",
+    "neo4j>=5.26",
 ]
 
 [dependency-groups]
