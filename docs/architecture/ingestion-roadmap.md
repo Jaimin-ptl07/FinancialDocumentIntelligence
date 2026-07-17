@@ -1,6 +1,6 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a + SP-7b done** — OCR enriched to `schema_version 3`; StructureStage stitches cross-page tables + removes header/footer (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2. **Next (parallelized via worktrees): SP-7c (table canonicalization), SP-10 (semantic), SP-17 (quality)** — independent, measured via SP-3. Then 7c (table internals / nested-header canonicalization), 7d (linking); then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`); **SP-7a + SP-7b + SP-7c done** — OCR enriched to `schema_version 3`; StructureStage stitches cross-page tables + removes header/footer (paragraph geometry+spans, table cells with `kind`/spans + regions, the `sections` tree preserved), `OcrStage.version` bumped to 2; StructureStage now also canonicalizes every table's internal shape (`fdi.core.table_grid.canonicalize_table` — spanning-cell grid expansion + joined-path nested-header resolution), `StructureStage.version`/`schema_version` bumped to 2. Deferred out of 7c: grid-accuracy measurement (cell-F1/GriTS, a SP-3 candidate), row-header canonicalization, projected-row-header handling, header-path text normalization (SP-10/11 concern). **Next: SP-7d (linking: captions/footnotes/cross-references)**, alongside the independent parallel wave SP-10 (semantic), SP-17 (quality) — measured via SP-3. Then SP-9 graph → SP-12 provenance, SP-10 semantic → SP-11 ontology, SP-13 embeddings → SP-14 indexes, SP-15–17.
 
 ### What SP-17 shipped that its follow-on (structure-aware quality) must know
 
@@ -137,7 +137,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-6** | Normalization | 3 | light | ✅ done |
 | **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | 🔨 OCR enriched |
 | **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | 🔨 table stitching + header/footer done |
-| **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ⬜ |
+| **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ✅ done |
 | **SP-7d** | Structural: linking — captions, footnotes, cross-references | 4 | **heavy** | ⬜ |
 | **SP-8** | Document AST | 5 | medium | ✅ done (naive) |
 | **SP-9** | Canonical Graph → Neo4j | 6 | medium | ⬜ |

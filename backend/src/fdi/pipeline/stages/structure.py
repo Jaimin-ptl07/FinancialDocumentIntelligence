@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import cast
 
 from fdi.core.structure import merge_cross_page_tables
+from fdi.core.table_grid import canonicalize_table
 from fdi.core.unified import Role, canonical_role
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.stage import StageContext
@@ -15,7 +16,7 @@ _DROP = {Role.HEADER, Role.FOOTER, Role.PAGE_NUMBER}
 
 class StructureStage:
     name = "structure"
-    version = 1
+    version = 2
     deps: tuple[str, ...] = ("ocr",)
 
     async def run(self, ctx: StageContext) -> object:
@@ -30,10 +31,13 @@ class StructureStage:
             for p in paragraphs
             if canonical_role(cast("str | None", p.get("role"))) not in _DROP
         ]
+        stitched = merge_cross_page_tables(tables, paragraphs)
+        for t in stitched:
+            t["grid"] = canonicalize_table(t)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "blocks": blocks,
-            "tables": merge_cross_page_tables(tables, paragraphs),
+            "tables": stitched,
         }
 
 
