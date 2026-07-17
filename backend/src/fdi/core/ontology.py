@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 
 
@@ -66,3 +67,35 @@ def map_label(label: str) -> CanonicalConcept:
     """
     normalized = _normalize_label(label)
     return _SYNONYMS.get(normalized, CanonicalConcept.UNKNOWN)
+
+
+def map_document(ast: Mapping[str, object]) -> dict[str, object]:
+    """Map every section heading and every paragraph in `ast` through
+    map_label, keeping only the non-UNKNOWN results.
+
+    SIMPLIFICATION (documented, spec §2.6 / §6): a paragraph is mapped as a
+    WHOLE string. A real OCR line item like "Revenue  12,345" will not match
+    the dictionary (the trailing number breaks the exact lookup) -- only
+    headings and paragraphs that are themselves bare labels map today.
+    Numeric-value extraction + real line-item parsing is a follow-on.
+    """
+    mappings: list[dict[str, object]] = []
+    sections_raw = ast.get("sections")
+    if isinstance(sections_raw, list):
+        for section in sections_raw:
+            if not isinstance(section, dict):
+                continue
+            heading = section.get("heading")
+            if isinstance(heading, str):
+                concept = map_label(heading)
+                if concept is not CanonicalConcept.UNKNOWN:
+                    mappings.append({"label": heading, "concept": concept.value})
+            paragraphs_raw = section.get("paragraphs")
+            if isinstance(paragraphs_raw, list):
+                for paragraph in paragraphs_raw:
+                    if not isinstance(paragraph, str):
+                        continue
+                    concept = map_label(paragraph)
+                    if concept is not CanonicalConcept.UNKNOWN:
+                        mappings.append({"label": paragraph, "concept": concept.value})
+    return {"schema_version": 1, "mappings": mappings}
