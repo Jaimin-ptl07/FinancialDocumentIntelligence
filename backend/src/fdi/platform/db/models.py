@@ -4,7 +4,17 @@ truth, and this keeps wall-clock out of artifact bodies (Global Constraint 6).""
 import enum
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -33,9 +43,15 @@ class StageStatus(enum.StrEnum):
 
 class Document(Base):
     __tablename__ = "document"
+    __table_args__ = (UniqueConstraint("checksum", name="uq_document_checksum"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    byte_size: Mapped[int | None] = mapped_column(nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    doc_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    version: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -12,7 +12,7 @@ async def test_alembic_version_is_stamped(migrated_engine: AsyncEngine) -> None:
         result = await conn.execute(sqlalchemy.text(
             "SELECT version_num FROM alembic_version"
         ))
-        assert result.scalar_one() == "0004"
+        assert result.scalar_one() == "0005"
 
 
 async def test_stage_run_status_check_bites(migrated_engine: AsyncEngine) -> None:
@@ -51,3 +51,20 @@ async def test_eval_run_and_case_result_exist(migrated_engine: AsyncEngine) -> N
             await conn.execute(sqlalchemy.text(
                 "INSERT INTO eval_case_result (id, eval_run_id, case_id, score) "
                 "VALUES ('cr2','NO_SUCH_RUN','c1',1.0)"))
+
+
+async def test_document_checksum_is_unique(migrated_engine: AsyncEngine) -> None:
+    async with migrated_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text(
+            "INSERT INTO document (id, checksum, version) VALUES ('d-u1','abc123',1)"))
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        async with migrated_engine.begin() as conn:
+            await conn.execute(sqlalchemy.text(
+                "INSERT INTO document (id, checksum, version) VALUES ('d-u2','abc123',1)"))
+
+
+async def test_two_null_checksums_are_allowed(migrated_engine: AsyncEngine) -> None:
+    # ping's synthetic checksum-less rows must remain legal under UNIQUE(checksum)
+    async with migrated_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text("INSERT INTO document (id) VALUES ('d-n1')"))
+        await conn.execute(sqlalchemy.text("INSERT INTO document (id) VALUES ('d-n2')"))  # no error
