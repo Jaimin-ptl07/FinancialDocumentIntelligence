@@ -425,10 +425,12 @@ async def test_stale_reflects_recorded_runs(
     from fdi.platform.db.repository import RegistryRepository
 
     doc_id = (await client.post("/ping-job")).json()["job_id"]
-    # No run recorded yet -> the root stage is stale.
-    assert (await client.get(f"/docs/{doc_id}/stale")).json() == {"stale": ["ping"]}
+    # No run recorded yet -> every registered root stage is stale, ping among them.
+    # Asserted by membership, not an exact list, so registering further root stages
+    # (e.g. "ocr" from SP-5) does not make this test brittle.
+    assert "ping" in (await client.get(f"/docs/{doc_id}/stale")).json()["stale"]
 
-    # Seed a completed ping run; now nothing is stale.
+    # Seed a completed ping run; ping is no longer stale (other stages may remain).
     rid = str(uuid.uuid4())
     async with session_factory() as s:
         repo = RegistryRepository(s)
@@ -437,7 +439,7 @@ async def test_stale_reflects_recorded_runs(
             rid, output_hash="oh", artifact_key=f"artifacts/{doc_id}/ping/v1/x.json"
         )
         await s.commit()
-    assert (await client.get(f"/docs/{doc_id}/stale")).json() == {"stale": []}
+    assert "ping" not in (await client.get(f"/docs/{doc_id}/stale")).json()["stale"]
 
 
 async def test_reprocess_dispatches_from_stage(client: AsyncClient, _alembic_applied) -> None:
