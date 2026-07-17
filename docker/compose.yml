@@ -217,7 +217,11 @@ services:
 
   milvus:
     # NEVER :latest -- it is months stale. And do NOT copy the master-branch
-    # compose: it points at v3.0-beta. Defined now; wired at SP-13.
+    # compose: it points at v3.0-beta. Defined at project setup; wired at
+    # SP-14 (FDI_MILVUS_* added to x-backend-env at SP-14 Task 3) -- standalone
+    # Milvus has no bootstrap credential of its own to thread through this
+    # service block, unlike neo4j's NEO4J_AUTH, so no environment:/healthcheck
+    # change was needed here, only the config wiring above app-side.
     image: milvusdb/milvus:v2.6.20
     profiles: [vector]
     command: ["milvus", "run", "standalone"]
