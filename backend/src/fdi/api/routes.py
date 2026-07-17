@@ -26,6 +26,7 @@ from fdi.api.schemas import (
     JobView,
     LeaderboardEntry,
     LeaderboardView,
+    OcrTriggerView,
     ReadyView,
     ReprocessView,
     StaleView,
@@ -295,3 +296,17 @@ async def get_document(doc_id: str, session: SessionDep) -> DocumentView:
 async def list_documents(session: SessionDep, doc_key: str) -> DocumentVersionsView:
     docs = await DocumentRepository(session).list_by_doc_key(doc_key)
     return DocumentVersionsView(versions=[_view(d) for d in docs])
+
+
+@router.post(
+    "/documents/{doc_id}/ocr",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=OcrTriggerView,
+)
+async def trigger_ocr(
+    doc_id: str, session: SessionDep, correlation_id: CorrelationIdDep, dispatcher: DispatcherDep
+) -> OcrTriggerView:
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    dispatcher.dispatch(doc_id, "ocr", correlation_id)
+    return OcrTriggerView(doc_id=doc_id, stage="ocr")

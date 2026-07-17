@@ -564,3 +564,26 @@ async def test_non_pdf_is_415(client: AsyncClient, _alembic_applied) -> None:
         "/documents", files={"file": ("x.txt", b"hi", "text/plain")}
     )
     assert r.status_code == 415
+
+
+# --------------------------------------------------------------------------
+# Task 7: POST /documents/{id}/ocr
+# --------------------------------------------------------------------------
+
+
+async def test_trigger_ocr_on_a_document(client: AsyncClient, _alembic_applied) -> None:
+    pdf = f"PDF-OCR-{uuid.uuid4()}".encode()
+    up = await client.post(
+        "/documents", files={"file": ("a.pdf", pdf, "application/pdf")}
+    )
+    doc_id = up.json()["id"]
+    r = await client.post(f"/documents/{doc_id}/ocr")
+    assert r.status_code == 202
+    assert r.json() == {"doc_id": doc_id, "stage": "ocr"}
+
+
+async def test_trigger_ocr_unknown_document_is_404(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/documents/00000000-0000-0000-0000-000000000000/ocr")
+    assert r.status_code == 404

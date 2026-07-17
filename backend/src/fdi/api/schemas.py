@@ -29,6 +29,11 @@ class ReprocessView(BaseModel):
     dispatched: list[str]
 
 
+class OcrTriggerView(BaseModel):
+    doc_id: str
+    stage: str
+
+
 class EvalRequest(BaseModel):
     candidate: str
     dataset: str

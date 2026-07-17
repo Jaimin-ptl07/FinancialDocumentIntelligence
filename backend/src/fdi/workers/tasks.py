@@ -51,6 +51,7 @@ from fdi.platform.obs.logging import (
     clear_correlation_id,
     new_correlation_id,
 )
+from fdi.platform.ocr import AzureOcrClient
 from fdi.platform.storage.artifact_store import ArtifactStore
 from fdi.workers.app import app
 
@@ -87,10 +88,12 @@ async def _run_stage_async(
         )
         await store.ensure_bucket()
         resolver = DagResolver(REGISTRY.all())
+        oc = AzureOcrClient.from_settings(get_settings())
+        services: dict[str, object] = {"ocr": oc} if oc is not None else {}
         return await run_stage(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,
-            store=store, registry=REGISTRY, resolver=resolver,
+            store=store, registry=REGISTRY, resolver=resolver, services=services,
         )
     finally:
         await engine.dispose()
