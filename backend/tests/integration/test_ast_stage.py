@@ -1,0 +1,92 @@
+"""AstStage auto-chains off NormalizeStage: `ast` is a DERIVED stage
+(`deps=("normalize",)`) that builds the naive title/sections/paragraphs AST from
+the unified document, against real Postgres + MinIO with a FAKE OCR client."""
+
+import uuid
+
+import pytest
+from minio import Minio
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from fdi.pipeline.intake import intake_document
+from fdi.pipeline.keys import artifact_key, derived_input_hash
+from fdi.pipeline.ocr import FakeOcrClient
+from fdi.pipeline.registry import StageRegistry
+from fdi.pipeline.resolver import DagResolver
+from fdi.pipeline.run import run_stage
+from fdi.pipeline.stages.ast import AstStage
+from fdi.pipeline.stages.normalize import NormalizeStage
+from fdi.pipeline.stages.ocr import OcrStage
+from fdi.platform.db.engine import make_session_factory
+from fdi.platform.db.repository import RegistryRepository
+from fdi.platform.storage.artifact_store import ArtifactStore
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture
+def session_factory(migrated_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return make_session_factory(migrated_engine)
+
+
+@pytest.fixture
+async def store(minio_client: Minio) -> ArtifactStore:
+    s = ArtifactStore(minio_client, bucket="test-artifacts")
+    await s.ensure_bucket()
+    return s
+
+
+async def test_ast_chains_off_normalize(session_factory, store) -> None:  # fixtures from conftest
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf",
+        doc_key=str(uuid.uuid4()),
+        content_type="application/pdf",
+        session_factory=session_factory,
+        store=store,
+    )
+
+    fake = FakeOcrClient(
+        {
+            "content": "ACME",
+            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [
+                {"role": "title", "content": "ACME LTD"},
+                {"role": "sectionHeading", "content": "Directors' Report"},
+                {"content": "The board is pleased."},
+            ],
+            "tables": [],
+        }
+    )
+
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    reg.register(NormalizeStage())
+    reg.register(AstStage())
+    resolver = DagResolver(reg.all())
+
+    assert "ast" in resolver.successors("normalize")  # the chain is automatic
+
+    common = {
+        "doc_id": doc.id,
+        "correlation_id": "c1",
+        "session_factory": session_factory,
+        "store": store,
+        "registry": reg,
+        "resolver": resolver,
+    }
+    await run_stage(stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake}, **common)
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+
+    async with session_factory() as s:
+        facts = await RegistryRepository(s).runs_for_document(doc.id)
+
+    ast_key = artifact_key(
+        doc.id, "ast", 1, derived_input_hash([facts["normalize"].output_hash])
+    )
+    body = await store.get_json(ast_key)
+    assert body["title"] == "ACME LTD"
+    assert body["sections"] == [
+        {"heading": "Directors' Report", "paragraphs": ["The board is pleased."]}
+    ]
