@@ -1,6 +1,6 @@
 # SP-4 — Document Intake
 
-- **Status:** Approved (autonomously, per standing mandate) 2026-07-17. Not yet implemented.
+- **Status:** Implemented 2026-07-17 on `feature/sp-1-project-setup`. All §7 done criteria verified (unit + testcontainers + static gates; full suite 151 passed, 3 e2e skipped; ruff / mypy --strict / lint-imports 1 kept 0 broken).
 - **Depends on:** SP-2 (document/stage_run registry, ArtifactStore), SP-3 (harness — unrelated but in the tree).
 - **Roadmap:** phase 1 "Document Intake — upload · checksum · dedup · versioning · registry". Populates the `document.checksum` column SP-2 left nullable.
 

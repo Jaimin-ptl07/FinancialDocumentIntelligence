@@ -1,6 +1,12 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1, SP-2, SP-3 implemented on `feature/sp-1-project-setup`; SP-4 (Document Intake) is next.
+- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-4 implemented on `feature/sp-1-project-setup`; SP-5 (OCR via Azure Document Intelligence) is next.
+
+### What SP-4 shipped that SP-5 must know
+
+- **A document is content-addressed by sha256** and stored at `documents/{checksum}.pdf` (`ArtifactStore.get_bytes` reads it back); deduped on `document.checksum` (UNIQUE), versioned per `doc_key`.
+- **`fdi.pipeline.intake.intake_document(...)` is the front door**; `DocumentRepository` (get / get_by_checksum / next_version / list_by_doc_key) is the accessor. `POST /documents` (multipart), `GET /documents/{id}`, `GET /documents?doc_key=`.
+- **SP-5 runs OCR as the first real stage over an intake'd document:** an `OcrStage` (root stage, `deps=()`) whose `run(ctx)` reads `documents/{doc.checksum}.pdf`, calls **Azure Document Intelligence** (`FDI_AZURE_DI_*`, async poll), and emits the OCR artifact. Dispatch via `run_stage(doc_id, "ocr")`. **Content-addressing caveat (roadmap §7):** Azure DI output is not byte-stable, so key the OCR artifact on the PDF checksum + DI model version, NOT the response bytes — the SP-2 stage `input_hash` for a root stage already uses `document.checksum`, which is now populated by intake; fold the DI model version into the stage `version`.
 
 ### What SP-3 shipped that every layer must know
 
@@ -100,7 +106,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-1** | Project setup & walking skeleton | setup | light | ✅ done |
 | **SP-2** | The base — unified schema, artifact store, registry, **stage/DAG framework** | base | medium | ✅ done |
 | **SP-3** | Eval harness & ground truth | — | medium | ✅ done |
-| **SP-4** | Document Intake | 1 | light | ⬜ |
+| **SP-4** | Document Intake | 1 | light | ✅ done |
 | **SP-5** | OCR & Layout Extraction | 2 | medium | ⬜ |
 | **SP-6** | Normalization | 3 | light | ⬜ |
 | **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | ⬜ |
