@@ -45,3 +45,15 @@ def test_does_not_read_dotenv_files(monkeypatch: pytest.MonkeyPatch, tmp_path) -
         monkeypatch.delenv(k, raising=False)
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_azure_di_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Azure DI fields have safe defaults so the stack boots without Azure configured."""
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.azure_di_endpoint is None
+    assert s.azure_di_key is None
+    assert s.azure_di_model == "prebuilt-layout"
+    assert s.azure_di_api_version == "2024-11-30"
+    assert s.azure_di_polling_timeout_s == 600

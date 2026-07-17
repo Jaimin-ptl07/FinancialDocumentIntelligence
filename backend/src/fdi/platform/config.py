@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     artifact_url_ttl_seconds: int = 3600
     max_upload_mb: int = 50
 
+    # Azure Document Intelligence. Endpoint/key default to None (not required) so
+    # the stack boots without Azure configured; the OCR stage using them is wired
+    # separately. See docker/compose.yml x-backend-env and .env.example.
+    azure_di_endpoint: str | None = None
+    azure_di_key: str | None = None
+    azure_di_model: str = "prebuilt-layout"
+    azure_di_api_version: str = "2024-11-30"
+    azure_di_polling_timeout_s: int = 600
+
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":
         """Fail loudly on a typo'd FDI_ variable.
