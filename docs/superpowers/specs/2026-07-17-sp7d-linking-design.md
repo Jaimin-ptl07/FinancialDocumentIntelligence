@@ -1,6 +1,6 @@
 # SP-7d — Linking: figures (with captions) and footnotes
 
-- **Status:** Draft 2026-07-17.
+- **Status:** Implemented 2026-07-17.
 - **Depends on:** SP-7a (enriched OCR artifact), SP-7b (`StructureStage`, cross-page stitching), SP-7c
   (table-grid canonicalization), SP-2 (stage framework), SP-3 (harness — for the deferred cross-reference
   candidate).
