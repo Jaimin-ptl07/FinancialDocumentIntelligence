@@ -1,6 +1,12 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-5 implemented on `feature/sp-1-project-setup`; SP-6 (Normalization) is next.
+- **Status:** Roadmap agreed 2026-07-15. SP-1–SP-6 implemented on `feature/sp-1-project-setup`; SP-7 (Structural Intelligence — the heavy tier) is next.
+
+### What SP-6 shipped that SP-7 must know
+
+- **The unified document is the vendor-neutral contract:** `{schema_version:1, content, page_count, blocks[{role,text}]}` at the `normalize` artifact key (`fdi.core.unified.normalize_document`). Downstream commits to THIS, never the OCR/Azure shape. Canonical `Role` enum: `title/heading/header/footer/page_number/footnote/body`.
+- **`NormalizeStage` is a DERIVED stage** (`deps=("ocr",)`), auto-scheduled after `ocr` by the DAG (`successors("ocr")` = `["normalize"]`), `input_hash` from the OCR `output_hash`.
+- **SP-7 needs richer geometry than SP-5's OCR artifact kept** (it kept counts, not words/cells/bboxes). SP-7 (structural: reading-order, header/footer removal, table stitching) must ENRICH the OCR artifact — keep words/lines/cells with polygons — and BUMP `OcrStage.version` (which regenerates OCR + normalize downstream via the version-stamp). SP-7 is the roadmap's highest-value/highest-risk tier and should get its own deep-research pass on reading-order + table-structure algorithms for Indian annual reports, with candidates measured through SP-3's harness.
 
 ### What SP-5 shipped that SP-6 must know
 
@@ -116,7 +122,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-3** | Eval harness & ground truth | — | medium | ✅ done |
 | **SP-4** | Document Intake | 1 | light | ✅ done |
 | **SP-5** | OCR & Layout Extraction | 2 | medium | ✅ done |
-| **SP-6** | Normalization | 3 | light | ⬜ |
+| **SP-6** | Normalization | 3 | light | ✅ done |
 | **SP-7a** | Structural: page layout — reading order, columns, header/footer | 4 | **heavy** | ⬜ |
 | **SP-7b** | Structural: cross-page stitching — paragraphs, sections, tables | 4 | **heavy** | ⬜ |
 | **SP-7c** | Structural: table internals — headers, merged/nested cells, grid | 4 | **heavy** | ⬜ |
