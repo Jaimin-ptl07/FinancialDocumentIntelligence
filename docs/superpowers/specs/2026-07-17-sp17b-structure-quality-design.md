@@ -1,6 +1,6 @@
 # SP-17b — Structure-aware Quality (SP-17 follow-on)
 
-- **Status:** Draft 2026-07-17 (spec + plan only; not yet implemented).
+- **Status:** Implemented 2026-07-17.
 - **Depends on:** SP-17 (`fdi.core.quality` — `Issue`, `Validator`, `_issue`, `AST_VALIDATORS`,
   `validate`, and the already-written-but-unwired `tables_are_rectangular`; `QualityStage` v1,
   `deps=("ast",)`), SP-7c (the `structure` artifact `{schema_version, blocks, tables}` that
