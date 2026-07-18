@@ -46,7 +46,7 @@ page/bbox where available).
 
 | # | Sub-project | Weight | Depends on | Ships |
 |---|---|---|---|---|
-| **RT-1** | Retrieval foundations — unified chunk record + filterable index | heavy | ingestion | `fdi.core.retrieval.build_chunks` + `ChunksStage` (`deps=("ast","semantic","provenance")`) → per-doc `chunks` artifact `[{chunk_id, heading, text, section_type, page, para_count}]`; enrich `IndexStage` so Milvus metadata carries `{doc_key, version, section_type, page}`; a `resolve_chunk(doc_id, chunk_id)` helper every text-returning tool uses. |
+| **RT-1** | Retrieval foundations — unified chunk record + filterable index | heavy | ingestion | ✅ done (2026-07-18). `fdi.core.retrieval.build_chunks` + `ChunksStage` (`deps=("ast","semantic","provenance")`) → per-doc `chunks` artifact `[{chunk_id, heading, text, section_type, page, para_count}]`; `IndexStage` v2 (`deps=("embedding","chunks")`) enriches Milvus metadata to `{heading, chunk_id, section_type, page}`; `resolve_chunk`/`resolve_chunks` (`fdi.pipeline.retrieval`) every text-returning tool uses. |
 | **RT-2** | Semantic (vector) retrieval | medium | RT-1 | `vector_search(query, filters, k)` — embed query (BGE), Milvus search with metadata filters, resolve hits to text+citation via RT-1. `POST /retrieve/vector`; upgrades `/search` to return text. |
 | **RT-3** | Lexical / keyword retrieval | medium | RT-1 | Postgres full-text (`tsvector`) over a `chunk` table populated from the `chunks` artifact; `keyword_search(query, filters)`. `POST /retrieve/keyword`. |
 | **RT-4** | Hybrid retrieval + rerank | light | RT-2, RT-3 | pure `fuse(vector_hits, keyword_hits)` (Reciprocal Rank Fusion); one `POST /retrieve` (hybrid) tool. |
@@ -54,6 +54,32 @@ page/bbox where available).
 | **RT-6** | Structured financial retrieval | heavy | RT-1 | Query the canonicalized table `grid`s: `get_tables(doc_id, filters)`, `concept_lookup(concept)` linking `CanonicalConcept`→grid rows and extracting the numeric cell (the deferred numeric extraction). `POST /tables/*`, `/concepts/*`. |
 | **RT-7** | Cross-document / entity retrieval | medium | RT-6 (concepts), crossdoc | `entity_timeline(entity)`, `compare_concept_across_versions(entity, concept)`; optionally persist the entity index for fast lookup. `GET /entities/{id}/timeline`, `POST /entities/compare`. |
 | **RT-8** | Retrieval agent — `POST /ask` | heavy | RT-2…RT-7 | Register every RT tool as an Azure OpenAI function schema; an agent loop (plan → call tools → synthesize) returns a **cited** answer `{answer, citations, tool_trace}`. Mockable LLM seam (`FakeAgentClient` in the default suite; real Azure OpenAI behind an opt-in marker). The capstone that makes the tools "tools." |
+
+## What RT-1 shipped that RT-2…RT-8 must know
+
+- **The `chunks` artifact** (`fdi.core.retrieval.build_chunks`, materialized per-document by
+  `ChunksStage`, `deps=("ast","semantic","provenance")`): `{schema_version:1, chunks:[{chunk_id,
+  heading, text, section_type, page, para_count}]}` — one record per AST section. `text` is the
+  EXACT string `EmbeddingStage` embeds (`heading + "\n" + "\n".join(paragraphs)`), so it is the
+  passage a vector hit actually represents. `section_type`/`page` degrade to `None` on missing or
+  malformed upstream data — never absent as keys, never raise.
+- **The `s{i}` chunk identity is load-bearing and now cross-store.** It mirrors `EmbeddingStage`'s
+  `enumerate`-and-skip exactly (a non-`dict` AST section is skipped but still consumes its index), so
+  a Milvus hit id `{doc_id}:s{i}` joins directly to `chunks[…].chunk_id == "s{i}"` — no re-indexing,
+  no compaction, ever, in any future chunking change.
+- **`resolve_chunks(session, store, ids: list[str])`** (`fdi.pipeline.retrieval`) is the batch
+  text-attach primitive: give it a list of `"{doc_id}:{chunk_id}"` hit ids (from Milvus, later a
+  namespaced graph node, etc.) and it reads each document's `chunks` artifact ONCE, returning
+  `{full_id: {doc_id, chunk_id, heading, text, section_type, page, para_count}}`, silently omitting
+  unresolvable ids. `resolve_chunk` is the single-id form. RT-2's `vector_search` should call
+  `resolve_chunks` once over a whole hit list rather than resolving hits one at a time.
+- **Milvus metadata is now `{heading, chunk_id, section_type, page}`** (`IndexStage` v2, `deps=
+  ("embedding","chunks")`) — a vector search CAN filter by `section_type` at the vector layer.
+  `doc_key`/`version` are deliberately NOT in Milvus metadata (`StageContext` has no Postgres
+  access) — RT-2 must join those from Postgres via the hit's `doc_id`, not expect them on the hit.
+- **The `index` stage_run re-ran for every already-indexed document** after the v1→v2 bump (new
+  `input_hash` from the added `chunks` dep) — intended, not a regression; existing corpora reindex
+  automatically with the richer metadata on next `run_stage("index", ...)`.
 
 ## Build order (git-worktree waves)
 

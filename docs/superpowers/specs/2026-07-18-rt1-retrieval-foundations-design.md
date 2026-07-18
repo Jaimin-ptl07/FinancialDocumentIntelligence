@@ -1,6 +1,6 @@
 # RT-1 — Retrieval Foundations (unified chunk record + filterable index)
 
-- **Status:** Design — 2026-07-18. First sub-project of the retrieval layer (`docs/architecture/
+- **Status:** Implemented — 2026-07-18. First sub-project of the retrieval layer (`docs/architecture/
   retrieval-roadmap.md`). The spine every text-returning retrieval tool depends on.
 - **Depends on (ingestion, all complete):**
   - **SP-8** (`ast` artifact `{title, sections:[{heading, paragraphs:[str]}]}` — the ONLY store of
