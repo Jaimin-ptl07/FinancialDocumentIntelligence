@@ -13,11 +13,14 @@ delegate the filter/join/truncate assembly to fdi.core.retrieval.build_vector_re
 from collections.abc import Mapping
 from typing import cast
 
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fdi.core.retrieval import build_vector_results
+from fdi.core.retrieval import build_vector_results, chunk_rows_for_index
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.vectorstore import VectorStore
+from fdi.platform.db.models import Chunk
 from fdi.platform.db.repository import DocumentRepository, RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -110,3 +113,73 @@ async def vector_search(
         version=cast(int | None, version),
         k=k,
     )
+
+
+async def index_chunks_fts(*, session: AsyncSession, store: ArtifactStore, doc_id: str) -> int:
+    """Upsert `doc_id`'s `chunks` artifact into the `chunk` table. Returns the
+    number of rows upserted (0 if the document is unknown or has no `chunks`
+    artifact yet -- degrades, never raises, mirroring resolve_chunk). Caller
+    owns the transaction (commits), same convention as every function in this
+    module and fdi.pipeline.crossdoc.resolve_entities."""
+    repo = RegistryRepository(session)
+    doc = await repo.get_document(doc_id)
+    if doc is None:
+        return 0
+    chunks = await _read_chunks(repo, store, doc_id)
+    rows = chunk_rows_for_index(
+        doc_id=doc_id, doc_key=doc.doc_key, version=doc.version, chunks=chunks
+    )
+    if not rows:
+        return 0
+
+    stmt = pg_insert(Chunk).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={
+            "doc_key": stmt.excluded.doc_key,
+            "version": stmt.excluded.version,
+            "heading": stmt.excluded.heading,
+            "text": stmt.excluded.text,
+            "section_type": stmt.excluded.section_type,
+            "page": stmt.excluded.page,
+            "updated_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+    await session.flush()
+    return len(rows)
+
+
+async def keyword_search(
+    *,
+    session: AsyncSession,
+    query: str,
+    k: int = 5,
+    section_type: str | None = None,
+    doc_key: str | None = None,
+    version: int | None = None,
+) -> list[dict[str, object]]:
+    """Postgres full-text search over `chunk`. plainto_tsquery (never raises
+    on free text, unlike to_tsquery) + ts_rank, best-first, optionally
+    filtered. Returns citation-shaped hits carrying their own text -- unlike
+    a Milvus hit, no second resolve step is needed."""
+    tsquery = func.plainto_tsquery("english", query)
+    score = func.ts_rank(Chunk.tsv, tsquery).label("score")
+    stmt = select(Chunk, score).where(Chunk.tsv.op("@@")(tsquery))
+    if section_type is not None:
+        stmt = stmt.where(Chunk.section_type == section_type)
+    if doc_key is not None:
+        stmt = stmt.where(Chunk.doc_key == doc_key)
+    if version is not None:
+        stmt = stmt.where(Chunk.version == version)
+    stmt = stmt.order_by(score.desc()).limit(k)
+
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "doc_id": c.doc_id, "doc_key": c.doc_key, "version": c.version,
+            "chunk_id": c.chunk_id, "heading": c.heading, "page": c.page,
+            "section_type": c.section_type, "text": c.text, "score": float(s),
+        }
+        for c, s in rows
+    ]

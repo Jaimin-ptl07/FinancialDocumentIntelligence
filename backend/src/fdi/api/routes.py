@@ -31,8 +31,12 @@ from fdi.api.schemas import (
     EvalAccepted,
     EvalRequest,
     GraphLoadTriggerView,
+    IndexFtsView,
     JobAccepted,
     JobView,
+    KeywordHitView,
+    KeywordSearchRequest,
+    KeywordSearchResultsView,
     LeaderboardEntry,
     LeaderboardView,
     OcrTriggerView,
@@ -54,7 +58,7 @@ from fdi.core.ontology import CanonicalConcept
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.eval_service import run_evaluation
 from fdi.pipeline.intake import intake_document
-from fdi.pipeline.retrieval import vector_search
+from fdi.pipeline.retrieval import index_chunks_fts, keyword_search, vector_search
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
@@ -557,3 +561,33 @@ async def concept_lookup_route(
     return ConceptLookupView.model_validate(
         {"doc_id": doc_id, "concept": concept.value, "rows": rows}
     )
+
+
+# --------------------------------------------------------------------------
+# RT-3: POST /documents/{id}/index_fts + POST /retrieve/keyword
+# --------------------------------------------------------------------------
+
+
+@router.post("/documents/{doc_id}/index_fts", response_model=IndexFtsView)
+async def trigger_index_fts(doc_id: str, session: SessionDep, store: StoreDep) -> IndexFtsView:
+    """Synchronous, task-free -- like /search and /entities/resolve, NOT like
+    ocr/semantic/embedding/graph_load. Reads the already-cached `chunks`
+    artifact from MinIO and upserts it into Postgres; no external API call
+    (no Azure, no Milvus, no Neo4j), so there is nothing to queue.
+    """
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    count = await index_chunks_fts(session=session, store=store, doc_id=doc_id)
+    await session.commit()
+    return IndexFtsView(doc_id=doc_id, chunks_indexed=count)
+
+
+@router.post("/retrieve/keyword", response_model=KeywordSearchResultsView)
+async def keyword_search_route(
+    body: KeywordSearchRequest, session: SessionDep
+) -> KeywordSearchResultsView:
+    hits = await keyword_search(
+        session=session, query=body.query, k=body.k,
+        section_type=body.section_type, doc_key=body.doc_key, version=body.version,
+    )
+    return KeywordSearchResultsView(results=[KeywordHitView(**h) for h in hits])

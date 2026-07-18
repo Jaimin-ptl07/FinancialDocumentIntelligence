@@ -1,6 +1,6 @@
 # RT-3 — Lexical / Keyword Retrieval (Postgres full-text over the `chunk` table)
 
-- **Status:** Proposed — 2026-07-18. Wave B of the retrieval layer
+- **Status:** Implemented — 2026-07-18. Wave B of the retrieval layer
   (`docs/architecture/retrieval-roadmap.md`), parallel with RT-2 (vector), RT-5
   (graph), RT-6 (tables) — independent of all three, depends only on RT-1.
 - **Depends on:**

@@ -684,6 +684,151 @@ async def test_trigger_graph_load_unknown_document_is_404(
 
 
 # --------------------------------------------------------------------------
+# RT-3: POST /documents/{id}/index_fts + POST /retrieve/keyword
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def rt3_indexed_doc(session_factory, store) -> tuple[str, str]:
+    """One document run through ocr -> ... -> chunks DIRECTLY (run_stage, not
+    the queued HTTP triggers -- nothing in this suite runs a worker, same
+    posture as resolved_corpus_via_api above). Returns (doc_id, doc_key)."""
+    from fdi.core.semantic import SectionType
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.semantic import FakeSemanticClient
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.chunks import ChunksStage
+    from fdi.pipeline.stages.graph import GraphStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
+    from fdi.pipeline.stages.semantic import SemanticStage
+
+    doc_key = f"rt3-{uuid.uuid4()}"
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=doc_key, content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient(
+        {
+            "content": "ACME",
+            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [
+                {"role": "title", "content": "ACME LTD",
+                 "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
+                {"role": "sectionHeading", "content": "Balance Sheet",
+                 "boundingRegions": [{"pageNumber": 1, "polygon": [0, 1, 1, 1, 1, 2, 0, 2]}]},
+                {"content": "Total Assets 100",
+                 "boundingRegions": [{"pageNumber": 1, "polygon": [0, 2, 1, 2, 1, 3, 0, 3]}]},
+                {"role": "sectionHeading", "content": "Directors' Report",
+                 "boundingRegions": [{"pageNumber": 2, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
+                {"content": "The board is pleased.",
+                 "boundingRegions": [{"pageNumber": 2, "polygon": [0, 1, 1, 1, 1, 2, 0, 2]}]},
+            ],
+            "tables": [],
+        }
+    )
+    fake_semantic = FakeSemanticClient(
+        {
+            "Balance Sheet": SectionType.BALANCE_SHEET.value,
+            "Directors' Report": SectionType.DIRECTORS_REPORT.value,
+        }
+    )
+    reg = StageRegistry()
+    for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(),
+                  GraphStage(), ProvenanceStage(), ChunksStage()):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    common = {
+        "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+        "store": store, "registry": reg, "resolver": resolver,
+    }
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="semantic", run_id=str(uuid.uuid4()),
+                     services={"semantic": fake_semantic}, **common)
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+    return doc.id, doc_key
+
+
+async def test_trigger_index_fts_on_a_document(
+    client: AsyncClient, _alembic_applied, rt3_indexed_doc
+) -> None:
+    doc_id, _ = rt3_indexed_doc
+    r = await client.post(f"/documents/{doc_id}/index_fts")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["doc_id"] == doc_id
+    assert body["chunks_indexed"] == 2
+
+
+async def test_trigger_index_fts_unknown_document_is_404(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/documents/00000000-0000-0000-0000-000000000000/index_fts")
+    assert r.status_code == 404
+
+
+async def test_trigger_index_fts_no_chunks_artifact_returns_zero(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    pdf = f"PDF-NOCHUNKS-{uuid.uuid4()}".encode()
+    up = await client.post("/documents", files={"file": ("a.pdf", pdf, "application/pdf")})
+    doc_id = up.json()["id"]
+    r = await client.post(f"/documents/{doc_id}/index_fts")
+    assert r.status_code == 200
+    assert r.json()["chunks_indexed"] == 0
+
+
+async def test_keyword_search_route_returns_hits(
+    client: AsyncClient, _alembic_applied, rt3_indexed_doc
+) -> None:
+    doc_id, doc_key = rt3_indexed_doc
+    await client.post(f"/documents/{doc_id}/index_fts")
+    r = await client.post("/retrieve/keyword", json={"query": "Balance Sheet", "k": 5})
+    assert r.status_code == 200
+    ours = [h for h in r.json()["results"] if h["doc_id"] == doc_id]
+    assert ours and ours[0]["chunk_id"] == "s0"
+    assert ours[0]["doc_key"] == doc_key
+    assert ours[0]["score"] > 0.0
+
+
+async def test_keyword_search_route_filters_by_section_type(
+    client: AsyncClient, _alembic_applied, rt3_indexed_doc
+) -> None:
+    doc_id, _ = rt3_indexed_doc
+    await client.post(f"/documents/{doc_id}/index_fts")
+    r = await client.post(
+        "/retrieve/keyword",
+        json={"query": "board", "k": 5, "section_type": "BALANCE_SHEET"},
+    )
+    assert r.status_code == 200
+    assert all(
+        not (h["doc_id"] == doc_id and h["chunk_id"] == "s1") for h in r.json()["results"]
+    )
+
+
+async def test_keyword_search_route_no_match_returns_empty_results(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post(
+        "/retrieve/keyword", json={"query": "zzzznonexistenttoken9999"}
+    )
+    assert r.status_code == 200
+    assert r.json()["results"] == []
+
+
+# --------------------------------------------------------------------------
 # Task 1 (SP-18): GET /documents/{id}/stages + GET /documents/{id}/artifacts/{stage}
 # --------------------------------------------------------------------------
 

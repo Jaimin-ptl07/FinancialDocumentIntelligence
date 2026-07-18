@@ -11,7 +11,7 @@ no import of fdi.platform.*/fdi.pipeline.*. Never raises: malformed/partial inpu
 degrades per-field (section_type/page -> None).
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 
 def _int_or_none(value: object) -> int | None:
@@ -131,3 +131,36 @@ def build_vector_results(
             break
 
     return results
+
+
+def chunk_rows_for_index(
+    *,
+    doc_id: str,
+    doc_key: str | None,
+    version: int | None,
+    chunks: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """From RT-1's `chunks` artifact records, build the flat rows
+    `index_chunks_fts` upserts into the `chunk` table. Pure; skips a record
+    with a missing/non-str/empty chunk_id, degrades heading/section_type/page
+    to None and text to "" on a malformed value. Never raises."""
+    rows: list[dict[str, object]] = []
+    for c in chunks:
+        chunk_id = c.get("chunk_id")
+        if not isinstance(chunk_id, str) or not chunk_id:
+            continue
+        heading = c.get("heading")
+        text = c.get("text")
+        section_type = c.get("section_type")
+        rows.append({
+            "id": f"{doc_id}:{chunk_id}",
+            "doc_id": doc_id,
+            "chunk_id": chunk_id,
+            "doc_key": doc_key,
+            "version": version,
+            "heading": heading if isinstance(heading, str) else None,
+            "text": text if isinstance(text, str) else "",
+            "section_type": section_type if isinstance(section_type, str) else None,
+            "page": _int_or_none(c.get("page")),
+        })
+    return rows
