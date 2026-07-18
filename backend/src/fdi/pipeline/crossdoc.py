@@ -23,11 +23,21 @@ async def _read_artifact(
     repo: RegistryRepository, store: ArtifactStore, doc_id: str, stage: str
 ) -> Mapping[str, object] | None:
     """The latest `stage` artifact for `doc_id`, or None -- same read path as
-    the GET /documents/{id}/artifacts/{stage} route."""
+    the GET /documents/{id}/artifacts/{stage} route.
+
+    A store-level read failure (the recorded `artifact_key` no longer resolves
+    against THIS store -- e.g. deleted, or from a differently-configured store)
+    degrades to "no artifact" rather than aborting the whole corpus scan over
+    one document. Same isolate-one-failure posture as `routes._probe`: a scan
+    over many independently-produced artifacts should not let one bad object
+    sink every other document's resolution."""
     run = await repo.latest_run(doc_id, stage)
     if run is None or run.artifact_key is None:
         return None
-    return cast(Mapping[str, object], await store.get_json(run.artifact_key))
+    try:
+        return cast(Mapping[str, object], await store.get_json(run.artifact_key))
+    except Exception:
+        return None
 
 
 async def resolve_entities(
