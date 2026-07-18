@@ -83,10 +83,17 @@ async def test_ast_chains_off_normalize(session_factory, store) -> None:  # fixt
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     ast_key = artifact_key(
-        doc.id, "ast", 2, derived_input_hash([facts["normalize"].output_hash])
+        doc.id, "ast", 3, derived_input_hash([facts["normalize"].output_hash])
     )
     body = await store.get_json(ast_key)
+    assert body["schema_version"] == 2
     assert body["title"] == "ACME LTD"
+    assert body["title_source_index"] == 0
     assert body["sections"] == [
-        {"heading": "Directors' Report", "paragraphs": ["The board is pleased."]}
+        {
+            "heading": "Directors' Report",
+            "heading_source_index": 1,
+            "paragraphs": ["The board is pleased."],
+            "paragraph_source_indices": [2],
+        }
     ]

@@ -104,7 +104,7 @@ async def test_provenance_chains_off_graph_and_ocr(session_factory, store) -> No
     provenance_key = artifact_key(
         doc.id,
         "provenance",
-        1,
+        2,
         derived_input_hash([facts["graph"].output_hash, facts["ocr"].output_hash]),
     )
     body = await store.get_json(provenance_key)

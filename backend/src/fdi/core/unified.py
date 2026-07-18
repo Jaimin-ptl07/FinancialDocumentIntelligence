@@ -129,11 +129,12 @@ def normalize_document(ocr: Mapping[str, object]) -> dict[str, object]:
                 block: dict[str, object] = {
                     "role": role_value,
                     "text": text,
+                    "source_index": i,
                 }
                 blocks.append(block)
 
     result: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "content": content,
         "page_count": page_count,
         "blocks": blocks,

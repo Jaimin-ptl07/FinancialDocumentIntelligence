@@ -3,7 +3,9 @@ schema. Auto-chains off OcrStage via `deps=("ocr",)`.
 
 # version=2: Phase 1 re-roles table-cell paragraphs (Role.TABLE_CELL, from
 # `tables[].cells[].elements`) instead of their Azure-derived role, as
-# schema_version 2. Blocks stay 1:1 with `ocr["paragraphs"]`."""
+# schema_version 2. Blocks stay 1:1 with `ocr["paragraphs"]`.
+# version=3: Phase 2 adds `source_index` (the block's own `ocr["paragraphs"]`
+# enumerate position) to every emitted block, as schema_version 3."""
 
 from collections.abc import Mapping
 from typing import cast
@@ -15,7 +17,7 @@ from fdi.pipeline.stage import StageContext
 
 class NormalizeStage:
     name = "normalize"
-    version = 2
+    version = 3
     deps: tuple[str, ...] = ("ocr",)
 
     async def run(self, ctx: StageContext) -> object:
