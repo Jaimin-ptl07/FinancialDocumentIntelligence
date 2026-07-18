@@ -1,6 +1,37 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-9b, SP-10, SP-11, SP-12, SP-13, SP-14, SP-17, SP-17b** — landed across four parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures + footnotes into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact); `GraphLoadStage` (`deps=("graph",)`, SP-9b) projects that graph into a real Neo4j via an injected `GraphStore` (idempotent Cypher `MERGE`; `FakeGraphStore` in the default suite, `Neo4jGraphStore` in prod; the `graph` Compose profile wired end-to-end with a healthcheck — Neo4j loading no longer deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps headings/paragraphs onto 10 `CanonicalConcept`s (pure dictionary, no LLM; LLM mapper an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins graph nodes to OCR page/geometry (SP-12) — `QualityStage`/`ProvenanceStage` are the first two-dependency stages; `EmbeddingStage` (`deps=("ast",)`, SP-13) embeds one chunk per AST section via an injected `EmbeddingClient` (`FakeEmbeddingClient` in tests, `AzureOpenAIEmbeddingClient` — `dimensions=FDI_EMBED_DIM` — in prod), producing `{schema_version:1, model, dim, chunks:[{chunk_id, heading, vector}]}` at a content-addressed key (run-once-cache like SP-10). `IndexStage` (`deps=("embedding",)`, SP-14) upserts that artifact's vectors into Milvus via an injected `VectorStore` (`FakeVectorStore` in the default suite, `MilvusVectorStore` in prod; zero chunks skips the upsert entirely; a cache hit does not re-run it), and `POST /search` — the first synchronous, task-free route — embeds a query and returns the nearest sections; the `vector` Compose profile (etcd+milvus) is now fully wired. `POST /documents/{id}/embedding` and `POST /documents/{id}/graph_load` mirror the SP-10 semantic trigger. **Next: SP-15–SP-16.** A future sub-project should build a read/query API over the now-populated Neo4j graph, and the remaining phase-11 index types (metadata/entity/section/clause/table) once their source artifacts exist. All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-9b, SP-10, SP-11, SP-12, SP-13, SP-14, SP-17, SP-17b** — landed across four parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures + footnotes into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact); `GraphLoadStage` (`deps=("graph",)`, SP-9b) projects that graph into a real Neo4j via an injected `GraphStore` (idempotent Cypher `MERGE`; `FakeGraphStore` in the default suite, `Neo4jGraphStore` in prod; the `graph` Compose profile wired end-to-end with a healthcheck — Neo4j loading no longer deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps headings/paragraphs onto 10 `CanonicalConcept`s (pure dictionary, no LLM; LLM mapper an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins graph nodes to OCR page/geometry (SP-12) — `QualityStage`/`ProvenanceStage` are the first two-dependency stages; `EmbeddingStage` (`deps=("ast",)`, SP-13) embeds one chunk per AST section via an injected `EmbeddingClient` (`FakeEmbeddingClient` in tests, `AzureOpenAIEmbeddingClient` — `dimensions=FDI_EMBED_DIM` — in prod), producing `{schema_version:1, model, dim, chunks:[{chunk_id, heading, vector}]}` at a content-addressed key (run-once-cache like SP-10). `IndexStage` (`deps=("embedding",)`, SP-14) upserts that artifact's vectors into Milvus via an injected `VectorStore` (`FakeVectorStore` in the default suite, `MilvusVectorStore` in prod; zero chunks skips the upsert entirely; a cache hit does not re-run it), and `POST /search` — the first synchronous, task-free route — embeds a query and returns the nearest sections; the `vector` Compose profile (etcd+milvus) is now fully wired. `POST /documents/{id}/embedding` and `POST /documents/{id}/graph_load` mirror the SP-10 semantic trigger. **Done: SP-15.** `KnowledgeStage` (`deps=("semantic","ontology","quality")`, the codebase's first THREE-dependency stage) folds SP-10's section classification, SP-11's concept mappings, and SP-17b's quality report into one per-document `knowledge` artifact via the pure `fdi.core.knowledge.consolidate`. **Next: SP-16.** A future sub-project should build a read/query API over the now-populated Neo4j graph, the remaining phase-11 index types (metadata/entity/section/clause/table) once their source artifacts exist, and SP-16's cross-document entity-resolution layer consuming each document's `knowledge` record as its per-document input. All measured via SP-3's harness.
+
+### What SP-15 shipped that SP-16 must know
+
+- **The knowledge artifact** `{schema_version:1, section_count, section_types, concepts, concept_count,
+  quality}` (`fdi.core.knowledge.consolidate`) at the `knowledge` artifact key folds a document's
+  three already-derived "what does this mean" artifacts — SP-10's semantic section classification,
+  SP-11's ontology concept mappings, SP-17b's quality report — into ONE unified per-document record.
+  `section_count`/`section_types` bucket `semantic["sections"]` by their own `type` string (no
+  `SectionType` import — decoupled, forward-compatible); `concepts` is the sorted, deduplicated,
+  non-`UNKNOWN` set of `ontology["mappings"][].concept`; `quality` echoes `{ok, error_count,
+  warning_count}` only, not the full `issues` list. Every field degrades independently on
+  missing/malformed input (never raises); `consolidate({}, {}, {})` is a fully defined zeroed/emptied
+  record.
+- **`KnowledgeStage` is now a THREE-dependency DERIVED stage** (`deps=("semantic", "ontology",
+  "quality")`, `version=1` — the pipeline's first three-dep stage), auto-scheduled after ALL of
+  `semantic`, `ontology`, AND `quality` by the DAG (`successors("semantic")`, `successors("ontology")`,
+  and `successors("quality")` all include `"knowledge"`). Its `input_hash` is
+  `derived_input_hash([semantic.output_hash, ontology.output_hash, quality.output_hash])` — that fixed
+  dep-tuple order is part of the artifact's cache identity. Chain
+  `intake → ocr → normalize → ast → {structure, ontology, semantic} ; {ast,structure} → quality ;
+  {semantic, ontology, quality} → knowledge` is automatic from a single `run_stage("ocr", ...)`; SP-2's
+  N-ary dep machinery (`run.py`'s `input_hash` list comprehension, `resolver.py`'s `successors`/
+  `_depth`) needed no change to support a third dependency.
+- **Explicitly deferred, not built here:** folding the graph/provenance/embedding artifacts into the
+  knowledge record (structural/geometric/vector information, not "what does this mean"); numeric
+  roll-ups (blocked on real numeric-value extraction, SP-11 §6's own deferral); persisting the record
+  to an external queryable store/index (the artifact is already durably stored via the existing
+  content-addressed artifact store; a separate cross-document index is SP-16's concern). **This
+  per-document `knowledge` record is SP-16's per-document input** for its cross-document
+  entity-resolution/version-linking layer — SP-16 should read it rather than re-joining
+  `semantic`/`ontology`/`quality` itself.
 
 ### What SP-12 shipped that its follow-ons (span-offset join, richer node types) must know
 
@@ -313,7 +344,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-13** | Embeddings → Milvus | 10 | **heavy** | ✅ done (embedding artifact only; Milvus store is SP-14) |
 | **SP-13b** | Embeddings backend swap: Azure OpenAI → BGE-small (local, fastembed) | 10 | light | ✅ done |
 | **SP-14** | Retrieval Indexes | 11 | **heavy** | ✅ done (vector index + search only; metadata/entity/section/clause/table indexes deferred) |
-| **SP-15** | Knowledge Store consolidation | 12 | light | ⬜ |
+| **SP-15** | Knowledge Store consolidation | 12 | light | ✅ done (thin: semantic+ontology+quality only; graph/provenance/embedding, numeric roll-ups, and external persistence deferred) |
 | **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ⬜ |
 | **SP-17** | Quality validation framework | enterprise | medium | ✅ done (thin) |
 | **SP-17b** | Structure-aware quality (SP-17 follow-on) | enterprise | light | ✅ done |

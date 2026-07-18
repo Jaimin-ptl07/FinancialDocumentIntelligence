@@ -1,6 +1,6 @@
 # SP-15 — Knowledge Store Consolidation
 
-- **Status:** Draft 2026-07-18 (not yet implemented).
+- **Status:** Implemented 2026-07-18.
 - **Depends on:** SP-10 (`fdi.core.semantic.SectionType` + `SemanticStage`, `deps=("ast",)` →
   `{schema_version:1, sections:[{heading, type, paragraph_count}]}`, `type` one of the 8
   `SectionType` values), SP-11 (`fdi.core.ontology.CanonicalConcept` (10 members, incl. `UNKNOWN`) +
