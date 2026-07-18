@@ -16,6 +16,9 @@ from fdi.pipeline.stages import (
     index as index,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    knowledge as knowledge,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     linking as linking,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
