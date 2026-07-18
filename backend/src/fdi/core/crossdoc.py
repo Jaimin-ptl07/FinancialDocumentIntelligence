@@ -61,3 +61,111 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     if na == 0.0 or nb == 0.0:
         return 0.0
     return dot / (na * nb)
+
+
+def cluster(vectors: Mapping[str, Sequence[float]], threshold: float) -> list[list[str]]:
+    """Single-linkage connected components over the cosine>=threshold graph.
+
+    Deterministic: output is sorted, not incidentally ordered. Union-find attaches
+    the larger root under the smaller so each component's root is its min doc_id.
+    """
+    ids = sorted(vectors)
+    parent: dict[str, str] = {i: i for i in ids}
+
+    def find(x: str) -> str:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path-compress
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(x: str, y: str) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[max(rx, ry)] = min(rx, ry)
+
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            if cosine(vectors[ids[i]], vectors[ids[j]]) >= threshold:
+                union(ids[i], ids[j])
+
+    groups: dict[str, list[str]] = {}
+    for doc_id in ids:
+        groups.setdefault(find(doc_id), []).append(doc_id)
+    return sorted((sorted(g) for g in groups.values()), key=lambda g: g[0])
+
+
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def consolidate_entity(members: list[Mapping[str, object]]) -> dict[str, object]:
+    """Fold clustered members ({doc_id, doc_key, version, knowledge}) into the
+    entity record. Version-ordered (None last, doc_id tie-break); entity_id = min
+    doc_id; degrades on missing/malformed knowledge; never raises."""
+
+    def sort_key(m: Mapping[str, object]) -> tuple[int, int, str]:
+        doc_id = m.get("doc_id")
+        doc_id_s = doc_id if isinstance(doc_id, str) else ""
+        v = _int_or_none(m.get("version"))
+        return (0, v, doc_id_s) if v is not None else (1, 0, doc_id_s)
+
+    ordered = sorted(members, key=sort_key)
+    doc_ids: list[str] = []
+    for m in ordered:
+        candidate = m.get("doc_id")
+        if isinstance(candidate, str):
+            doc_ids.append(candidate)
+    entity_id = min(doc_ids) if doc_ids else ""
+
+    member_views: list[dict[str, object]] = []
+    concepts_set: set[str] = set()
+    concept_presence: dict[str, list[object]] = {}
+    quality_trend: list[dict[str, object]] = []
+
+    for m in ordered:
+        doc_id = m.get("doc_id")
+        doc_id_s = doc_id if isinstance(doc_id, str) else ""
+        doc_key = m.get("doc_key")
+        version = _int_or_none(m.get("version"))
+        knowledge = m.get("knowledge")
+        k: Mapping[str, object] = knowledge if isinstance(knowledge, Mapping) else {}
+        quality = k.get("quality")
+        q: Mapping[str, object] = quality if isinstance(quality, Mapping) else {}
+        ok = q.get("ok")
+        ok_b = ok if isinstance(ok, bool) else False
+        presence_key: object = version if version is not None else doc_id_s
+
+        member_views.append({
+            "doc_id": doc_id_s,
+            "doc_key": doc_key if isinstance(doc_key, str) else None,
+            "version": version,
+            "section_count": _int_or_none(k.get("section_count")) or 0,
+            "concept_count": _int_or_none(k.get("concept_count")) or 0,
+            "quality_ok": ok_b,
+        })
+
+        concepts_raw = k.get("concepts")
+        if isinstance(concepts_raw, list):
+            for c in concepts_raw:
+                if isinstance(c, str):
+                    concepts_set.add(c)
+                    concept_presence.setdefault(c, []).append(presence_key)
+
+        quality_trend.append({
+            "version": version,
+            "ok": ok_b,
+            "error_count": _int_or_none(q.get("error_count")) or 0,
+            "warning_count": _int_or_none(q.get("warning_count")) or 0,
+        })
+
+    return {
+        "schema_version": 1,
+        "entity_id": entity_id,
+        "member_count": len(ordered),
+        "members": member_views,
+        "concepts": sorted(concepts_set),
+        "concept_presence": {c: concept_presence[c] for c in sorted(concept_presence)},
+        "quality_trend": quality_trend,
+    }
