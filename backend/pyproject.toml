@@ -26,6 +26,7 @@ dependencies = [
     "openai>=2.46.0",
     "neo4j>=5.26",
     "pymilvus>=2.6",
+    "fastembed>=0.8.0",
 ]
 
 [dependency-groups]
@@ -81,4 +82,5 @@ markers = [
     "azure: needs live Azure credentials (Document Intelligence and/or OpenAI)",
     "neo4j: needs a live Neo4j instance (FDI_NEO4J_URI/FDI_NEO4J_PASSWORD, or testcontainers[neo4j])",
     "milvus: needs a live Milvus instance (FDI_MILVUS_URI, e.g. docker compose --profile vector up)",
+    "bge: loads the real BAAI/bge-small-en-v1.5 model via fastembed (no live service/credentials, but a ~130 MB one-time download and real CPU inference; set FDI_RUN_BGE_TEST=1 to opt in)",
 ]
