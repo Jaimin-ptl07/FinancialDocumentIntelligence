@@ -7,7 +7,7 @@ resolve_chunks to attach text to a whole result set in one read per document."""
 from collections.abc import Mapping
 from typing import cast
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,3 +92,38 @@ async def index_chunks_fts(*, session: AsyncSession, store: ArtifactStore, doc_i
     await session.execute(stmt)
     await session.flush()
     return len(rows)
+
+
+async def keyword_search(
+    *,
+    session: AsyncSession,
+    query: str,
+    k: int = 5,
+    section_type: str | None = None,
+    doc_key: str | None = None,
+    version: int | None = None,
+) -> list[dict[str, object]]:
+    """Postgres full-text search over `chunk`. plainto_tsquery (never raises
+    on free text, unlike to_tsquery) + ts_rank, best-first, optionally
+    filtered. Returns citation-shaped hits carrying their own text -- unlike
+    a Milvus hit, no second resolve step is needed."""
+    tsquery = func.plainto_tsquery("english", query)
+    score = func.ts_rank(Chunk.tsv, tsquery).label("score")
+    stmt = select(Chunk, score).where(Chunk.tsv.op("@@")(tsquery))
+    if section_type is not None:
+        stmt = stmt.where(Chunk.section_type == section_type)
+    if doc_key is not None:
+        stmt = stmt.where(Chunk.doc_key == doc_key)
+    if version is not None:
+        stmt = stmt.where(Chunk.version == version)
+    stmt = stmt.order_by(score.desc()).limit(k)
+
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "doc_id": c.doc_id, "doc_key": c.doc_key, "version": c.version,
+            "chunk_id": c.chunk_id, "heading": c.heading, "page": c.page,
+            "section_type": c.section_type, "text": c.text, "score": float(s),
+        }
+        for c, s in rows
+    ]
