@@ -48,7 +48,7 @@ page/bbox where available).
 |---|---|---|---|---|
 | **RT-1** | Retrieval foundations — unified chunk record + filterable index | heavy | ingestion | ✅ done (2026-07-18). `fdi.core.retrieval.build_chunks` + `ChunksStage` (`deps=("ast","semantic","provenance")`) → per-doc `chunks` artifact `[{chunk_id, heading, text, section_type, page, para_count}]`; `IndexStage` v2 (`deps=("embedding","chunks")`) enriches Milvus metadata to `{heading, chunk_id, section_type, page}`; `resolve_chunk`/`resolve_chunks` (`fdi.pipeline.retrieval`) every text-returning tool uses. |
 | **RT-2** | Semantic (vector) retrieval | medium | RT-1 | `vector_search(query, filters, k)` — embed query (BGE), Milvus search with metadata filters, resolve hits to text+citation via RT-1. `POST /retrieve/vector`; upgrades `/search` to return text. |
-| **RT-3** | Lexical / keyword retrieval | medium | RT-1 | Postgres full-text (`tsvector`) over a `chunk` table populated from the `chunks` artifact; `keyword_search(query, filters)`. `POST /retrieve/keyword`. |
+| **RT-3** | Lexical / keyword retrieval | medium | RT-1 | ✅ done (2026-07-18). Postgres full-text (`tsvector`) over a `chunk` table populated from the `chunks` artifact; `keyword_search(query, filters)`. `POST /retrieve/keyword`. |
 | **RT-4** | Hybrid retrieval + rerank | light | RT-2, RT-3 | pure `fuse(vector_hits, keyword_hits)` (Reciprocal Rank Fusion); one `POST /retrieve` (hybrid) tool. |
 | **RT-5** | Graph retrieval (+ corpus-graph fix) | heavy | ingestion | Fix `graphload` id-namespacing (`{doc_id}:{id}`) + real `:Document/:Section/:Paragraph` labels & `:CONTAINS/:READING_ORDER` rel-types; `Neo4jGraphStore` read methods (mockable); tools `neighbors`, `document_structure`, `reading_order`, `provenance(node)→page/bbox`. `POST /graph/*`. |
 | **RT-6** | Structured financial retrieval | heavy | RT-1 | Query the canonicalized table `grid`s: `get_tables(doc_id, filters)`, `concept_lookup(concept)` linking `CanonicalConcept`→grid rows and extracting the numeric cell (the deferred numeric extraction). `POST /tables/*`, `/concepts/*`. |
@@ -80,6 +80,43 @@ page/bbox where available).
 - **The `index` stage_run re-ran for every already-indexed document** after the v1→v2 bump (new
   `input_hash` from the added `chunks` dep) — intended, not a regression; existing corpora reindex
   automatically with the richer metadata on next `run_stage("index", ...)`.
+
+## What RT-3 shipped that RT-4…RT-8 must know
+
+- **The `chunk` table** (`fdi.platform.db.models.Chunk`, Alembic `0006`, chained
+  off head `0005`): one row per RT-1 `chunks` artifact record —
+  `{id, doc_id, chunk_id, doc_key, version, heading, text, section_type,
+  page, tsv, created_at, updated_at}`. `tsv` is a Postgres `GENERATED ALWAYS
+  AS (to_tsvector('english', text)) STORED` column with a GIN index
+  (`ix_chunk_tsv`) — Postgres maintains it on every write; nothing in the
+  codebase computes or targets it directly. `doc_key`/`version` are
+  denormalized onto every row at write time (the pipeline layer has a
+  Postgres session, unlike a `Stage`), so `keyword_search`'s filters are
+  plain `WHERE` clauses with no join to `document`.
+- **`chunk.id` reuses the SAME identity Milvus already uses:
+  `f"{doc_id}:{chunk_id}"`.** RT-4's fusion can compare a keyword hit id and
+  a vector hit id directly — no re-keying, no join table. Built and enforced
+  in exactly one place, `fdi.core.retrieval.chunk_rows_for_index` (pure), so
+  it cannot drift.
+- **`fdi.pipeline.retrieval.index_chunks_fts(session, store, doc_id)`**
+  upserts (`ON CONFLICT DO UPDATE` on `id`) a document's `chunks` artifact
+  into `chunk`; idempotent, degrades to `0` (never raises) for an unknown
+  document or a document with no `chunks` artifact yet. Triggered via `POST
+  /documents/{doc_id}/index_fts` — **synchronous, not auto-chained** (§2
+  decision 6 of the design doc): nothing currently calls this automatically
+  after the `chunks` stage finishes. RT-8's agent or a future ingestion
+  orchestrator wiring a full auto-pipeline must either call this route
+  explicitly per document or fold it into the `chunks` stage's successor
+  dispatch (noted as a deferred follow-on, not built).
+- **`fdi.pipeline.retrieval.keyword_search(session, query, k, section_type,
+  doc_key, version)`** (`POST /retrieve/keyword`) returns `ts_rank`-ordered,
+  citation-shaped hits: `{doc_id, doc_key, version, chunk_id, heading, page,
+  section_type, text, score}`. This is the second half of RT-4's fusion
+  input — `vector_search` (RT-2) is intended to converge on the SAME nine
+  fields (RT-2 already returns `text` via `resolve_chunks`; matching the key
+  set makes RRF fusion a plain merge on `id`, no field-renaming layer).
+  `plainto_tsquery` (never `to_tsquery`) means the query parameter is always
+  safe free text — an empty/whitespace query degrades to `[]`, not a 500.
 
 ## Build order (git-worktree waves)
 
