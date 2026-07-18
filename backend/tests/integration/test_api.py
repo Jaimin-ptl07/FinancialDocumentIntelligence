@@ -1920,3 +1920,126 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
     assert body["answer"] == f"Total Assets were 100 (see {doc.id}:s0)."
     assert body["citations"]
     assert body["tool_trace"][0]["tool"] == "search"
+
+
+# --------------------------------------------------------------------------
+# SP-17: POST /extract/document -- schema-driven RAG field extraction.
+# --------------------------------------------------------------------------
+
+
+async def test_extract_document_503_when_extractor_client_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/extract/document", json={"doc_key": "no-such-key"})
+    assert r.status_code == 503
+    assert "extractor_client" in r.json()["detail"]
+
+
+async def test_extract_document_404_unknown_doc_key(make_client, _alembic_applied) -> None:
+    from fdi.api.deps import get_extractor_client
+    from fdi.pipeline.extractor import FakeExtractorClient
+
+    async with make_client(
+        dependency_overrides={get_extractor_client: lambda: FakeExtractorClient([])}
+    ) as client:
+        r = await client.post("/extract/document", json={"doc_key": "no-such-key"})
+    assert r.status_code == 404
+
+
+async def test_extract_document_happy_path_with_fake_extractor_client_override(
+    make_client, session_factory, store, tmp_path, _alembic_applied
+) -> None:
+    import json
+    import uuid
+
+    from fdi.api.deps import get_extraction_schema_path, get_extractor_client
+    from fdi.pipeline.extractor import FakeExtractorClient
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.retrieval import index_chunks_fts
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.semantic import FakeSemanticClient
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.chunks import ChunksStage
+    from fdi.pipeline.stages.graph import GraphStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
+    from fdi.pipeline.stages.semantic import SemanticStage
+
+    marker = uuid.uuid4().hex
+    reg = StageRegistry()
+    for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
+                  ProvenanceStage(), ChunksStage()):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+        "paragraphs": [
+            {"role": "sectionHeading", "content": "Overview"},
+            {"content": f"ACME is a manufacturer {marker}."},
+        ],
+        "tables": [],
+    })
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(), filename="a.pdf",
+        doc_key=f"acme-{marker}", content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    common = {"doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+              "store": store, "registry": reg, "resolver": resolver}
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="semantic", run_id=str(uuid.uuid4()),
+        services={"semantic": FakeSemanticClient({"Overview": "MDNA"})}, **common,
+    )
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+    async with session_factory() as s:
+        await index_chunks_fts(session=s, store=store, doc_id=doc.id)
+        await s.commit()
+
+    schema = {
+        "modules": [{
+            "id": 1, "name": "OVERVIEW", "folder": "1-overview",
+            "fields": [{
+                "field_name": "Company overview text",
+                "source_type": "document_content", "rag_extractable": True,
+                "data_type": "text", "retrieval_query": f"manufacturer {marker}",
+                "extraction_prompt": "Extract the overview.", "keywords": ["manufacturer"],
+            }],
+        }],
+    }
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+
+    fake = FakeExtractorClient([
+        {"value": "ACME is a manufacturer.",
+         "source": {"page": 1, "snippet": "ACME is a manufacturer",
+                     "evidence_ids": [f"{doc.id}:s0"]},
+         "confidence": 0.9},
+    ])
+
+    async with make_client(
+        dependency_overrides={
+            get_extractor_client: lambda: fake,
+            get_extraction_schema_path: lambda: str(schema_path),
+        }
+    ) as client:
+        r = await client.post("/extract/document", json={"doc_key": f"acme-{marker}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["doc_key"] == f"acme-{marker}"
+    assert body["doc_id"] == doc.id
+    assert body["module"] is None
+    assert body["field_count"] == 1
+    assert body["fields"][0]["field_name"] == "Company overview text"
+    assert body["fields"][0]["value"] == "ACME is a manufacturer."

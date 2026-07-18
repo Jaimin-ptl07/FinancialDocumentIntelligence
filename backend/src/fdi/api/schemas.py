@@ -424,3 +424,29 @@ class AskResponse(BaseModel):
     answer: str
     citations: list[AskCitationView]
     tool_trace: list[AskToolTraceEntryView]
+
+
+class ExtractRequest(BaseModel):
+    doc_key: str
+    module: str | None = None
+
+
+class ExtractSourceView(BaseModel):
+    page: int | None
+    snippet: str | None
+    evidence_ids: list[str]
+
+
+class ExtractFieldView(BaseModel):
+    field_name: str
+    value: object
+    source: ExtractSourceView
+    confidence: float
+
+
+class ExtractDocumentView(BaseModel):
+    doc_key: str
+    doc_id: str
+    module: str | None
+    field_count: int
+    fields: list[ExtractFieldView]

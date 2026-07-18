@@ -36,6 +36,7 @@ RUN groupadd --system fdi && useradd --system --gid fdi --home-dir /app fdi
 COPY --from=builder --chown=fdi:fdi /app/.venv /app/.venv
 COPY --from=builder --chown=fdi:fdi /app/alembic /app/alembic
 COPY --from=builder --chown=fdi:fdi /app/alembic.ini /app/alembic.ini
+COPY --chown=fdi:fdi docs/architecture/field-extraction-schema.json /app/docs/architecture/field-extraction-schema.json
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1

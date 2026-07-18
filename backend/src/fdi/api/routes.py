@@ -1,6 +1,8 @@
 """HTTP surface."""
 
+import asyncio
 import contextlib
+import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import cast
@@ -16,6 +18,8 @@ from fdi.api.deps import (
     DispatcherDep,
     EmbedderDep,
     EntityThresholdDep,
+    ExtractionSchemaPathDep,
+    ExtractorClientDep,
     GraphStoreDep,
     ResolverDep,
     SessionDep,
@@ -38,6 +42,8 @@ from fdi.api.schemas import (
     EntityTimelineView,
     EvalAccepted,
     EvalRequest,
+    ExtractDocumentView,
+    ExtractRequest,
     GraphLoadTriggerView,
     GraphNeighborsRequest,
     GraphNeighborsView,
@@ -68,12 +74,14 @@ from fdi.api.schemas import (
     VectorSearchResultsView,
     VectorSearchResultView,
 )
+from fdi.core.extractor import parse_field_specs
 from fdi.core.ontology import CanonicalConcept
 from fdi.pipeline.agent_tools import AgentContext
 from fdi.pipeline.ask import answer_question
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.entities import compare_concept_across_versions, entity_timeline
 from fdi.pipeline.eval_service import run_evaluation
+from fdi.pipeline.extractor import ExtractContext, extract_document
 from fdi.pipeline.graphquery import (
     document_structure as document_structure_query,
 )
@@ -783,3 +791,72 @@ async def ask(
         question=body.question, ctx=ctx, agent_client=agent_client, max_rounds=max_rounds,
     )
     return AskResponse.model_validate(result)
+
+
+# --------------------------------------------------------------------------
+# SP-17: POST /extract/document -- schema-driven RAG field extraction,
+# built on the retrieval layer (RT-1..RT-8). Reads FDI_EXTRACTION_SCHEMA_
+# PATH, parses it (fdi.core.extractor.parse_field_specs, pure), resolves
+# doc_key to its latest document version ONCE (doc_id/doc_key/version all
+# thread into ExtractContext, so extract_field can scope hybrid_search by
+# {doc_key, version} directly without a per-field DocumentRepository
+# lookup), and answers every rag_extractable document_content field of the
+# given module (or the whole schema when module is omitted) via
+# fdi.pipeline.extractor.extract_document. 503s ONLY when extractor_client
+# is unconfigured -- an unconfigured embedder/vector_store degrades each
+# field's pool (fewer candidates), not the route (spec decision 10, same
+# posture as /ask's tool-level degradation).
+# --------------------------------------------------------------------------
+
+
+def _read_schema_file(schema_path: str) -> object:
+    """Blocking file read, run off the event loop via asyncio.to_thread by
+    the caller -- same posture as ArtifactStore's sync-minio-SDK calls."""
+    with open(schema_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@router.post("/extract/document", response_model=ExtractDocumentView)
+async def extract_document_route(
+    body: ExtractRequest,
+    session: SessionDep,
+    store: StoreDep,
+    embedder: EmbedderDep,
+    vector_store: VectorStoreDep,
+    extractor_client: ExtractorClientDep,
+    schema_path: ExtractionSchemaPathDep,
+) -> ExtractDocumentView:
+    if extractor_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "extract/document is not configured: missing extractor_client "
+                "(set FDI_GPT_ENDPOINT/FDI_GPT_KEY)"
+            ),
+        )
+    versions = await DocumentRepository(session).list_by_doc_key(body.doc_key)
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"no documents for doc_key {body.doc_key!r}")
+    doc = versions[-1]  # list_by_doc_key orders by version ascending -> last is latest
+    version = doc.version
+    if version is None:
+        # Document.version is nullable at the column level (early intake
+        # rows), but list_by_doc_key only ever returns rows created through
+        # intake_document, which always sets a real version -- this is an
+        # unexpected-state guard, not a normal 404/503 path.
+        raise HTTPException(
+            status_code=500, detail=f"document {doc.id} has no version"
+        )
+
+    schema_raw = await asyncio.to_thread(_read_schema_file, schema_path)
+    schema = schema_raw if isinstance(schema_raw, dict) else {}
+    fields = parse_field_specs(schema, body.module)
+
+    ctx = ExtractContext(
+        session=session, store=store, embedder=embedder, vector_store=vector_store,
+        doc_id=doc.id, doc_key=body.doc_key, version=version,
+    )
+    result = await extract_document(ctx=ctx, fields=fields, client=extractor_client)
+    return ExtractDocumentView.model_validate(
+        {"doc_key": body.doc_key, "module": body.module, **result}
+    )

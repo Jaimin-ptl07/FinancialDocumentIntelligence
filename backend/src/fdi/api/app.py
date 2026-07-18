@@ -16,6 +16,7 @@ from fdi.platform.agent import AzureOpenAIAgentClient
 from fdi.platform.config import get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.embeddings import BgeEmbeddingClient
+from fdi.platform.extractor import AzureOpenAIExtractorClient
 from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import configure_logging
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -77,6 +78,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.graph_store = Neo4jGraphStore.from_settings(settings)
     app.state.entity_threshold = settings.entity_sim_threshold
     app.state.agent_client = AzureOpenAIAgentClient.from_settings(settings)
+    app.state.extractor_client = AzureOpenAIExtractorClient.from_settings(settings)
+    app.state.extraction_schema_path = settings.extraction_schema_path
 
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things

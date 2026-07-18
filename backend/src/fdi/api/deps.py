@@ -11,6 +11,7 @@ from fdi.pipeline.agent import AgentClient
 from fdi.pipeline.dispatch import StageDispatcher
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.evaluation import CandidateRegistry
+from fdi.pipeline.extractor import ExtractorClient
 from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.vectorstore import VectorStore
@@ -123,6 +124,16 @@ def get_agent_client(request: Request) -> AgentClient | None:
     return agent_client
 
 
+def get_extractor_client(request: Request) -> ExtractorClient | None:
+    extractor_client: ExtractorClient | None = request.app.state.extractor_client
+    return extractor_client
+
+
+def get_extraction_schema_path(request: Request) -> str:
+    path: str = request.app.state.extraction_schema_path
+    return path
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
@@ -135,3 +146,5 @@ VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]
 EntityThresholdDep = Annotated[float, Depends(get_entity_threshold)]
 GraphStoreDep = Annotated[GraphStore | None, Depends(get_graph_store)]
 AgentClientDep = Annotated[AgentClient | None, Depends(get_agent_client)]
+ExtractorClientDep = Annotated[ExtractorClient | None, Depends(get_extractor_client)]
+ExtractionSchemaPathDep = Annotated[str, Depends(get_extraction_schema_path)]
