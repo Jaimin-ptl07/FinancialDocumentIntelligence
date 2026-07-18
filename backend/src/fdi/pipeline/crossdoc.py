@@ -19,11 +19,15 @@ from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 
-async def _read_artifact(
+async def read_artifact(
     repo: RegistryRepository, store: ArtifactStore, doc_id: str, stage: str
 ) -> Mapping[str, object] | None:
     """The latest `stage` artifact for `doc_id`, or None -- same read path as
     the GET /documents/{id}/artifacts/{stage} route.
+
+    Public (RT-7's fdi.pipeline.entities reuses this for `knowledge`, the same
+    "one document's store failure isolates, does not abort the whole scan"
+    posture resolve_entities relies on for its corpus-wide loop).
 
     A store-level read failure (the recorded `artifact_key` no longer resolves
     against THIS store -- e.g. deleted, or from a differently-configured store)
@@ -51,12 +55,12 @@ async def resolve_entities(
     unresolved: list[str] = []
 
     for doc in documents:
-        embedding = await _read_artifact(repo, store, doc.id, "embedding")
+        embedding = await read_artifact(repo, store, doc.id, "embedding")
         vec = document_vector(embedding) if embedding is not None else []
         if not vec:
             unresolved.append(doc.id)
             continue
-        knowledge = await _read_artifact(repo, store, doc.id, "knowledge")
+        knowledge = await read_artifact(repo, store, doc.id, "knowledge")
         vectors[doc.id] = vec
         stash[doc.id] = {
             "doc_id": doc.id,

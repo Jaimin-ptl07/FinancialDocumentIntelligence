@@ -23,6 +23,8 @@ from fdi.api.deps import (
     VectorStoreDep,
 )
 from fdi.api.schemas import (
+    ConceptCompareRequest,
+    ConceptComparisonView,
     ConceptLookupView,
     DocumentStructureView,
     DocumentVersionsView,
@@ -30,6 +32,7 @@ from fdi.api.schemas import (
     EmbeddingTriggerView,
     EntitiesView,
     EntityResolveRequest,
+    EntityTimelineView,
     EvalAccepted,
     EvalRequest,
     GraphLoadTriggerView,
@@ -61,6 +64,7 @@ from fdi.api.schemas import (
 )
 from fdi.core.ontology import CanonicalConcept
 from fdi.pipeline.crossdoc import resolve_entities
+from fdi.pipeline.entities import compare_concept_across_versions, entity_timeline
 from fdi.pipeline.eval_service import run_evaluation
 from fdi.pipeline.graphquery import (
     document_structure as document_structure_query,
@@ -542,6 +546,38 @@ async def resolve_entities_route(
     threshold = body.threshold if body.threshold is not None else default_threshold
     result = await resolve_entities(session=session, store=store, threshold=threshold)
     return EntitiesView.model_validate(result)
+
+
+# --------------------------------------------------------------------------
+# RT-7: cross-document / entity retrieval -- doc_key-scoped filing timeline
+# and cross-version concept comparison. `doc_key` IS the entity identity here
+# (design spec docs/superpowers/specs/2026-07-18-rt7-crossdoc-entity-
+# retrieval-design.md, decision 1) -- distinct from POST /entities/resolve's
+# corpus-wide, embedding-similarity `entity_id`, which is recomputed per call
+# and therefore not a stable route identifier.
+# --------------------------------------------------------------------------
+
+
+@router.get("/entities/{doc_key}/timeline", response_model=EntityTimelineView)
+async def entity_timeline_route(
+    doc_key: str, session: SessionDep, store: StoreDep
+) -> EntityTimelineView:
+    result = await entity_timeline(session=session, store=store, doc_key=doc_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"no documents for doc_key {doc_key!r}")
+    return EntityTimelineView.model_validate(result)
+
+
+@router.post("/entities/compare", response_model=ConceptComparisonView)
+async def compare_concept_route(
+    body: ConceptCompareRequest, session: SessionDep, store: StoreDep
+) -> ConceptComparisonView:
+    result = await compare_concept_across_versions(
+        session=session, store=store, doc_key=body.doc_key, concept=body.concept
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"no documents for doc_key {body.doc_key!r}")
+    return ConceptComparisonView.model_validate(result)
 
 
 # --------------------------------------------------------------------------

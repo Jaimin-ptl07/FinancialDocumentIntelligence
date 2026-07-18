@@ -52,7 +52,7 @@ page/bbox where available).
 | **RT-4** | Hybrid retrieval + rerank | light | RT-2, RT-3 | pure `fuse(vector_hits, keyword_hits)` (Reciprocal Rank Fusion); one `POST /retrieve` (hybrid) tool. |
 | **RT-5** | Graph retrieval (+ corpus-graph fix) | heavy | ingestion | ✅ done (2026-07-18). Fixed `graphload` id-namespacing (`{doc_id}:{id}`) + real `:Document/:Section/:Paragraph` labels & `:CONTAINS/:READING_ORDER` rel-types (validated allowlist, injection-safe); `Neo4jGraphStore`/`FakeGraphStore` read methods `neighbors`/`document_structure`/`reading_order` (mockable, agree on shape); `fdi.pipeline.graphquery` attaches a `{doc_id, doc_key, version, heading, page, bounding_regions}` citation to every node. `POST /graph/neighbors`, `GET /documents/{id}/graph/structure`, `GET /documents/{id}/graph/reading-order` (503-gated). |
 | **RT-6** | Structured financial retrieval | heavy | RT-1 | ✅ done (2026-07-18). `fdi.core.tables.parse_numeric` (financial cell parsing: thousands incl. Indian lakh grouping, parenthetical negatives, leading sign, percent-as-printed, currency strip/no-FX, blanks/dashes/N-A→`None`, never raises) + `find_concept_rows` (normalized word-token-subsequence match of a concept's ontology synonyms against grid column 0, returns ALL numeric columns per matched row) + `filter_tables` (keyword over column headers) — pure, `fdi.core.tables`' only cross-core import is `fdi.core.ontology` (new public `normalize_label`/`synonyms_for`). `fdi.pipeline.tables.get_tables`/`concept_lookup` read the EXISTING `structure` artifact on demand (no new stage/artifact). `GET /documents/{doc_id}/tables?keyword=`, `GET /documents/{doc_id}/concepts/{concept}`, citation-carrying (`doc_id`, `table_index`, `row_label`, `column_header`). |
-| **RT-7** | Cross-document / entity retrieval | medium | RT-6 (concepts), crossdoc | `entity_timeline(entity)`, `compare_concept_across_versions(entity, concept)`; optionally persist the entity index for fast lookup. `GET /entities/{id}/timeline`, `POST /entities/compare`. |
+| **RT-7** | Cross-document / entity retrieval | medium | RT-6 (concepts), crossdoc | ✅ done (2026-07-18). `fdi.core.entities.build_entity_timeline`/`build_concept_comparison` (pure) reshape `fdi.core.crossdoc.consolidate_entity`'s output into a `doc_key`-scoped, version-ordered timeline and assemble a cross-version concept comparison from RT-6's `concept_lookup` results, `status ∈ {matched, no_match, no_structure}` per version. `fdi.pipeline.entities.entity_timeline`/`compare_concept_across_versions` orchestrate I/O (`DocumentRepository.list_by_doc_key`, the newly-public `fdi.pipeline.crossdoc.read_artifact`, RT-6's `concept_lookup`), `None` on an unknown `doc_key`. `GET /entities/{doc_key}/timeline`, `POST /entities/compare` (404 on unknown `doc_key`) — see handoff below. |
 | **RT-8** | Retrieval agent — `POST /ask` | heavy | RT-2…RT-7 | Register every RT tool as an Azure OpenAI function schema; an agent loop (plan → call tools → synthesize) returns a **cited** answer `{answer, citations, tool_trace}`. Mockable LLM seam (`FakeAgentClient` in the default suite; real Azure OpenAI behind an opt-in marker). The capstone that makes the tools "tools." |
 
 ## What RT-1 shipped that RT-2…RT-8 must know
@@ -222,6 +222,48 @@ page/bbox where available).
   `app.state.graph_store = Neo4jGraphStore.from_settings(settings)` (`api/app.py`'s lifespan). The
   `graph_store` wired in `fdi.workers.tasks` is unrelated (that's for the `graph_load` STAGE); this is
   the first route-side wiring.
+
+## What RT-7 shipped that RT-8 must know
+
+- **Entity identity is `doc_key`, NOT a crossdoc `entity_id`.** `entity_timeline(doc_key)` and
+  `compare_concept_across_versions(doc_key, concept)` resolve their member set via
+  `DocumentRepository.list_by_doc_key(doc_key)` — an indexed, O(versions-of-one-key) query, never a
+  corpus scan or clustering pass. `resolve_entities` (crossdoc/SP-16) stays the corpus-wide DISCOVERY
+  step — "which `doc_key`s probably belong to the same company" — and is unchanged and still the only
+  way to find `doc_key`s in the first place; its output's `members[].doc_key` field is exactly the input
+  RT-7's tools want. RT-8's agent that needs to answer "how did ACME's revenue move" should call
+  `POST /entities/resolve` first to discover candidate `doc_key`s, then loop RT-7's tools per `doc_key`
+  — RT-7 does NOT fuse a multi-`doc_key` crossdoc cluster into one timeline in this slice (deferred,
+  design spec §6). `build_entity_timeline` never emits `entity_id` in its response — it is intentionally
+  removed, not aliased to `doc_key`, so nothing implies a stable id that isn't `doc_key` itself.
+- **The `status` field on every comparison version — `"matched" | "no_match" | "no_structure"`.**
+  `compare_concept_across_versions` preserves RT-6's `concept_lookup` `None` ("no `structure` artifact
+  yet") vs. `[]` ("has `structure`, concept's synonyms matched no row") distinction all the way to the
+  API response instead of collapsing both to an indistinguishable empty `rows` list. Every version of a
+  `doc_key` is always present in the output — no version is ever silently dropped for having no data.
+  RT-8's agent (and any UI) should render `"no_structure"` ("not yet processed") differently from
+  `"no_match"` ("processed, concept not reported this way").
+- **Both functions reuse existing algorithms unchanged, no reimplementation.** `entity_timeline` calls
+  `fdi.core.crossdoc.consolidate_entity` once (version-ordering, `None`-version-last, per-member
+  `section_count`/`concept_count`/`quality_ok`, `concept_presence`, `quality_trend` — all inherited, not
+  recomputed) and overrides its `entity_id` with the caller's `doc_key`. `compare_concept_across_versions`
+  calls RT-6's `fdi.pipeline.tables.concept_lookup` once per member document, unchanged — no new numeric
+  extraction or concept matching. RT-7 also inherits RT-6's documented false-positive class (a synonym
+  word inside an unrelated label, e.g. "Cost of revenue" matching `REVENUE`) unsolved, same as RT-6 left
+  it — `row_label` is surfaced unchanged in every comparison row so a human/agent can catch it by
+  inspection.
+- **No persisted entity index — on-demand, like `resolve_entities`/RT-6.** `list_by_doc_key` is a single
+  indexed `WHERE doc_key = ...` query; there is no O(N²) corpus scan here to amortize with a cache
+  (unlike `resolve_entities`'s clustering pass). Revisit only if a real deployment shows a `doc_key` with
+  hundreds of versions and query-time cost becomes visible.
+- **`fdi.pipeline.crossdoc._read_artifact` is now public `read_artifact`** (pure rename, no behavior
+  change) — `fdi.pipeline.entities.entity_timeline` reuses it for the same "latest artifact or `None`,
+  isolate one document's store failure rather than aborting the whole call" posture `resolve_entities`
+  already relied on. `resolve_entities`'s own call sites were updated in the same commit;
+  `test_resolve_entities.py` passes unchanged.
+- **Citations are `{doc_id, doc_key, version, table_index, row_label, column_header}`** on every matched
+  comparison row — `rows` is `concept_lookup`'s own row shape, untouched, so RT-6's citation contract
+  carries through unchanged.
 
 ## Build order (git-worktree waves)
 
