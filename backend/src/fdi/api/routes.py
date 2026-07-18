@@ -22,6 +22,7 @@ from fdi.api.deps import (
     VectorStoreDep,
 )
 from fdi.api.schemas import (
+    ConceptLookupView,
     DocumentVersionsView,
     DocumentView,
     EmbeddingTriggerView,
@@ -44,10 +45,13 @@ from fdi.api.schemas import (
     StageStatusView,
     StagesView,
     StaleView,
+    TablesView,
 )
+from fdi.core.ontology import CanonicalConcept
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.eval_service import run_evaluation
 from fdi.pipeline.intake import intake_document
+from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
 from fdi.platform.db.models import Document
@@ -462,3 +466,37 @@ async def resolve_entities_route(
     threshold = body.threshold if body.threshold is not None else default_threshold
     result = await resolve_entities(session=session, store=store, threshold=threshold)
     return EntitiesView.model_validate(result)
+
+
+# --------------------------------------------------------------------------
+# RT-6: structured financial retrieval over the `structure` artifact's
+# canonicalized table grids. No new stage/artifact -- reads `structure` on
+# demand via fdi.pipeline.tables, the same shape resolve_chunk (RT-1) reads
+# `chunks`.
+# --------------------------------------------------------------------------
+
+
+@router.get("/documents/{doc_id}/tables", response_model=TablesView)
+async def get_tables_route(
+    doc_id: str, session: SessionDep, store: StoreDep, keyword: str | None = Query(default=None)
+) -> TablesView:
+    tables = await get_tables(session=session, store=store, doc_id=doc_id, keyword=keyword)
+    if tables is None:
+        raise HTTPException(
+            status_code=404, detail=f"no structure artifact for document {doc_id}"
+        )
+    return TablesView.model_validate({"doc_id": doc_id, "tables": tables})
+
+
+@router.get("/documents/{doc_id}/concepts/{concept}", response_model=ConceptLookupView)
+async def concept_lookup_route(
+    doc_id: str, concept: CanonicalConcept, session: SessionDep, store: StoreDep
+) -> ConceptLookupView:
+    rows = await concept_lookup(session=session, store=store, doc_id=doc_id, concept=concept)
+    if rows is None:
+        raise HTTPException(
+            status_code=404, detail=f"no structure artifact for document {doc_id}"
+        )
+    return ConceptLookupView.model_validate(
+        {"doc_id": doc_id, "concept": concept.value, "rows": rows}
+    )

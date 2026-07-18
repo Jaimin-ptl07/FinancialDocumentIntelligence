@@ -147,3 +147,42 @@ class EntitiesView(BaseModel):
     entity_count: int
     entities: list[EntityView]
     unresolved: list[str]
+
+
+class TableGridBody(BaseModel):
+    n_rows: int
+    n_cols: int
+    header_row_count: int
+    column_headers: list[str]
+    grid: list[list[str]]
+
+
+class TableView(BaseModel):
+    table_index: int
+    row_count: int
+    column_count: int
+    stitched: bool = False
+    grid: TableGridBody
+
+
+class TablesView(BaseModel):
+    doc_id: str
+    tables: list[TableView]
+
+
+class ConceptValueView(BaseModel):
+    column_header: str
+    raw: str
+    value: float | None
+
+
+class ConceptRowView(BaseModel):
+    table_index: int
+    row_label: str
+    values: list[ConceptValueView]
+
+
+class ConceptLookupView(BaseModel):
+    doc_id: str
+    concept: str
+    rows: list[ConceptRowView]
