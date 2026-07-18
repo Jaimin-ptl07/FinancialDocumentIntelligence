@@ -43,3 +43,28 @@ def test_body_before_heading_is_a_preamble_section() -> None:
 
 def test_empty_blocks_is_empty_ast() -> None:
     assert build_ast({}) == {"schema_version": 1, "title": None, "sections": []}
+
+
+def test_second_title_becomes_a_section_and_table_cell_is_excluded() -> None:
+    unified = {"blocks": [
+        {"role": "title", "text": "ACME LTD Annual Report"},
+        {"role": "heading", "text": "Directors' Report"},
+        {"role": "body", "text": "The board is pleased."},
+        {"role": "table_cell", "text": "2126.88"},
+        {"role": "title", "text": "Cash Flow Statement"},
+        {"role": "body", "text": "Net cash from operations."},
+    ]}
+    assert build_ast(unified) == {
+        "schema_version": 1,
+        "title": "ACME LTD Annual Report",
+        "sections": [
+            {
+                "heading": "Directors' Report",
+                "paragraphs": ["The board is pleased."],
+            },
+            {
+                "heading": "Cash Flow Statement",
+                "paragraphs": ["Net cash from operations."],
+            },
+        ],
+    }

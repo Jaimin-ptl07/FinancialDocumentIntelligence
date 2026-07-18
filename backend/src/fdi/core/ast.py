@@ -10,6 +10,13 @@ def build_ast(unified: Mapping[str, object]) -> dict[str, object]:
     heading or end of document. Non-heading paragraph content before the first
     heading becomes a preamble section with heading=None.
 
+    The first `title`-role block becomes `ast["title"]`; every subsequent
+    `title`-role block starts a new section instead (heading = its text),
+    exactly like a `heading` block -- Azure emits multiple `title`-role
+    paragraphs per document, and only the first is the document title.
+    `table_cell`-role blocks (paragraphs that are also table cells) are
+    excluded entirely -- they're duplicated table content, not prose.
+
     Args:
         unified: Unified schema dict with blocks.
 
@@ -39,14 +46,14 @@ def build_ast(unified: Mapping[str, object]) -> dict[str, object]:
         text = text_raw if isinstance(text_raw, str) else ""
 
         # Process by role
-        if role == "title":
-            if title is None:
-                title = text
-        elif role in {"header", "footer", "page_number"}:
-            # Skip noise roles
+        if role == "title" and title is None:
+            # First title becomes the document title
+            title = text
+        elif role in {"header", "footer", "page_number", "table_cell"}:
+            # Skip noise roles and duplicated table-cell fragments
             pass
-        elif role == "heading":
-            # Create new section for heading
+        elif role == "heading" or role == "title":
+            # Create new section for heading, or for a non-first title
             current = {"heading": text, "paragraphs": []}
             sections.append(current)
         else:

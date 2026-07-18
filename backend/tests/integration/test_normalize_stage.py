@@ -76,9 +76,9 @@ async def test_normalize_chains_off_ocr(session_factory, store) -> None:  # fixt
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     norm_key = artifact_key(
-        doc.id, "normalize", 1, derived_input_hash([facts["ocr"].output_hash])
+        doc.id, "normalize", 2, derived_input_hash([facts["ocr"].output_hash])
     )
     body = await store.get_json(norm_key)
-    assert body["schema_version"] == 1
+    assert body["schema_version"] == 2
     assert body["content"] == "ACME LTD"
     assert body["blocks"] == [{"role": "title", "text": "ACME LTD"}]
