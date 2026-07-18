@@ -2,9 +2,21 @@
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Repo root, computed from THIS file's own on-disk location
+# (backend/src/fdi/platform/config.py -> platform -> fdi -> src -> backend ->
+# repo root), not a bare relative string. A bare "docs/architecture/..."
+# default only resolves when cwd happens to BE the repo root, which is
+# neither of this project's two real execution contexts: `uv run --directory
+# backend` (cwd backend/) or the built Docker image's `WORKDIR /app`. This
+# is cwd-independent for local/test execution (the package installs
+# editable, so __file__ is this source path); see backend/Dockerfile's COPY
+# of the schema file for the deployed-image side of this.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 class Settings(BaseSettings):
@@ -104,6 +116,20 @@ class Settings(BaseSettings):
     # against precision (distinct companies stay apart); tune against real data via
     # this var without a redeploy, or per-request via POST /entities/resolve's body.
     entity_sim_threshold: float = 0.85
+
+    # Extractor pipeline (schema-driven RAG field extraction, POST
+    # /extract/document). Always has a working default -- the schema ships
+    # in the repo -- so, like azure_di_model/embed_model, this is inert
+    # config: present in the trio for discoverability/override, not because
+    # the stack needs it set to boot. No new LLM config: the extractor
+    # reuses FDI_GPT_* (fdi.platform.extractor.AzureOpenAIExtractorClient).
+    # The default is computed from THIS module's own location (_REPO_ROOT
+    # above), not a bare repo-root-relative string -- see backend/
+    # Dockerfile's COPY of this exact file into the image's WORKDIR for the
+    # deployed-image side of making the default resolve.
+    extraction_schema_path: str = str(
+        _REPO_ROOT / "docs" / "architecture" / "field-extraction-schema.json"
+    )
 
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":

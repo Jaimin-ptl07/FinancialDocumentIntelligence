@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -101,3 +103,22 @@ def test_entity_resolution_settings_default(monkeypatch: pytest.MonkeyPatch) -> 
         monkeypatch.setenv(k, v)
     s = Settings()
     assert s.entity_sim_threshold == 0.85
+
+
+def test_extraction_schema_path_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The default must resolve to the committed schema file regardless of
+    cwd -- it is computed from this package's own on-disk location
+    (backend/src/fdi/platform/config.py), not left bare-relative (which only
+    ever resolved from a repo-root cwd, neither of the project's two real
+    execution contexts: `uv run --directory backend` or the Docker image's
+    `WORKDIR /app`). Proven here by chdir-ing somewhere else first."""
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.chdir(tmp_path)
+    s = Settings()
+    p = Path(s.extraction_schema_path)
+    assert p.is_absolute()
+    assert p.as_posix().endswith("docs/architecture/field-extraction-schema.json")
+    assert p.exists()
