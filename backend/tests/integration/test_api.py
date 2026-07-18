@@ -733,11 +733,13 @@ async def test_stages_and_artifact_proxy(
 # --------------------------------------------------------------------------
 
 
-async def test_search_503_when_unconfigured(client: AsyncClient, _alembic_applied) -> None:
+async def test_search_503_when_vector_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
     r = await client.post("/search", json={"query": "Balance Sheet"})
     assert r.status_code == 503
-    assert "embedder" in r.json()["detail"]
     assert "vector_store" in r.json()["detail"]
+    assert "embedder" not in r.json()["detail"]
 
 
 async def test_search_returns_the_best_match_first(make_client, _alembic_applied) -> None:

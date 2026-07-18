@@ -46,7 +46,7 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
-from fdi.platform.embeddings import AzureOpenAIEmbeddingClient
+from fdi.platform.embeddings import BgeEmbeddingClient
 from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import (
     bind_correlation_id,
@@ -94,7 +94,10 @@ async def _run_stage_async(
         resolver = DagResolver(REGISTRY.all())
         oc = AzureOcrClient.from_settings(get_settings())
         sc = AzureOpenAIClient.from_settings(get_settings())
-        ec = AzureOpenAIEmbeddingClient.from_settings(get_settings())
+        ec = BgeEmbeddingClient.from_settings(get_settings())
+        # `if ec is not None: services["embedder"] = ec` below is UNCHANGED -- `ec` can
+        # no longer be None (BgeEmbeddingClient.from_settings is unconditional), but
+        # the guard stays for uniform shape with oc/sc/gsc/vsc, not special-cased away.
         gsc = Neo4jGraphStore.from_settings(get_settings())
         vsc = MilvusVectorStore.from_settings(get_settings())
         services: dict[str, object] = {}

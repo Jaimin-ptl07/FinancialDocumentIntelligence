@@ -311,12 +311,24 @@ Each row is one spec → plan → implement cycle.
 | **SP-11** | Ontology Mapping | 8 | **heavy** | ✅ done (thin) |
 | **SP-12** | Provenance Graph | 9 | medium | ✅ done (thin: document/section/paragraph nodes; table-cell/figure/footnote + edge provenance deferred) |
 | **SP-13** | Embeddings → Milvus | 10 | **heavy** | ✅ done (embedding artifact only; Milvus store is SP-14) |
+| **SP-13b** | Embeddings backend swap: Azure OpenAI → BGE-small (local, fastembed) | 10 | light | ✅ done |
 | **SP-14** | Retrieval Indexes | 11 | **heavy** | ✅ done (vector index + search only; metadata/entity/section/clause/table indexes deferred) |
 | **SP-15** | Knowledge Store consolidation | 12 | light | ⬜ |
 | **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ⬜ |
 | **SP-17** | Quality validation framework | enterprise | medium | ✅ done (thin) |
 | **SP-17b** | Structure-aware quality (SP-17 follow-on) | enterprise | light | ✅ done |
 | **SP-18** | Next.js frontend | — | light | ✅ done (thin) |
+
+### SP-13b handoff — embedding dimension change, no SP-14 code change
+
+The embedding artifact's SHAPE is unchanged (`{schema_version:1, model, dim, chunks:[...]}`) — only its
+`model`/`dim` VALUES change (`"BAAI/bge-small-en-v1.5"`/`384` instead of `"text-embedding-3-small"`/`1536`).
+SP-14's `MilvusVectorStore` needs no code change: `MilvusVectorStore.from_settings` already reads
+`dim=settings.embed_dim` (`fdi/platform/vectorstore.py`), so a fresh `fdi_sections` Milvus collection
+created after this ships is automatically 384-dim. The one OPERATIONAL hazard: an operator with a live
+1536-dim `fdi_sections` collection from a prior real Azure-backed SP-13/SP-14 run must drop and recreate it
+manually — `MilvusVectorStore._ensure_collection` only creates a collection when ABSENT and never migrates
+an existing one's dimension.
 
 ### What SP-1 shipped that SP-2 must know
 

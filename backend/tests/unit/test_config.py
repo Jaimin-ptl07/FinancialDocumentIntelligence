@@ -75,11 +75,8 @@ def test_embed_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
     for k, v in REQUIRED.items():
         monkeypatch.setenv(k, v)
     s = Settings()
-    assert s.embed_endpoint is None
-    assert s.embed_key is None
-    assert s.embed_deployment == "text-embedding-3-small"
-    assert s.embed_api_version == "2024-10-21"
-    assert s.embed_dim == 1536
+    assert s.embed_model == "BAAI/bge-small-en-v1.5"
+    assert s.embed_dim == 384
 
 
 def test_neo4j_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
