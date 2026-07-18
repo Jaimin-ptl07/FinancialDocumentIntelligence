@@ -61,19 +61,17 @@ class Settings(BaseSettings):
     gpt_model: str = "gpt-4o"
     gpt_api_version: str = "2024-10-21"
 
-    # Azure OpenAI embeddings. Endpoint/key default to None so the stack boots
-    # without it configured; the embedding stage using them is wired separately.
-    # See docker/compose.yml x-backend-env and .env.example. Unlike azure_di_*/
-    # gpt_*, there is no pre-existing bare-named source in the sibling .env for
-    # these -- an operator provisioning a real embeddings deployment sets these
-    # directly here. embed_dim is passed to the SDK call as `dimensions=`
-    # (text-embedding-3-* models only); it must match a dimension the deployed
-    # model actually supports.
-    embed_endpoint: str | None = None
-    embed_key: str | None = None
-    embed_deployment: str = "text-embedding-3-small"
-    embed_api_version: str = "2024-10-21"
-    embed_dim: int = 1536
+    # BGE-small embeddings (fastembed, local CPU/ONNX). Swapped in at SP-13b,
+    # replacing SP-13's Azure OpenAI embedding backend -- BAAI/bge-small-en-v1.5
+    # runs locally, so there is no endpoint/key/api_version to configure, unlike
+    # azure_di_*/gpt_*. embed_dim is the model's native output size (384) and is
+    # NOT sent to fastembed as a request parameter (unlike Azure's `dimensions=`
+    # truncation option, which fastembed has no equivalent of) -- it is
+    # provenance/documentation only, plus what MilvusVectorStore.from_settings
+    # (SP-14) reads to size the Milvus collection. Change it only alongside
+    # embed_model, and only to a value that model actually produces.
+    embed_model: str = "BAAI/bge-small-en-v1.5"
+    embed_dim: int = 384
     # Neo4j (graph loader, SP-9b). URI/password default to None so the stack boots
     # without Neo4j configured (the `graph` Compose profile is opt-in, never part
     # of `core`); the graph_load stage using them is wired separately. See
