@@ -1086,6 +1086,180 @@ async def test_retrieve_vector_section_type_filter(
 
 
 # --------------------------------------------------------------------------
+# RT-4: POST /retrieve -- hybrid (RRF) retrieval. Unlike /retrieve/vector,
+# NEVER 503s: degrades to keyword-only when embedder/vector_store are
+# unconfigured (design spec sec 2 decision 2).
+# --------------------------------------------------------------------------
+
+
+async def _seed_hybrid_doc(session_factory, store, *, marker: str) -> dict[str, object]:
+    """One fully-processed, FTS-indexed document whose body text embeds a
+    fresh, globally-unique `marker` token -- Postgres' `chunk` table is
+    session-scoped across the WHOLE integration suite, and several other
+    fixtures in this file already use the literal, unmarked "Balance
+    Sheet"/"Total Assets 100" text; without a marker a keyword query for
+    that phrase would non-deterministically compete with unrelated rows for
+    a place inside hybrid_search's over-fetch window."""
+    from fdi.core.semantic import SectionType
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.retrieval import index_chunks_fts
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.semantic import FakeSemanticClient
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.chunks import ChunksStage
+    from fdi.pipeline.stages.graph import GraphStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
+    from fdi.pipeline.stages.semantic import SemanticStage
+
+    doc_key = f"hybrid-{uuid.uuid4()}"
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=doc_key, content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+        "paragraphs": [
+            {"role": "sectionHeading", "content": "Balance Sheet"},
+            {"content": f"Total Assets 100 {marker}"},
+        ],
+        "tables": [],
+    })
+    fake_semantic = FakeSemanticClient({"Balance Sheet": SectionType.BALANCE_SHEET.value})
+
+    reg = StageRegistry()
+    for stage in (
+        OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
+        ProvenanceStage(), ChunksStage(),
+    ):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    common = {
+        "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+        "store": store, "registry": reg, "resolver": resolver,
+    }
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="semantic", run_id=str(uuid.uuid4()),
+        services={"semantic": fake_semantic}, **common,
+    )
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+
+    async with session_factory() as s:
+        await index_chunks_fts(session=s, store=store, doc_id=doc.id)
+        await s.commit()
+    return {"doc_id": doc.id, "doc_key": doc_key}
+
+
+async def test_hybrid_route_never_503s_without_vector_configured(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    marker = uuid.uuid4().hex
+    seeded = await _seed_hybrid_doc(session_factory, store, marker=marker)
+    r = await client.post(
+        "/retrieve", json={"query": f"Total Assets 100 {marker}", "k": 5}
+    )
+    assert r.status_code == 200, r.text
+    ours = [h for h in r.json()["results"] if h["doc_id"] == seeded["doc_id"]]
+    assert ours and ours[0]["chunk_id"] == "s0"
+    assert ours[0]["score"] == pytest.approx(1 / 61)  # keyword-only: sole rank-1 match
+
+
+async def test_hybrid_route_returns_empty_results_for_no_match(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/retrieve", json={"query": "zzzznonexistenttoken9999", "k": 5})
+    assert r.status_code == 200
+    assert r.json()["results"] == []
+
+
+async def test_hybrid_route_fuses_vector_and_keyword_results(
+    make_client, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.api.deps import get_embedder, get_vector_store
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
+    from fdi.pipeline.vectorstore import FakeVectorStore
+
+    marker = uuid.uuid4().hex
+    seeded = await _seed_hybrid_doc(session_factory, store, marker=marker)
+    query = f"Balance Sheet\nTotal Assets 100 {marker}"
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_store = FakeVectorStore()
+    fake_store.upsert([{
+        "id": f"{seeded['doc_id']}:s0",
+        "vector": fake_embedder.embed([query])[0],
+        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
+                      "section_type": "BALANCE_SHEET", "page": 1},
+    }])
+
+    async with make_client(
+        dependency_overrides={
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_store,
+        }
+    ) as client:
+        r = await client.post("/retrieve", json={"query": query, "k": 5})
+
+    assert r.status_code == 200, r.text
+    ours = [h for h in r.json()["results"] if h["doc_id"] == seeded["doc_id"]]
+    assert ours
+    assert ours[0]["chunk_id"] == "s0"
+    assert ours[0]["doc_key"] == seeded["doc_key"]
+    # found by BOTH tools -> fused score is the sum of two RRF terms, > keyword-only alone
+    assert ours[0]["score"] > 1 / 61
+
+
+async def test_hybrid_route_section_type_filter_reaches_both_tools(
+    make_client, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.api.deps import get_embedder, get_vector_store
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
+    from fdi.pipeline.vectorstore import FakeVectorStore
+
+    marker = uuid.uuid4().hex
+    seeded = await _seed_hybrid_doc(session_factory, store, marker=marker)
+    query = f"Balance Sheet\nTotal Assets 100 {marker}"
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_store = FakeVectorStore()
+    fake_store.upsert([{
+        "id": f"{seeded['doc_id']}:s0",
+        "vector": fake_embedder.embed([query])[0],
+        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
+                      "section_type": "BALANCE_SHEET", "page": 1},
+    }])
+
+    async with make_client(
+        dependency_overrides={
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_store,
+        }
+    ) as client:
+        r = await client.post(
+            "/retrieve",
+            json={"query": query, "k": 5, "filters": {"section_type": "NOTES"}},
+        )
+
+    assert r.status_code == 200
+    # Only ONE vector is indexed in this test (the BALANCE_SHEET chunk), and
+    # the marker guarantees no other row anywhere in the shared Postgres
+    # session can match the keyword query -- a NOTES filter must therefore
+    # empty BOTH lists, not merely exclude our doc_id from a nonempty result.
+    assert r.json()["results"] == []
+
+
+# --------------------------------------------------------------------------
 # Task 6 (SP-16): POST /entities/resolve
 # --------------------------------------------------------------------------
 #
