@@ -1,0 +1,55 @@
+"""Retrieval orchestrator helpers: turn a hit id `{doc_id}:{chunk_id}` (Milvus,
+or later a graph node) into its full RT-1 chunk record (text + citation) by
+reading the `chunks` artifact. Pipeline layer (does I/O) -- imports platform
+(repo + store) + core, the same shape as resolve_entities. RT-2..RT-8 call
+resolve_chunks to attach text to a whole result set in one read per document."""
+
+from collections.abc import Mapping
+from typing import cast
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from fdi.platform.db.repository import RegistryRepository
+from fdi.platform.storage.artifact_store import ArtifactStore
+
+
+async def _read_chunks(
+    repo: RegistryRepository, store: ArtifactStore, doc_id: str
+) -> list[Mapping[str, object]]:
+    run = await repo.latest_run(doc_id, "chunks")
+    if run is None or run.artifact_key is None:
+        return []
+    body = cast(Mapping[str, object], await store.get_json(run.artifact_key))
+    chunks = body.get("chunks")
+    return [c for c in chunks if isinstance(c, Mapping)] if isinstance(chunks, list) else []
+
+
+async def resolve_chunk(
+    *, session: AsyncSession, store: ArtifactStore, doc_id: str, chunk_id: str
+) -> dict[str, object] | None:
+    repo = RegistryRepository(session)
+    for c in await _read_chunks(repo, store, doc_id):
+        if c.get("chunk_id") == chunk_id:
+            return {"doc_id": doc_id, **c}
+    return None
+
+
+async def resolve_chunks(
+    *, session: AsyncSession, store: ArtifactStore, ids: list[str]
+) -> dict[str, dict[str, object]]:
+    by_doc: dict[str, list[str]] = {}
+    for full_id in ids:
+        if ":" not in full_id:
+            continue
+        doc_id, chunk_id = full_id.split(":", 1)
+        by_doc.setdefault(doc_id, []).append(chunk_id)
+
+    repo = RegistryRepository(session)
+    out: dict[str, dict[str, object]] = {}
+    for doc_id, chunk_ids in by_doc.items():
+        records = {c.get("chunk_id"): c for c in await _read_chunks(repo, store, doc_id)}
+        for chunk_id in chunk_ids:
+            rec = records.get(chunk_id)
+            if rec is not None:
+                out[f"{doc_id}:{chunk_id}"] = {"doc_id": doc_id, **rec}
+    return out
