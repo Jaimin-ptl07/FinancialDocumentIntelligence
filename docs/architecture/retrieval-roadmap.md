@@ -299,3 +299,19 @@ page/bbox where available).
   incremental maintenance is later).
 - Numeric reconciliation / cross-statement math (RT-6 extracts values; reconciling them is a
   quality-layer follow-on).
+
+## Downstream: the extractor pipeline
+
+SP-17 (2026-07-18, `docs/superpowers/specs/2026-07-18-extractor-pipeline-design.md`) builds the
+schema-driven RAG field extractor — `POST /extract/document` — directly on top of this retrieval
+layer, one level up. For each `rag_extractable` + `document_content` field in
+`docs/architecture/field-extraction-schema.json`, it pools context via **RT-4's `hybrid_search`**
+(scoped to `{doc_key, version}`) plus, for numeric fields, **RT-6's `get_tables`** (rendering each
+canonicalized grid to text); a pure, model-free blend reranker (`fdi.core.extractor.rerank_
+candidates`) picks the top-k candidates, and an `ExtractorClient` seam mirroring RT-8's agent seam
+(`FakeExtractorClient` in the default suite, `AzureOpenAIExtractorClient` behind `FDI_GPT_*`) turns
+them into `{value, source, confidence}`.
+
+No new retrieval primitive was needed: `hybrid_search` and `get_tables`, built and tested independently
+of any downstream consumer, were sufficient as-is for the next layer up. That is the retrieval layer's
+tool set doing its job — RT-1..RT-8 exist to be composed, not just called directly from `/ask`.

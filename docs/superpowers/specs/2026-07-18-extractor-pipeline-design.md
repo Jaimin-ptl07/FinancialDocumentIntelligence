@@ -1,6 +1,6 @@
 # Extractor Pipeline — schema-driven RAG field extraction
 
-- **Status:** Design — 2026-07-18. The layer ABOVE retrieval: given a document and the field-extraction
+- **Status:** Implemented — 2026-07-18. The layer ABOVE retrieval: given a document and the field-extraction
   schema, it retrieves candidate context per field, reranks it, prompts Azure OpenAI to extract the
   value, and returns JSON with the source. User-selected shape: (1) **schema-driven batch** (loop every
   `rag_extractable` field of a module/document), (2) **model-free blend rerank**, (3) **hybrid +
@@ -283,3 +283,33 @@ trio). No new LLM config — reuses `FDI_GPT_*`.
 5. All four gates green (`ruff`, `mypy --strict`, `lint-imports` 1-kept/0-broken, full suite); the
    default suite makes NO Azure call (FakeExtractorClient) and needs no Milvus/Neo4j (fakes); real Azure
    only behind `@pytest.mark.azure`; deferred items (§6) out of scope.
+
+## 8. Implementation notes (2026-07-18)
+
+All done criteria (§7) met; full non-e2e suite green (595 passed, 12 skipped — e2e/azure/neo4j/milvus/
+bge self-skip). Three of the implementation plan's flagged forks were resolved as follows, each an
+improvement over the plan's illustrative code while keeping this spec's intent:
+
+1. **`ExtractContext` carries `doc_id` AND `doc_key` AND `version`**, not just `doc_id` as §3.2 shows.
+   The route resolves all three from `doc_key` ONCE (`DocumentRepository.list_by_doc_key`, already
+   needed for the 404 check), and threads them through. `extract_field` then scopes `hybrid_search` by
+   `filters={"doc_key": ctx.doc_key, "version": ctx.version}` directly and calls
+   `get_tables(doc_id=ctx.doc_id)` — with NO per-field `DocumentRepository.get` lookup inside the loop.
+   This avoids the O(fields) redundant single-row lookups per document that resolving only `doc_id` (the
+   plan's literal-spec-shape option) would need.
+2. **`extract_document`'s return** is `{schema_version, doc_id, field_count, fields}` (no `doc_key`/
+   `module`); the route — which already holds both from the request body — merges them into the
+   `ExtractDocumentView` response. Matches the plan's own resolution of this same gap.
+3. **`Settings.extraction_schema_path`'s default is cwd-independent.** It resolves from this package's
+   own on-disk location (`Path(__file__).resolve().parents[4] / "docs/architecture/field-extraction-
+   schema.json"` in `fdi.platform.config`, computed relative to `backend/src/fdi/platform/config.py`),
+   not a bare repo-root-relative string — verified by a test that `chdir`s elsewhere first. This is
+   correct for every local/test execution context (`uv run --directory backend pytest`, `uv run
+   --directory backend uvicorn ...`), where the package installs editable and `__file__` is the source
+   path. The built Docker image installs `--no-editable` (the package physically lives under `.venv/
+   .../site-packages/fdi/...`), so the same `parents[4]` arithmetic does not land on the image's `/app`
+   there; `.env.example`/`docker/compose.yml` set `FDI_EXTRACTION_SCHEMA_PATH=docs/architecture/
+   field-extraction-schema.json` explicitly for that context instead — a cwd-relative path that resolves
+   against the container's `WORKDIR /app`, matching where `backend/Dockerfile`'s added `COPY` places the
+   schema file. Every test in this suite overrides the schema-path dependency/value explicitly (per the
+   plan's own posture), so this only affects the real, unconfigured route default.
