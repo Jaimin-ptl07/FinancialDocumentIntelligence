@@ -4,6 +4,9 @@ from fdi.pipeline.stages import (
     ast as ast,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    chunks as chunks,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     embedding as embedding,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
