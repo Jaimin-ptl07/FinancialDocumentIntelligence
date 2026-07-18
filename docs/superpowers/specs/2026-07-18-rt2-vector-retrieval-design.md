@@ -1,7 +1,9 @@
 # RT-2 — Semantic (Vector) Retrieval
 
-- **Status:** Draft — 2026-07-18. Second sub-project of the retrieval layer (`docs/architecture/
-  retrieval-roadmap.md`), Wave B (parallel with RT-3/RT-5/RT-6, all depend only on RT-1).
+- **Status:** Implemented — 2026-07-18. Second sub-project of the retrieval layer (`docs/architecture/
+  retrieval-roadmap.md`), Wave B (parallel with RT-3/RT-5/RT-6, all depend only on RT-1). All four
+  gates green (`ruff`, `mypy --strict`, `lint-imports` 1-kept/0-broken, full suite: 371 passed, 8
+  skipped e2e/azure/neo4j/milvus/bge); `POST /search` confirmed byte-for-byte unchanged in the diff.
 - **Depends on:**
   - **RT-1** (`fdi.core.retrieval.build_chunks`, `ChunksStage`, and — the two primitives this spec
     builds directly on — `resolve_chunk`/`resolve_chunks` (`fdi.pipeline.retrieval`), which turn a

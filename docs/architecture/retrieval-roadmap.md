@@ -47,7 +47,7 @@ page/bbox where available).
 | # | Sub-project | Weight | Depends on | Ships |
 |---|---|---|---|---|
 | **RT-1** | Retrieval foundations — unified chunk record + filterable index | heavy | ingestion | ✅ done (2026-07-18). `fdi.core.retrieval.build_chunks` + `ChunksStage` (`deps=("ast","semantic","provenance")`) → per-doc `chunks` artifact `[{chunk_id, heading, text, section_type, page, para_count}]`; `IndexStage` v2 (`deps=("embedding","chunks")`) enriches Milvus metadata to `{heading, chunk_id, section_type, page}`; `resolve_chunk`/`resolve_chunks` (`fdi.pipeline.retrieval`) every text-returning tool uses. |
-| **RT-2** | Semantic (vector) retrieval | medium | RT-1 | `vector_search(query, filters, k)` — embed query (BGE), Milvus search with metadata filters, resolve hits to text+citation via RT-1. `POST /retrieve/vector`; upgrades `/search` to return text. |
+| **RT-2** | Semantic (vector) retrieval | medium | RT-1 | ✅ done (2026-07-18). `vector_search(query, filters, k)` (`fdi.pipeline.retrieval`) — embed query (BGE), Milvus search with `section_type`/`doc_key`/`version` filters, resolve hits to text+citation via RT-1's `resolve_chunks`. `POST /retrieve/vector`. `POST /search` deliberately left unchanged (design spec §2 decision 5) — see handoff below. |
 | **RT-3** | Lexical / keyword retrieval | medium | RT-1 | Postgres full-text (`tsvector`) over a `chunk` table populated from the `chunks` artifact; `keyword_search(query, filters)`. `POST /retrieve/keyword`. |
 | **RT-4** | Hybrid retrieval + rerank | light | RT-2, RT-3 | pure `fuse(vector_hits, keyword_hits)` (Reciprocal Rank Fusion); one `POST /retrieve` (hybrid) tool. |
 | **RT-5** | Graph retrieval (+ corpus-graph fix) | heavy | ingestion | Fix `graphload` id-namespacing (`{doc_id}:{id}`) + real `:Document/:Section/:Paragraph` labels & `:CONTAINS/:READING_ORDER` rel-types; `Neo4jGraphStore` read methods (mockable); tools `neighbors`, `document_structure`, `reading_order`, `provenance(node)→page/bbox`. `POST /graph/*`. |
@@ -80,6 +80,39 @@ page/bbox where available).
 - **The `index` stage_run re-ran for every already-indexed document** after the v1→v2 bump (new
   `input_hash` from the added `chunks` dep) — intended, not a regression; existing corpora reindex
   automatically with the richer metadata on next `run_stage("index", ...)`.
+
+## What RT-2 shipped that RT-3…RT-8 must know
+
+- **`vector_search`/`build_vector_results`'s pure/impure split is the template for later retrieval
+  tools.** `fdi.core.retrieval.build_vector_results(hits, resolved, docs, *, section_type, doc_key,
+  version, k)` is pure — no I/O, no ORM types (docs is a plain `{doc_id: {doc_key, version}}` dict,
+  never a `Document` row) — and does all the filtering, citation-joining, and truncation, never
+  re-sorting (output order is a strict sub-sequence of the input, best-match-first, order).
+  `fdi.pipeline.retrieval.vector_search` does only the I/O (one embed call, one
+  `vector_store.search`, one `DocumentRepository.get_many`, one `resolve_chunks`) and delegates
+  assembly to the pure function. RT-5 (graph retrieval) and RT-6 (table retrieval) should mirror this
+  shape: a pure `fdi.core.retrieval` (or sibling) assembler + a pipeline-layer orchestrator that does
+  the fetching, matching `resolve_entities`/`fdi.core.crossdoc`'s precedent.
+- **`DocumentRepository.get_many(ids: list[str]) -> dict[str, Document]`** (`fdi.platform.db.
+  repository`) is a reusable batched-doc-lookup primitive: empty input → no query, unknown ids are
+  simply absent (never an error). Any later tool that needs to join multiple hits' `doc_id`s back to
+  `doc_key`/`version` in one round trip (RT-6's table retrieval, RT-7's cross-document entity work)
+  should reuse this rather than re-implementing a per-id lookup.
+- **`_OVERFETCH_FACTOR = 5`** (private constant, `fdi.pipeline.retrieval`) is how RT-2 filters
+  `section_type`/`doc_key`/`version` without a `VectorStore.search` protocol change: when any filter
+  is set, `vector_search` requests `k * 5` from the vector store (in-memory `section_type` check +
+  one batched Postgres join for `doc_key`/`version`), single-shot — no adaptive re-query if fewer than
+  `k` survive filtering. `VectorStore.search(vector, k)`'s signature was deliberately NOT extended
+  with a filter parameter (would touch both `FakeVectorStore` and `MilvusVectorStore`, shared by
+  RT-3/RT-5/RT-6); revisit only if a real corpus shows the over-fetch factor is measurably too
+  expensive.
+- **`POST /search` was deliberately left unchanged — not silently dropped from scope.** RT-2's design
+  spec (§2 decision 5) chose to keep `/search` as the raw, uncited, never-dropping probe it already
+  was (its own test indexes a synthetic vector with no backing `Document` row or `chunks` artifact —
+  routing it through `resolve_chunks`/citation joins would silently return zero results for that
+  exact, already-tested case) and ship `POST /retrieve/vector` as a strictly additive, citation-first
+  endpoint instead. **RT-8's `/ask` agent should register `vector_search`/`POST /retrieve/vector` as
+  its citation-bearing semantic-search tool, not `/search`.**
 
 ## Build order (git-worktree waves)
 
