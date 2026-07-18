@@ -38,6 +38,9 @@ from fdi.api.schemas import (
     GraphLoadTriggerView,
     GraphNeighborsRequest,
     GraphNeighborsView,
+    HybridSearchRequest,
+    HybridSearchResultsView,
+    HybridSearchResultView,
     IndexFtsView,
     JobAccepted,
     JobView,
@@ -77,7 +80,12 @@ from fdi.pipeline.graphquery import (
 )
 from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.intake import intake_document
-from fdi.pipeline.retrieval import index_chunks_fts, keyword_search, vector_search
+from fdi.pipeline.retrieval import (
+    hybrid_search,
+    index_chunks_fts,
+    keyword_search,
+    vector_search,
+)
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
@@ -642,6 +650,43 @@ async def keyword_search_route(
         section_type=body.section_type, doc_key=body.doc_key, version=body.version,
     )
     return KeywordSearchResultsView(results=[KeywordHitView(**h) for h in hits])
+
+
+# --------------------------------------------------------------------------
+# RT-4: POST /retrieve -- hybrid (RRF) retrieval over RT-2's vector_search +
+# RT-3's keyword_search. Unlike /retrieve/vector, this route has NO
+# 503-when-unconfigured branch: keyword_search has no external dependency
+# (Postgres is mandatory config, RT-3 sec 2 decision 9), so hybrid_search
+# degrades to keyword-only when embedder/vector_store are unconfigured
+# rather than failing the whole request -- design spec sec 2 decision 2.
+# --------------------------------------------------------------------------
+
+
+@router.post("/retrieve", response_model=HybridSearchResultsView)
+async def hybrid_search_route(
+    body: HybridSearchRequest,
+    session: SessionDep,
+    store: StoreDep,
+    embedder: EmbedderDep,
+    vector_store: VectorStoreDep,
+) -> HybridSearchResultsView:
+    filters = {
+        "section_type": body.filters.section_type if body.filters else None,
+        "doc_key": body.filters.doc_key if body.filters else None,
+        "version": body.filters.version if body.filters else None,
+    }
+    results = await hybrid_search(
+        session=session,
+        store=store,
+        embedder=embedder,
+        vector_store=vector_store,
+        query=body.query,
+        k=body.k,
+        filters=filters,
+    )
+    return HybridSearchResultsView(
+        results=[HybridSearchResultView.model_validate(r) for r in results]
+    )
 
 
 # --------------------------------------------------------------------------

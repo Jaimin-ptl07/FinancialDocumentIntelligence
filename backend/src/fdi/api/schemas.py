@@ -247,6 +247,34 @@ class KeywordSearchResultsView(BaseModel):
     results: list[KeywordHitView]
 
 
+class HybridSearchFilters(BaseModel):
+    section_type: str | None = None
+    doc_key: str | None = None
+    version: int | None = None
+
+
+class HybridSearchRequest(BaseModel):
+    query: str
+    k: int = 5
+    filters: HybridSearchFilters | None = None
+
+
+class HybridSearchResultView(BaseModel):
+    doc_id: str
+    doc_key: str | None
+    version: int | None
+    chunk_id: str
+    heading: str | None
+    page: int | None
+    section_type: str | None
+    text: str
+    score: float
+
+
+class HybridSearchResultsView(BaseModel):
+    results: list[HybridSearchResultView]
+
+
 class GraphCitationView(BaseModel):
     doc_id: str | None
     doc_key: str | None

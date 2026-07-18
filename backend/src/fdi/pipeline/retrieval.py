@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fdi.core.retrieval import build_vector_results, chunk_rows_for_index
+from fdi.core.retrieval import build_vector_results, chunk_rows_for_index, fuse
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.models import Chunk
@@ -183,3 +183,58 @@ async def keyword_search(
         }
         for c, s in rows
     ]
+
+
+_FUSE_OVERFETCH_FACTOR = 3
+
+
+async def hybrid_search(
+    *,
+    session: AsyncSession,
+    store: ArtifactStore,
+    embedder: EmbeddingClient | None,
+    vector_store: VectorStore | None,
+    query: str,
+    k: int,
+    filters: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """RT-4's hybrid retrieval orchestrator: fetch k*_FUSE_OVERFETCH_FACTOR
+    from RT-3's keyword_search (always -- Postgres is mandatory config) and,
+    if BOTH embedder and vector_store are configured, from RT-2's
+    vector_search over the SAME query/filters; fuse via
+    fdi.core.retrieval.fuse and truncate to k. Degrades to keyword-only
+    (never raises, never needs a 503) when embedder/vector_store is None --
+    design spec sec 2 decision 2. Pipeline layer: imports platform + core,
+    no I/O left inline -- fusion itself lives in fdi.core.retrieval, pure
+    and independently unit-tested."""
+    fetch_k = k * _FUSE_OVERFETCH_FACTOR
+    section_type = filters.get("section_type") if filters else None
+    doc_key = filters.get("doc_key") if filters else None
+    version = filters.get("version") if filters else None
+
+    keyword_hits = await keyword_search(
+        session=session,
+        query=query,
+        k=fetch_k,
+        section_type=cast(str | None, section_type),
+        doc_key=cast(str | None, doc_key),
+        version=cast(int | None, version),
+    )
+
+    vector_hits: list[dict[str, object]] = []
+    if embedder is not None and vector_store is not None:
+        vector_hits = await vector_search(
+            session=session,
+            store=store,
+            embedder=embedder,
+            vector_store=vector_store,
+            query=query,
+            k=fetch_k,
+            filters=filters,
+        )
+
+    return fuse(
+        cast(list[Mapping[str, object]], vector_hits),
+        cast(list[Mapping[str, object]], keyword_hits),
+        k=k,
+    )

@@ -1,6 +1,6 @@
 # RT-4 — Hybrid Retrieval (Reciprocal Rank Fusion)
 
-- **Status:** Draft — 2026-07-18. Fourth sub-project of the retrieval layer
+- **Status:** Implemented — 2026-07-18. Fourth sub-project of the retrieval layer
   (`docs/architecture/retrieval-roadmap.md`), Wave C (needs RT-2 + RT-3, both
   done). Light weight per the roadmap: one pure fusion function, one
   orchestrator, one route.
