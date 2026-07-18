@@ -1,6 +1,6 @@
 # SP-13b — Embeddings backend swap: Azure OpenAI → BGE-small (local, fastembed)
 
-- **Status:** Draft 2026-07-18. Companion plan:
+- **Status:** Implemented 2026-07-18. Companion plan:
   `docs/superpowers/plans/2026-07-18-sp13b-bge-embeddings.md`.
 - **Depends on:** SP-13 (ships the `EmbeddingClient` protocol, `EmbeddingStage`, `FakeEmbeddingClient` —
   ALL THREE stay byte-for-byte unchanged here; SP-13b replaces only `AzureOpenAIEmbeddingClient`, the one

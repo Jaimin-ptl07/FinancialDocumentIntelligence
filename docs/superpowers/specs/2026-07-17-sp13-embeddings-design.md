@@ -1,7 +1,11 @@
 # SP-13 — Embeddings via Azure OpenAI
 
 - **Status:** Implemented 2026-07-18. Companion plan:
-  `docs/superpowers/plans/2026-07-17-sp13-embeddings.md`.
+  `docs/superpowers/plans/2026-07-17-sp13-embeddings.md`. **Embedding backend swapped to BGE-small
+  (local, fastembed) in SP-13b** (`docs/superpowers/specs/2026-07-18-sp13b-bge-embeddings-design.md`) —
+  `AzureOpenAIEmbeddingClient` described below no longer exists in the codebase; the `EmbeddingClient`
+  protocol, `EmbeddingStage`, and `FakeEmbeddingClient` this spec designed are unchanged and still exactly
+  as described.
 - **Depends on:** SP-2 (stage framework — `StageContext.services`, content-addressed derived-stage
   caching), SP-8 (Document AST — provides `{schema_version, title, sections:[{heading, paragraphs}]}`),
   SP-10 (the `openai` SDK dependency is already in `backend/pyproject.toml`; the injected-client /
