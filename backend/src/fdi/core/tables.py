@@ -13,6 +13,10 @@ for the full design rationale (decisions 4-8 in particular).
 """
 
 import re
+from collections.abc import Mapping
+from typing import cast
+
+from fdi.core.ontology import CanonicalConcept, normalize_label, synonyms_for
 
 _BLANK_TOKENS = {
     "", "-", "--", "–", "—",
@@ -73,3 +77,102 @@ def parse_numeric(cell: object) -> float | None:
 
     value = float(text)
     return -value if negative else value
+
+
+def _contains_subsequence(haystack: list[str], needle: list[str]) -> bool:
+    """True if `needle` (non-empty) appears as a CONTIGUOUS run inside
+    `haystack`, at any offset."""
+    if not needle:
+        return False
+    span = len(needle)
+    return any(
+        haystack[i : i + span] == needle for i in range(len(haystack) - span + 1)
+    )
+
+
+def find_concept_rows(
+    grid: Mapping[str, object], concept: CanonicalConcept
+) -> list[dict[str, object]]:
+    """Match `concept`'s ontology synonyms against `grid`'s row-label column
+    (column 0) using normalized word-token-subsequence containment -- e.g.
+    synonym tokens ["revenue","from","operations"] match inside label tokens
+    ["total","revenue","from","operations"], so "Total revenue from
+    operations" matches REVENUE even though map_label's exact lookup would
+    not. Header rows (`grid["header_row_count"]`) are never treated as data.
+
+    For each matched row, returns {row_label, values: [{column_header, raw,
+    value}, ...]} covering every non-label column (column_index >= 1);
+    `value` is `parse_numeric(raw)` -- ALL numeric columns are returned, this
+    function never picks "the" period.
+
+    KNOWN LIMITATION (documented, not solved): a synonym word can appear
+    inside a label that means a different concept -- "Cost of revenue"
+    contains the REVENUE synonym "revenue" and WILL match REVENUE. See the
+    design spec's decision 5.
+
+    Degrades to [] on a malformed/empty `grid` (missing keys, n_cols == 0,
+    ragged rows shorter than n_cols) -- never raises.
+    """
+    n_rows_raw = grid.get("n_rows")
+    n_rows = n_rows_raw if isinstance(n_rows_raw, int) else 0
+    n_cols_raw = grid.get("n_cols")
+    n_cols = n_cols_raw if isinstance(n_cols_raw, int) else 0
+    header_row_count_raw = grid.get("header_row_count")
+    header_row_count = header_row_count_raw if isinstance(header_row_count_raw, int) else 0
+
+    rows_raw = grid.get("grid")
+    rows = cast("list[object]", rows_raw) if isinstance(rows_raw, list) else []
+    headers_raw = grid.get("column_headers")
+    column_headers = cast("list[object]", headers_raw) if isinstance(headers_raw, list) else []
+
+    synonym_tokens = [
+        tokens
+        for s in synonyms_for(concept)
+        if (tokens := normalize_label(s).split())
+    ]
+
+    matches: list[dict[str, object]] = []
+    for r in range(header_row_count, n_rows):
+        row_obj = rows[r] if r < len(rows) else None
+        row = cast("list[object]", row_obj) if isinstance(row_obj, list) else []
+
+        label_obj = row[0] if row else ""
+        label_raw = label_obj if isinstance(label_obj, str) else ""
+        label_tokens = normalize_label(label_raw).split()
+        if not label_tokens:
+            continue
+        if not any(_contains_subsequence(label_tokens, syn) for syn in synonym_tokens):
+            continue
+
+        values: list[dict[str, object]] = []
+        for c in range(1, n_cols):
+            raw_obj = row[c] if c < len(row) else ""
+            raw = raw_obj if isinstance(raw_obj, str) else ""
+            header_obj = column_headers[c] if c < len(column_headers) else ""
+            header = header_obj if isinstance(header_obj, str) else ""
+            values.append({"column_header": header, "raw": raw, "value": parse_numeric(raw)})
+        matches.append({"row_label": label_raw, "values": values})
+
+    return matches
+
+
+def filter_tables(
+    tables: list[Mapping[str, object]], keyword: str | None
+) -> list[Mapping[str, object]]:
+    """Keep only tables where some `grid["column_headers"][c]` contains
+    `keyword` (case-insensitive substring). `keyword` None or "" returns
+    `tables` unchanged. A table with a missing/malformed `grid`/
+    `column_headers` is dropped when a keyword IS given (nothing to match
+    against), kept unchanged when it isn't."""
+    if not keyword:
+        return tables
+    needle = keyword.lower()
+    out: list[Mapping[str, object]] = []
+    for t in tables:
+        grid = t.get("grid")
+        headers = grid.get("column_headers") if isinstance(grid, Mapping) else None
+        if isinstance(headers, list) and any(
+            isinstance(h, str) and needle in h.lower() for h in headers
+        ):
+            out.append(t)
+    return out
