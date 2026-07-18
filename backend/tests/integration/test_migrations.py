@@ -12,7 +12,7 @@ async def test_alembic_version_is_stamped(migrated_engine: AsyncEngine) -> None:
         result = await conn.execute(sqlalchemy.text(
             "SELECT version_num FROM alembic_version"
         ))
-        assert result.scalar_one() == "0005"
+        assert result.scalar_one() == "0006"
 
 
 async def test_stage_run_status_check_bites(migrated_engine: AsyncEngine) -> None:
@@ -68,3 +68,37 @@ async def test_two_null_checksums_are_allowed(migrated_engine: AsyncEngine) -> N
     async with migrated_engine.begin() as conn:
         await conn.execute(sqlalchemy.text("INSERT INTO document (id) VALUES ('d-n1')"))
         await conn.execute(sqlalchemy.text("INSERT INTO document (id) VALUES ('d-n2')"))  # no error
+
+
+async def test_chunk_tsv_is_generated_and_searchable(migrated_engine: AsyncEngine) -> None:
+    async with migrated_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text("INSERT INTO document (id) VALUES ('d-fts')"))
+        await conn.execute(sqlalchemy.text(
+            "INSERT INTO chunk (id, doc_id, chunk_id, text) VALUES "
+            "('d-fts:s0', 'd-fts', 's0', 'Balance Sheet total assets'), "
+            "('d-fts:s1', 'd-fts', 's1', 'Directors report narrative')"
+        ))
+    async with migrated_engine.connect() as conn:
+        result = await conn.execute(sqlalchemy.text(
+            "SELECT id FROM chunk WHERE tsv @@ plainto_tsquery('english', 'balance sheet')"
+        ))
+        ids = [row[0] for row in result.all()]
+    assert ids == ["d-fts:s0"]
+
+
+async def test_chunk_tsv_index_is_gin(migrated_engine: AsyncEngine) -> None:
+    async with migrated_engine.connect() as conn:
+        result = await conn.execute(sqlalchemy.text(
+            "SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_chunk_tsv'"
+        ))
+        indexdef = result.scalar_one()
+    assert "USING gin" in indexdef
+
+
+async def test_chunk_doc_id_fk_enforced(migrated_engine: AsyncEngine) -> None:
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        async with migrated_engine.begin() as conn:
+            await conn.execute(sqlalchemy.text(
+                "INSERT INTO chunk (id, doc_id, chunk_id, text) VALUES "
+                "('nope:s0', 'no-such-doc', 's0', 'x')"
+            ))
