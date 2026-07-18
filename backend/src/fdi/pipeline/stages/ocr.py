@@ -16,7 +16,10 @@ class OcrStage:
     # structural payload (bounding_regions, spans, cells, sections) as schema_version 2.
     # version=3: SP-7b added table spans (offset/length) as schema_version 3.
     # version=4: SP-7d added figures (caption + bounding_regions) as schema_version 4.
-    version = 4
+    # version=5: Phase 0 retains cell elements + cell bounding_regions, table
+    # caption/footnotes, page spans + selection_marks, and a low-confidence word list
+    # -- the Azure structure Phases 1-5 consume -- as schema_version 5.
+    version = 5
     deps: tuple[str, ...] = ()
 
     async def run(self, ctx: StageContext) -> object:

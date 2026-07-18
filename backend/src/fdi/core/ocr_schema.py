@@ -3,6 +3,21 @@
 from collections.abc import Mapping
 from typing import cast
 
+# Words with confidence below this threshold are surfaced in the top-level
+# `low_confidence_words` list (Phase 5 uses this to flag shaky numeric cells).
+_LOW_CONFIDENCE_THRESHOLD = 0.7
+
+
+def _normalize_caption(raw: object) -> dict[str, object] | None:
+    """Map an Azure caption/footnote object (`content` + `boundingRegions`) to snake_case."""
+    if not isinstance(raw, dict):
+        return None
+    content = raw.get("content")
+    return {
+        "content": content if isinstance(content, str) else "",
+        "bounding_regions": _normalize_bounding_regions(raw.get("boundingRegions")),
+    }
+
 
 def _normalize_bounding_regions(raw: object) -> list[dict[str, object]]:
     """Map Azure `boundingRegions[].pageNumber/polygon` to snake_case."""
@@ -61,10 +76,13 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
 
     # Extract and normalize pages
     pages_data: list[dict[str, object]] = []
+    low_confidence_words: list[dict[str, object]] = []
     pages_raw = raw.get("pages")
     if isinstance(pages_raw, list):
         for page in pages_raw:
             if isinstance(page, dict):
+                page_number = page.get("pageNumber")
+
                 # Extract lines and words lists safely
                 lines = page.get("lines")
                 lines_list = lines if isinstance(lines, list) else []
@@ -72,13 +90,44 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
                 words = page.get("words")
                 words_list = words if isinstance(words, list) else []
 
+                for word in words_list:
+                    if not isinstance(word, dict):
+                        continue
+                    confidence = word.get("confidence")
+                    if not isinstance(confidence, int | float) or isinstance(confidence, bool):
+                        continue
+                    if confidence < _LOW_CONFIDENCE_THRESHOLD:
+                        low_confidence_words.append(
+                            {
+                                "page_number": page_number,
+                                "content": word.get("content"),
+                                "confidence": confidence,
+                                "polygon": word.get("polygon"),
+                            }
+                        )
+
+                selection_marks_raw = page.get("selectionMarks")
+                selection_marks: list[dict[str, object]] = []
+                if isinstance(selection_marks_raw, list):
+                    for mark in selection_marks_raw:
+                        if isinstance(mark, dict):
+                            selection_marks.append(
+                                {
+                                    "state": mark.get("state"),
+                                    "confidence": mark.get("confidence"),
+                                    "polygon": mark.get("polygon"),
+                                }
+                            )
+
                 page_dict: dict[str, object] = {
-                    "page_number": page.get("pageNumber"),
+                    "page_number": page_number,
                     "width": page.get("width"),
                     "height": page.get("height"),
                     "unit": page.get("unit"),
                     "line_count": len(lines_list),
                     "word_count": len(words_list),
+                    "spans": _normalize_spans(page.get("spans")),
+                    "selection_marks": selection_marks,
                 }
                 pages_data.append(page_dict)
 
@@ -111,6 +160,10 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
                             row_span = cell.get("rowSpan")
                             column_span = cell.get("columnSpan")
                             cell_content = cell.get("content")
+                            elements = cell.get("elements")
+                            elements_list = (
+                                cast(list[object], elements) if isinstance(elements, list) else []
+                            )
                             cell_dict: dict[str, object] = {
                                 "row_index": cell.get("rowIndex"),
                                 "column_index": cell.get("columnIndex"),
@@ -118,8 +171,20 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
                                 "column_span": column_span if column_span is not None else 1,
                                 "kind": cell.get("kind"),
                                 "content": cell_content if cell_content is not None else "",
+                                "elements": elements_list,
+                                "bounding_regions": _normalize_bounding_regions(
+                                    cell.get("boundingRegions")
+                                ),
                             }
                             cells_data.append(cell_dict)
+
+                footnotes_raw = table.get("footnotes")
+                footnotes_data: list[dict[str, object]] = []
+                if isinstance(footnotes_raw, list):
+                    for footnote in footnotes_raw:
+                        normalized = _normalize_caption(footnote)
+                        if normalized is not None:
+                            footnotes_data.append(normalized)
 
                 table_dict: dict[str, object] = {
                     "row_count": table.get("rowCount"),
@@ -127,6 +192,8 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
                     "bounding_regions": _normalize_bounding_regions(table.get("boundingRegions")),
                     "cells": cells_data,
                     "spans": _normalize_spans(table.get("spans")),
+                    "caption": _normalize_caption(table.get("caption")),
+                    "footnotes": footnotes_data,
                 }
                 tables_data.append(table_dict)
 
@@ -160,13 +227,14 @@ def normalize_ocr(raw: Mapping[str, object]) -> dict[str, object]:
 
     # Build result
     result: dict[str, object] = {
-        "schema_version": 4,
+        "schema_version": 5,
         "content": content,
         "pages": pages_data,
         "paragraphs": paragraphs_data,
         "tables": tables_data,
         "sections": sections_data,
         "figures": figures_data,
+        "low_confidence_words": low_confidence_words,
     }
 
     return result
