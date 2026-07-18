@@ -1,9 +1,11 @@
 # RT-6 — Structured Financial Retrieval (table grids + concept→number linking)
 
-- **Status:** Draft — 2026-07-18. Sixth sub-project of the retrieval layer (`docs/architecture/
+- **Status:** Implemented — 2026-07-18. Sixth sub-project of the retrieval layer (`docs/architecture/
   retrieval-roadmap.md`), Wave B (parallel with RT-2, RT-3, RT-5 — independent of them, depends only
   on RT-1 for roadmap sequencing; in practice RT-6 depends directly on ingestion's `structure` +
-  `fdi.core.ontology`, not on anything RT-1 shipped).
+  `fdi.core.ontology`, not on anything RT-1 shipped). All done criteria (§7) verified; see
+  `docs/superpowers/plans/2026-07-18-rt6-structured-financial-retrieval.md` for the executed plan and
+  the retrieval roadmap's RT-6 row for the RT-7 handoff.
 - **Depends on (ingestion, all complete):**
   - **SP-7b/SP-7c** (`structure` artifact, `StructureStage`, `deps=("ocr",)`, `version=2`:
     `{schema_version:2, blocks:[...], tables:[{row_count, column_count, cells, spans,

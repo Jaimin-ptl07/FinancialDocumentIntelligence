@@ -51,7 +51,7 @@ page/bbox where available).
 | **RT-3** | Lexical / keyword retrieval | medium | RT-1 | Postgres full-text (`tsvector`) over a `chunk` table populated from the `chunks` artifact; `keyword_search(query, filters)`. `POST /retrieve/keyword`. |
 | **RT-4** | Hybrid retrieval + rerank | light | RT-2, RT-3 | pure `fuse(vector_hits, keyword_hits)` (Reciprocal Rank Fusion); one `POST /retrieve` (hybrid) tool. |
 | **RT-5** | Graph retrieval (+ corpus-graph fix) | heavy | ingestion | Fix `graphload` id-namespacing (`{doc_id}:{id}`) + real `:Document/:Section/:Paragraph` labels & `:CONTAINS/:READING_ORDER` rel-types; `Neo4jGraphStore` read methods (mockable); tools `neighbors`, `document_structure`, `reading_order`, `provenance(node)→page/bbox`. `POST /graph/*`. |
-| **RT-6** | Structured financial retrieval | heavy | RT-1 | Query the canonicalized table `grid`s: `get_tables(doc_id, filters)`, `concept_lookup(concept)` linking `CanonicalConcept`→grid rows and extracting the numeric cell (the deferred numeric extraction). `POST /tables/*`, `/concepts/*`. |
+| **RT-6** | Structured financial retrieval | heavy | RT-1 | ✅ done (2026-07-18). `fdi.core.tables.parse_numeric` (financial cell parsing: thousands incl. Indian lakh grouping, parenthetical negatives, leading sign, percent-as-printed, currency strip/no-FX, blanks/dashes/N-A→`None`, never raises) + `find_concept_rows` (normalized word-token-subsequence match of a concept's ontology synonyms against grid column 0, returns ALL numeric columns per matched row) + `filter_tables` (keyword over column headers) — pure, `fdi.core.tables`' only cross-core import is `fdi.core.ontology` (new public `normalize_label`/`synonyms_for`). `fdi.pipeline.tables.get_tables`/`concept_lookup` read the EXISTING `structure` artifact on demand (no new stage/artifact). `GET /documents/{doc_id}/tables?keyword=`, `GET /documents/{doc_id}/concepts/{concept}`, citation-carrying (`doc_id`, `table_index`, `row_label`, `column_header`). |
 | **RT-7** | Cross-document / entity retrieval | medium | RT-6 (concepts), crossdoc | `entity_timeline(entity)`, `compare_concept_across_versions(entity, concept)`; optionally persist the entity index for fast lookup. `GET /entities/{id}/timeline`, `POST /entities/compare`. |
 | **RT-8** | Retrieval agent — `POST /ask` | heavy | RT-2…RT-7 | Register every RT tool as an Azure OpenAI function schema; an agent loop (plan → call tools → synthesize) returns a **cited** answer `{answer, citations, tool_trace}`. Mockable LLM seam (`FakeAgentClient` in the default suite; real Azure OpenAI behind an opt-in marker). The capstone that makes the tools "tools." |
 
@@ -80,6 +80,35 @@ page/bbox where available).
 - **The `index` stage_run re-ran for every already-indexed document** after the v1→v2 bump (new
   `input_hash` from the added `chunks` dep) — intended, not a regression; existing corpora reindex
   automatically with the richer metadata on next `run_stage("index", ...)`.
+
+## What RT-6 shipped that RT-7 must know
+
+- **`fdi.pipeline.tables.concept_lookup(*, session, store, doc_id, concept) -> list[dict] | None`**
+  is the per-document primitive RT-7's `compare_concept_across_versions(entity, concept)` calls once
+  per `doc_id` from a `list_documents()` loop — the same shape `resolve_entities` (crossdoc) already
+  loops `_read_artifact` per document. `None` means "no `structure` artifact yet for this doc" (skip
+  it, do not treat as a zero/empty result); `[]` means "has `structure`, concept just wasn't found
+  there" — a real, distinct outcome RT-7 must not conflate with the `None` case.
+- **Citation shape**: each match is `{table_index, row_label, values: [{column_header, raw, value},
+  ...]}`. `table_index` is only stable within one `structure` artifact for a given `doc_id` (not a
+  corpus-wide durable id) — RT-7 must always carry `doc_id` alongside a `table_index` citation, same
+  posture as RT-1's `chunk_id`. `values` covers EVERY numeric column (all periods found in the row);
+  RT-7 owns picking which `column_header` (period) answers a specific comparison question — RT-6
+  deliberately never guesses "the" period.
+- **Known false-positive RT-7 inherits (spec decision 5, unsolved by design):** `concept_lookup(...,
+  concept=REVENUE)` will also match a row like `"Cost of revenue"` (the synonym word "revenue" is a
+  token-subsequence of the label) even though that row is a cost line, not revenue. RT-6 does not
+  disambiguate — it always returns `row_label` precisely so a human/agent can catch the false
+  positive by inspection. If RT-7's cross-version comparison surfaces this as a real product problem
+  (rather than a recoverable-by-inspection one), disambiguation is RT-7's or a follow-on's call, not
+  something already fixed underneath it.
+- **Two forks intentionally left open** (spec §8, not resolved by RT-6's implementation): (1)
+  on-demand vs. persisted `tables`/`concepts` artifact — RT-6 reads `structure` fresh on every call
+  for freshness/simplicity; if RT-7's corpus-wide loop turns out to be query-time-hot, a persisted
+  stage can be added later without changing `fdi.core.tables`' pure functions, only their caller; (2)
+  synonym-matching aggressiveness (word-token-subsequence containment) — whether the REVENUE/"Cost of
+  revenue" false-positive class needs disambiguation now vs. later is a product-risk call RT-7 (or a
+  human) should make with real corpus data, not something this spec settles.
 
 ## Build order (git-worktree waves)
 
