@@ -4,9 +4,11 @@ build_chunks joins a document's `ast` (section body text), `semantic`
 (section_type), and `provenance` (page) into one per-document `chunks` record --
 one chunk per AST section, under the shared identity `s{i}` that EmbeddingStage/
 IndexStage/Milvus already use. Every text-returning retrieval tool resolves a hit
-id back to text via this record. Reads inputs as plain Mappings -- no import of
-fdi.core.ast/semantic/provenance. Never raises: malformed/partial input degrades
-per-field (section_type/page -> None).
+id back to text via this record. build_vector_results (RT-2) is the first such
+consumer: pure filter/join/truncate of an already-fetched vector-store hit list.
+Reads inputs as plain Mappings -- no import of fdi.core.ast/semantic/provenance,
+no import of fdi.platform.*/fdi.pipeline.*. Never raises: malformed/partial input
+degrades per-field (section_type/page -> None).
 """
 
 from collections.abc import Mapping
@@ -70,3 +72,62 @@ def build_chunks(
         k += 1
 
     return {"schema_version": 1, "chunks": chunks}
+
+
+def build_vector_results(
+    hits: list[Mapping[str, object]],
+    resolved: Mapping[str, Mapping[str, object]],
+    docs: Mapping[str, Mapping[str, object]],
+    *,
+    section_type: str | None,
+    doc_key: str | None,
+    version: int | None,
+    k: int,
+) -> list[dict[str, object]]:
+    """Pure post-processing of an ALREADY-FETCHED vector-store hit list (RT-2).
+    `hits` is VectorStore.search's shape ({id, score, metadata}, best-match-
+    first); `resolved` is a resolve_chunks() result; `docs` is a plain
+    {doc_id: {"doc_key": ..., "version": ...}} dict the caller already read
+    from Postgres -- no ORM type crosses into core. Filters, joins citations,
+    truncates to k WITHOUT re-sorting (output order is a sub-sequence of the
+    input order). A hit is dropped, not erred, when: section_type is set and
+    doesn't match; doc_key/version is set and the hit's Document row is
+    missing or doesn't match; or its chunk id is absent from `resolved`. No I/O.
+    """
+    results: list[dict[str, object]] = []
+    for hit in hits:
+        full_id = str(hit.get("id"))
+
+        if section_type is not None:
+            meta = hit.get("metadata")
+            hit_type = meta.get("section_type") if isinstance(meta, Mapping) else None
+            if hit_type != section_type:
+                continue
+
+        doc_id = full_id.split(":", 1)[0] if ":" in full_id else full_id
+        doc = docs.get(doc_id)
+        if doc_key is not None and (doc is None or doc.get("doc_key") != doc_key):
+            continue
+        if version is not None and (doc is None or doc.get("version") != version):
+            continue
+
+        rec = resolved.get(full_id)
+        if rec is None:
+            continue
+
+        score = hit.get("score")
+        results.append({
+            "doc_id": rec.get("doc_id"),
+            "doc_key": doc.get("doc_key") if doc is not None else None,
+            "version": doc.get("version") if doc is not None else None,
+            "chunk_id": rec.get("chunk_id"),
+            "heading": rec.get("heading"),
+            "page": rec.get("page"),
+            "section_type": rec.get("section_type"),
+            "text": rec.get("text"),
+            "score": float(score) if isinstance(score, int | float) else 0.0,
+        })
+        if len(results) >= k:
+            break
+
+    return results
