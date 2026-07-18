@@ -7,8 +7,12 @@ resolve_chunks to attach text to a whole result set in one read per document."""
 from collections.abc import Mapping
 from typing import cast
 
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.core.retrieval import chunk_rows_for_index
+from fdi.platform.db.models import Chunk
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -53,3 +57,38 @@ async def resolve_chunks(
             if rec is not None:
                 out[f"{doc_id}:{chunk_id}"] = {"doc_id": doc_id, **rec}
     return out
+
+
+async def index_chunks_fts(*, session: AsyncSession, store: ArtifactStore, doc_id: str) -> int:
+    """Upsert `doc_id`'s `chunks` artifact into the `chunk` table. Returns the
+    number of rows upserted (0 if the document is unknown or has no `chunks`
+    artifact yet -- degrades, never raises, mirroring resolve_chunk). Caller
+    owns the transaction (commits), same convention as every function in this
+    module and fdi.pipeline.crossdoc.resolve_entities."""
+    repo = RegistryRepository(session)
+    doc = await repo.get_document(doc_id)
+    if doc is None:
+        return 0
+    chunks = await _read_chunks(repo, store, doc_id)
+    rows = chunk_rows_for_index(
+        doc_id=doc_id, doc_key=doc.doc_key, version=doc.version, chunks=chunks
+    )
+    if not rows:
+        return 0
+
+    stmt = pg_insert(Chunk).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={
+            "doc_key": stmt.excluded.doc_key,
+            "version": stmt.excluded.version,
+            "heading": stmt.excluded.heading,
+            "text": stmt.excluded.text,
+            "section_type": stmt.excluded.section_type,
+            "page": stmt.excluded.page,
+            "updated_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+    await session.flush()
+    return len(rows)
