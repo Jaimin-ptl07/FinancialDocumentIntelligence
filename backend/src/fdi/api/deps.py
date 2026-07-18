@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from fdi.pipeline.dispatch import StageDispatcher
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.evaluation import CandidateRegistry
+from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.obs.logging import get_correlation_id as _get_bound_correlation_id
@@ -111,6 +112,11 @@ def get_entity_threshold(request: Request) -> float:
     return threshold
 
 
+def get_graph_store(request: Request) -> GraphStore | None:
+    graph_store: GraphStore | None = request.app.state.graph_store
+    return graph_store
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
@@ -121,3 +127,4 @@ CandidatesDep = Annotated[CandidateRegistry, Depends(get_candidates)]
 EmbedderDep = Annotated[EmbeddingClient | None, Depends(get_embedder)]
 VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]
 EntityThresholdDep = Annotated[float, Depends(get_entity_threshold)]
+GraphStoreDep = Annotated[GraphStore | None, Depends(get_graph_store)]

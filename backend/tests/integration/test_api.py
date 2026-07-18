@@ -1405,3 +1405,138 @@ async def test_concept_lookup_route_404_unknown_doc(
 ) -> None:
     resp = await client.get("/documents/no-such-doc/concepts/REVENUE")
     assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# RT-5: graph retrieval routes -- 503 when graph_store is unconfigured.
+# --------------------------------------------------------------------------
+
+
+async def test_graph_neighbors_503_when_graph_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/graph/neighbors", json={"node_id": "d1:s0"})
+    assert r.status_code == 503
+    assert "graph_store" in r.json()["detail"]
+
+
+async def test_document_structure_503_when_graph_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.get("/documents/no-such-doc/graph/structure")
+    assert r.status_code == 503
+    assert "graph_store" in r.json()["detail"]
+
+
+async def test_reading_order_503_when_graph_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.get("/documents/no-such-doc/graph/reading-order")
+    assert r.status_code == 503
+    assert "graph_store" in r.json()["detail"]
+
+
+# --------------------------------------------------------------------------
+# RT-5: graph retrieval routes -- happy path (FakeGraphStore override).
+# --------------------------------------------------------------------------
+
+
+async def test_graph_neighbors_returns_cited_hits(make_client, _alembic_applied) -> None:
+    from fdi.api.deps import get_graph_store
+    from fdi.pipeline.graphstore import FakeGraphStore
+
+    fake_store = FakeGraphStore()
+    fake_store.load(
+        [
+            {"id": "d1:doc", "type": "document", "label": "ACME", "doc_id": "d1"},
+            {"id": "d1:s0", "type": "section", "label": "Balance Sheet", "doc_id": "d1"},
+        ],
+        [{"source": "d1:doc", "target": "d1:s0", "type": "CONTAINS"}],
+    )
+
+    async with make_client(
+        dependency_overrides={get_graph_store: lambda: fake_store}
+    ) as client:
+        r = await client.post("/graph/neighbors", json={"node_id": "d1:doc"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["node_id"] == "d1:doc"
+    hit = body["neighbors"][0]
+    assert hit["node"]["id"] == "d1:s0"
+    assert hit["relationship"] == "CONTAINS"
+    assert hit["node"]["citation"]["heading"] == "Balance Sheet"
+
+
+async def test_document_structure_route_returns_tree(
+    make_client, session_factory, store, _alembic_applied
+) -> None:
+    """`session_factory`/`store` are THIS FILE's own fixtures (defined above,
+    around the `client`/`make_client` fixtures) -- `store` is deliberately
+    pinned to bucket "artifacts", the same bucket `make_client`'s app opens
+    by default, so seeding through it here is visible to the app's routes.
+    Do not reconstruct an engine/ArtifactStore by hand; these already exist.
+    """
+    from fdi.api.deps import get_graph_store
+    from fdi.pipeline.graphstore import FakeGraphStore
+    from fdi.pipeline.intake import intake_document
+
+    fake_store = FakeGraphStore()
+    doc = await intake_document(
+        pdf=b"%PDF-1.7\n%fake\n", filename="a.pdf", doc_key="k",
+        content_type="application/pdf", session_factory=session_factory, store=store,
+    )
+    fake_store.load(
+        [
+            {"id": f"{doc.id}:doc", "type": "document", "label": "ACME", "doc_id": doc.id},
+            {"id": f"{doc.id}:s0", "type": "section", "label": "S0", "doc_id": doc.id},
+        ],
+        [{"source": f"{doc.id}:doc", "target": f"{doc.id}:s0", "type": "CONTAINS"}],
+    )
+
+    async with make_client(
+        dependency_overrides={get_graph_store: lambda: fake_store}
+    ) as client:
+        r = await client.get(f"/documents/{doc.id}/graph/structure")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["doc_id"] == doc.id
+        assert body["document"]["id"] == f"{doc.id}:doc"
+        assert body["sections"][0]["id"] == f"{doc.id}:s0"
+
+        r404 = await client.get("/documents/no-such-doc/graph/structure")
+        assert r404.status_code == 404
+
+
+async def test_reading_order_route_returns_sections_without_paragraphs(
+    make_client, session_factory, store, _alembic_applied
+) -> None:
+    from fdi.api.deps import get_graph_store
+    from fdi.pipeline.graphstore import FakeGraphStore
+    from fdi.pipeline.intake import intake_document
+
+    fake_store = FakeGraphStore()
+    doc = await intake_document(
+        pdf=b"%PDF-1.7\n%fake\n", filename="a.pdf", doc_key="k",
+        content_type="application/pdf", session_factory=session_factory, store=store,
+    )
+    fake_store.load(
+        [{"id": f"{doc.id}:doc", "type": "document", "label": "ACME", "doc_id": doc.id},
+         {"id": f"{doc.id}:s0", "type": "section", "label": "S0", "doc_id": doc.id}],
+        [{"source": f"{doc.id}:doc", "target": f"{doc.id}:s0", "type": "CONTAINS"}],
+    )
+
+    async with make_client(
+        dependency_overrides={get_graph_store: lambda: fake_store}
+    ) as client:
+        r = await client.get(f"/documents/{doc.id}/graph/reading-order")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["sections"] == [
+            {
+                "id": f"{doc.id}:s0", "type": "section", "label": "S0", "doc_id": doc.id,
+                "citation": {
+                    "doc_id": doc.id, "doc_key": "k", "version": 1, "heading": "S0",
+                    "page": None, "bounding_regions": None,
+                },
+            }
+        ]

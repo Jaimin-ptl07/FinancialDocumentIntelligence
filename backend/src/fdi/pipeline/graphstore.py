@@ -1,10 +1,18 @@
-"""The GraphStore seam: a `load(nodes, edges) -> {loaded_nodes, loaded_edges}`
-protocol. `Neo4jGraphStore` (platform, does I/O) structurally satisfies this
-without importing it -- `platform` may not import `pipeline`. `FakeGraphStore`
-lives here for tests: no live Neo4j call anywhere in the suite."""
+"""The GraphStore seam: `load(nodes, edges) -> {loaded_nodes, loaded_edges}` plus
+three read methods (`neighbors`, `document_structure`, `reading_order`) every
+graph retrieval tool (RT-5) calls. `Neo4jGraphStore` (platform, does I/O)
+structurally satisfies this without importing it -- `platform` may not import
+`pipeline`. `FakeGraphStore` lives here for tests: no live Neo4j call anywhere
+in the default suite. Node ids are namespaced `{doc_id}:{bare_id}` by
+`GraphLoadStage` before ever reaching `load` -- see `fdi.core.graph.
+order_reading_chain` for the shared READING_ORDER-walk both stores use to
+answer `document_structure`/`reading_order` correctly (id string order is
+NOT reading order -- "s10" < "s2" lexicographically)."""
 
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
+
+from fdi.core.graph import order_reading_chain
 
 
 @runtime_checkable
@@ -12,6 +20,12 @@ class GraphStore(Protocol):
     def load(
         self, nodes: list[Mapping[str, object]], edges: list[Mapping[str, object]]
     ) -> dict[str, object]: ...
+
+    def neighbors(self, node_id: str) -> list[dict[str, object]]: ...
+
+    def document_structure(self, doc_id: str) -> dict[str, object]: ...
+
+    def reading_order(self, doc_id: str) -> list[dict[str, object]]: ...
 
 
 class FakeGraphStore:
@@ -27,3 +41,51 @@ class FakeGraphStore:
         self.loaded_nodes.extend(nodes)
         self.loaded_edges.extend(edges)
         return {"loaded_nodes": len(nodes), "loaded_edges": len(edges)}
+
+    def _node(self, node_id: object) -> dict[str, object] | None:
+        return next((dict(n) for n in self.loaded_nodes if n.get("id") == node_id), None)
+
+    def neighbors(self, node_id: str) -> list[dict[str, object]]:
+        out: list[dict[str, object]] = []
+        for e in self.loaded_edges:
+            if e.get("source") == node_id:
+                m = self._node(e.get("target"))
+                if m is not None:
+                    out.append({"node": m, "relationship": e.get("type"), "direction": "out"})
+            elif e.get("target") == node_id:
+                m = self._node(e.get("source"))
+                if m is not None:
+                    out.append({"node": m, "relationship": e.get("type"), "direction": "in"})
+        return out
+
+    def document_structure(self, doc_id: str) -> dict[str, object]:
+        scoped = [n for n in self.loaded_nodes if n.get("doc_id") == doc_id]
+        ids = {n.get("id") for n in scoped}
+        scoped_edges = [
+            e for e in self.loaded_edges if e.get("source") in ids and e.get("target") in ids
+        ]
+        document = next((dict(n) for n in scoped if n.get("type") == "document"), None)
+        section_edges = [e for e in scoped_edges if e.get("type") == "READING_ORDER"]
+        sections = order_reading_chain(
+            [n for n in scoped if n.get("type") == "section"], section_edges
+        )
+        contains = [e for e in scoped_edges if e.get("type") == "CONTAINS"]
+        para_ro = [e for e in scoped_edges if e.get("type") == "READING_ORDER"]
+        section_views: list[dict[str, object]] = []
+        for s in sections:
+            paras = [
+                dict(n)
+                for n in scoped
+                if n.get("type") == "paragraph"
+                and any(
+                    e.get("source") == s["id"] and e.get("target") == n.get("id")
+                    for e in contains
+                )
+            ]
+            section_views.append({**s, "paragraphs": order_reading_chain(paras, para_ro)})
+        return {"document": document, "sections": section_views}
+
+    def reading_order(self, doc_id: str) -> list[dict[str, object]]:
+        sections = self.document_structure(doc_id)["sections"]
+        assert isinstance(sections, list)
+        return [{k: v for k, v in s.items() if k != "paragraphs"} for s in sections]

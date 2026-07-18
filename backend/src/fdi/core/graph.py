@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 
 def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
@@ -62,3 +62,56 @@ def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
             prev_para_id = pid
 
     return {"schema_version": 1, "nodes": nodes, "edges": edges}
+
+
+def order_reading_chain(
+    nodes: Sequence[Mapping[str, object]], edges: Sequence[Mapping[str, object]]
+) -> list[dict[str, object]]:
+    """Order `nodes` by walking their READING_ORDER edges from the chain head
+    (a node among `nodes` with no incoming READING_ORDER edge from another
+    node in `nodes`) to the tail.
+
+    Pure, defensive: an edge whose type isn't READING_ORDER, or whose source/
+    target isn't in `nodes`, is ignored. Multiple disconnected chains are each
+    walked and concatenated, heads sorted by id for determinism. A cycle or a
+    dangling `next` stops that chain's walk (visited-set guard) rather than
+    looping forever; any node never reached this way is appended in id order
+    at the end -- never silently dropped. Never raises.
+    """
+    node_by_id: dict[str, dict[str, object]] = {}
+    for n in nodes:
+        node_id = n.get("id")
+        if isinstance(node_id, str):
+            node_by_id[node_id] = dict(n)
+
+    next_of: dict[str, str] = {}
+    has_incoming: set[str] = set()
+    for e in edges:
+        if e.get("type") != "READING_ORDER":
+            continue
+        source, target = e.get("source"), e.get("target")
+        if (
+            isinstance(source, str)
+            and isinstance(target, str)
+            and source in node_by_id
+            and target in node_by_id
+        ):
+            next_of[source] = target
+            has_incoming.add(target)
+
+    heads = sorted(nid for nid in node_by_id if nid not in has_incoming)
+    ordered: list[dict[str, object]] = []
+    visited: set[str] = set()
+    for head in heads:
+        cur: str | None = head
+        while cur is not None and cur not in visited:
+            visited.add(cur)
+            ordered.append(node_by_id[cur])
+            cur = next_of.get(cur)
+
+    for nid in sorted(node_by_id):
+        if nid not in visited:
+            ordered.append(node_by_id[nid])
+            visited.add(nid)
+
+    return ordered

@@ -1,7 +1,9 @@
 # RT-5 — Graph Retrieval (+ corpus-graph fix)
 
-- **Status:** Draft — 2026-07-18. Fifth sub-project of the retrieval layer (`docs/architecture/
-  retrieval-roadmap.md`), Wave B (parallel with RT-2/RT-3/RT-6; needs only ingestion, not RT-1).
+- **Status:** Implemented — 2026-07-18. Fifth sub-project of the retrieval layer (`docs/architecture/
+  retrieval-roadmap.md`), Wave B (parallel with RT-2/RT-3/RT-6; needs only ingestion, not RT-1). All
+  10 plan tasks executed via strict TDD; full non-e2e suite green; gates (`ruff`, `mypy --strict`,
+  `lint-imports` 1-kept/0-broken) green. See §7 done criteria — all satisfied.
 - **Depends on (ingestion, all complete):**
   - **SP-9** (`fdi.core.graph.build_graph(ast) -> {schema_version, nodes:[{id,type,label}],
     edges:[{source,target,type}]}`; node `type` ∈ `{document,section,paragraph}`, edge `type` ∈

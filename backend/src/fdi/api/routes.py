@@ -15,6 +15,7 @@ from fdi.api.deps import (
     DispatcherDep,
     EmbedderDep,
     EntityThresholdDep,
+    GraphStoreDep,
     ResolverDep,
     SessionDep,
     SessionFactoryDep,
@@ -23,6 +24,7 @@ from fdi.api.deps import (
 )
 from fdi.api.schemas import (
     ConceptLookupView,
+    DocumentStructureView,
     DocumentVersionsView,
     DocumentView,
     EmbeddingTriggerView,
@@ -31,6 +33,8 @@ from fdi.api.schemas import (
     EvalAccepted,
     EvalRequest,
     GraphLoadTriggerView,
+    GraphNeighborsRequest,
+    GraphNeighborsView,
     IndexFtsView,
     JobAccepted,
     JobView,
@@ -40,6 +44,7 @@ from fdi.api.schemas import (
     LeaderboardEntry,
     LeaderboardView,
     OcrTriggerView,
+    ReadingOrderView,
     ReadyView,
     ReprocessView,
     SearchRequest,
@@ -57,6 +62,16 @@ from fdi.api.schemas import (
 from fdi.core.ontology import CanonicalConcept
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.eval_service import run_evaluation
+from fdi.pipeline.graphquery import (
+    document_structure as document_structure_query,
+)
+from fdi.pipeline.graphquery import (
+    neighbors as neighbors_query,
+)
+from fdi.pipeline.graphquery import (
+    reading_order as reading_order_query,
+)
+from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.intake import intake_document
 from fdi.pipeline.retrieval import index_chunks_fts, keyword_search, vector_search
 from fdi.pipeline.tables import concept_lookup, get_tables
@@ -591,3 +606,57 @@ async def keyword_search_route(
         section_type=body.section_type, doc_key=body.doc_key, version=body.version,
     )
     return KeywordSearchResultsView(results=[KeywordHitView(**h) for h in hits])
+
+
+# --------------------------------------------------------------------------
+# RT-5: graph retrieval -- neighbors / document structure / reading order.
+# --------------------------------------------------------------------------
+
+
+def _require_graph_store(graph_store: GraphStore | None) -> GraphStore:
+    if graph_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "graph retrieval is not configured: missing graph_store "
+                "(set FDI_NEO4J_URI/FDI_NEO4J_PASSWORD)"
+            ),
+        )
+    return graph_store
+
+
+@router.post("/graph/neighbors", response_model=GraphNeighborsView)
+async def graph_neighbors(
+    body: GraphNeighborsRequest, session: SessionDep, store: StoreDep, graph_store: GraphStoreDep
+) -> GraphNeighborsView:
+    gs = _require_graph_store(graph_store)
+    result = await neighbors_query(
+        session=session, store=store, graph_store=gs, node_id=body.node_id
+    )
+    return GraphNeighborsView.model_validate(result)
+
+
+@router.get("/documents/{doc_id}/graph/structure", response_model=DocumentStructureView)
+async def document_structure_route(
+    doc_id: str, session: SessionDep, store: StoreDep, graph_store: GraphStoreDep
+) -> DocumentStructureView:
+    gs = _require_graph_store(graph_store)
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    result = await document_structure_query(
+        session=session, store=store, graph_store=gs, doc_id=doc_id
+    )
+    return DocumentStructureView.model_validate(result)
+
+
+@router.get("/documents/{doc_id}/graph/reading-order", response_model=ReadingOrderView)
+async def reading_order_route(
+    doc_id: str, session: SessionDep, store: StoreDep, graph_store: GraphStoreDep
+) -> ReadingOrderView:
+    gs = _require_graph_store(graph_store)
+    if await RegistryRepository(session).get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    result = await reading_order_query(
+        session=session, store=store, graph_store=gs, doc_id=doc_id
+    )
+    return ReadingOrderView.model_validate(result)

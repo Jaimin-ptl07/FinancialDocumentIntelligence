@@ -50,7 +50,7 @@ page/bbox where available).
 | **RT-2** | Semantic (vector) retrieval | medium | RT-1 | ✅ done (2026-07-18). `vector_search(query, filters, k)` (`fdi.pipeline.retrieval`) — embed query (BGE), Milvus search with `section_type`/`doc_key`/`version` filters, resolve hits to text+citation via RT-1's `resolve_chunks`. `POST /retrieve/vector`. `POST /search` deliberately left unchanged (design spec §2 decision 5) — see handoff below. |
 | **RT-3** | Lexical / keyword retrieval | medium | RT-1 | ✅ done (2026-07-18). Postgres full-text (`tsvector`) over a `chunk` table populated from the `chunks` artifact; `keyword_search(query, filters)`. `POST /retrieve/keyword`. |
 | **RT-4** | Hybrid retrieval + rerank | light | RT-2, RT-3 | pure `fuse(vector_hits, keyword_hits)` (Reciprocal Rank Fusion); one `POST /retrieve` (hybrid) tool. |
-| **RT-5** | Graph retrieval (+ corpus-graph fix) | heavy | ingestion | Fix `graphload` id-namespacing (`{doc_id}:{id}`) + real `:Document/:Section/:Paragraph` labels & `:CONTAINS/:READING_ORDER` rel-types; `Neo4jGraphStore` read methods (mockable); tools `neighbors`, `document_structure`, `reading_order`, `provenance(node)→page/bbox`. `POST /graph/*`. |
+| **RT-5** | Graph retrieval (+ corpus-graph fix) | heavy | ingestion | ✅ done (2026-07-18). Fixed `graphload` id-namespacing (`{doc_id}:{id}`) + real `:Document/:Section/:Paragraph` labels & `:CONTAINS/:READING_ORDER` rel-types (validated allowlist, injection-safe); `Neo4jGraphStore`/`FakeGraphStore` read methods `neighbors`/`document_structure`/`reading_order` (mockable, agree on shape); `fdi.pipeline.graphquery` attaches a `{doc_id, doc_key, version, heading, page, bounding_regions}` citation to every node. `POST /graph/neighbors`, `GET /documents/{id}/graph/structure`, `GET /documents/{id}/graph/reading-order` (503-gated). |
 | **RT-6** | Structured financial retrieval | heavy | RT-1 | ✅ done (2026-07-18). `fdi.core.tables.parse_numeric` (financial cell parsing: thousands incl. Indian lakh grouping, parenthetical negatives, leading sign, percent-as-printed, currency strip/no-FX, blanks/dashes/N-A→`None`, never raises) + `find_concept_rows` (normalized word-token-subsequence match of a concept's ontology synonyms against grid column 0, returns ALL numeric columns per matched row) + `filter_tables` (keyword over column headers) — pure, `fdi.core.tables`' only cross-core import is `fdi.core.ontology` (new public `normalize_label`/`synonyms_for`). `fdi.pipeline.tables.get_tables`/`concept_lookup` read the EXISTING `structure` artifact on demand (no new stage/artifact). `GET /documents/{doc_id}/tables?keyword=`, `GET /documents/{doc_id}/concepts/{concept}`, citation-carrying (`doc_id`, `table_index`, `row_label`, `column_header`). |
 | **RT-7** | Cross-document / entity retrieval | medium | RT-6 (concepts), crossdoc | `entity_timeline(entity)`, `compare_concept_across_versions(entity, concept)`; optionally persist the entity index for fast lookup. `GET /entities/{id}/timeline`, `POST /entities/compare`. |
 | **RT-8** | Retrieval agent — `POST /ask` | heavy | RT-2…RT-7 | Register every RT tool as an Azure OpenAI function schema; an agent loop (plan → call tools → synthesize) returns a **cited** answer `{answer, citations, tool_trace}`. Mockable LLM seam (`FakeAgentClient` in the default suite; real Azure OpenAI behind an opt-in marker). The capstone that makes the tools "tools." |
@@ -178,6 +178,50 @@ page/bbox where available).
   set makes RRF fusion a plain merge on `id`, no field-renaming layer).
   `plainto_tsquery` (never `to_tsquery`) means the query parameter is always
   safe free text — an empty/whitespace query degrades to `[]`, not a 500.
+
+## What RT-5 shipped that RT-7/RT-8 must know
+
+- **The `{doc_id}:s{i}` section-node identity now matches Milvus/RT-1 exactly.** `GraphLoadStage` v2
+  (`deps=("graph",)`, version bumped `1 → 2`) namespaces every node id `{doc_id}:{bare_id}` (section
+  nodes → `{doc_id}:s{i}`, byte-identical to a Milvus hit id and RT-1's `chunks[…].chunk_id` join key)
+  and every edge's `source`/`target` the same way, before calling `GraphStore.load`. This is the fix
+  for the pre-RT-5 bug where every document reused the identical bare ids (`doc`, `s0`, `s0p1`, …) and
+  a second document's load collided onto the first's (MERGE last-writer-wins) — the collision-fix
+  regression test (`test_graph_load_namespaces_ids_no_collision_across_documents`) and its live-Neo4j
+  counterpart (`test_real_load_two_documents_do_not_collide`, opt-in `neo4j` marker) both cover this.
+  A future cross-store join (vector hit → graph neighbors → chunk text) needs no id translation for
+  section nodes.
+- **`Neo4jGraphStore._load_tx` MERGEs under real Cypher labels/rel-types** (`:Document`/`:Section`/
+  `:Paragraph`, `:CONTAINS`/`:READING_ORDER`) via a closed, validated allowlist (`_cypher_label`/
+  `_cypher_rel_type` in `fdi.platform.graphstore`) — only the allowlist's fixed literal values ever
+  reach an f-string, never the raw `type` field, so a malformed artifact cannot inject Cypher via the
+  label/rel-type position. An unknown `type` raises `ValueError` rather than falling back to a generic
+  label. Every node also carries a `doc_id` property (not just the namespaced id), so a document-scoped
+  read is an indexable exact-equality property match, not a string-prefix scan.
+- **The `GraphStore` read seam — `neighbors(node_id)`, `document_structure(doc_id)`,
+  `reading_order(doc_id)`** — joins `load` on the existing protocol (`fdi.pipeline.graphstore.
+  GraphStore`), implemented identically in shape by `Neo4jGraphStore` (real Cypher) and
+  `FakeGraphStore` (in-memory, used by the default test suite — no live Neo4j required). Both share one
+  pure ordering algorithm, `fdi.core.graph.order_reading_chain`, since node id string order is NOT
+  reading order (`"s10" < "s2"` lexicographically) — only the `READING_ORDER` edge chain is. All three
+  methods agree on "unknown id/doc → empty result, never raise."
+- **The citation shape every graph tool attaches**: `{doc_id, doc_key, version, heading, page,
+  bounding_regions}`, built by `fdi.pipeline.graphquery` (`neighbors`/`document_structure`/
+  `reading_order`, all `async`, take `session, store, graph_store` + the relevant id). It splits a
+  namespaced node id on the FIRST `:` to recover `(doc_id, bare_id)` (`intake_document` generates
+  `doc_id` via `str(uuid.uuid4())`, verified to never contain `:`), reads the `provenance` artifact and
+  the `Document` row ONCE per call (not per node), and degrades `page`/`bounding_regions` to `None`
+  — never omits the node, never raises — when no provenance record matches.
+- **Two forks flagged, not resolved**: (1) no raw-Cypher route — the three read methods are the entire
+  sanctioned graph surface, an admin-only ad-hoc-query route is a human decision for later if a real
+  need appears; (2) stale pre-fix `:Node`-labeled nodes from any earlier unnamespaced load are NOT
+  migrated — `MERGE` only adds/updates, so they sit inert alongside the new namespaced nodes; whoever
+  owns the Neo4j deployment should start from a fresh volume or run a one-time manual cleanup
+  (`MATCH (n:Node) DETACH DELETE n`) before relying on a clean corpus graph.
+- **API wiring added, did not exist before**: `GraphStoreDep`/`get_graph_store` (`api/deps.py`),
+  `app.state.graph_store = Neo4jGraphStore.from_settings(settings)` (`api/app.py`'s lifespan). The
+  `graph_store` wired in `fdi.workers.tasks` is unrelated (that's for the `graph_load` STAGE); this is
+  the first route-side wiring.
 
 ## Build order (git-worktree waves)
 
