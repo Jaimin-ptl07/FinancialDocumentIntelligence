@@ -10,6 +10,7 @@ import structlog
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from fdi.api.deps import (
+    AgentClientDep,
     CandidatesDep,
     CorrelationIdDep,
     DispatcherDep,
@@ -23,6 +24,8 @@ from fdi.api.deps import (
     VectorStoreDep,
 )
 from fdi.api.schemas import (
+    AskRequest,
+    AskResponse,
     ConceptCompareRequest,
     ConceptComparisonView,
     ConceptLookupView,
@@ -66,6 +69,8 @@ from fdi.api.schemas import (
     VectorSearchResultView,
 )
 from fdi.core.ontology import CanonicalConcept
+from fdi.pipeline.agent_tools import AgentContext
+from fdi.pipeline.ask import answer_question
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.entities import compare_concept_across_versions, entity_timeline
 from fdi.pipeline.eval_service import run_evaluation
@@ -741,3 +746,40 @@ async def reading_order_route(
         session=session, store=store, graph_store=gs, doc_id=doc_id
     )
     return ReadingOrderView.model_validate(result)
+
+
+# --------------------------------------------------------------------------
+# RT-8: POST /ask -- the retrieval agent. Plans over TOOL_SCHEMAS (every
+# RT-2..RT-7/SP-16 tool registered via fdi.pipeline.agent_tools), executes
+# against the SAME injected services /retrieve, /graph/*, /entities/* use,
+# and returns a cited answer. 503s ONLY when agent_client is unconfigured --
+# an unconfigured embedder/vector_store/graph_store degrades tool-by-tool
+# (design spec decision 10), not at the route.
+# --------------------------------------------------------------------------
+
+
+@router.post("/ask", response_model=AskResponse)
+async def ask(
+    body: AskRequest,
+    session: SessionDep,
+    store: StoreDep,
+    embedder: EmbedderDep,
+    vector_store: VectorStoreDep,
+    graph_store: GraphStoreDep,
+    entity_threshold: EntityThresholdDep,
+    agent_client: AgentClientDep,
+) -> AskResponse:
+    if agent_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ask is not configured: missing agent_client (set FDI_GPT_ENDPOINT/FDI_GPT_KEY)",
+        )
+    ctx = AgentContext(
+        session=session, store=store, embedder=embedder, vector_store=vector_store,
+        graph_store=graph_store, default_entity_threshold=entity_threshold,
+    )
+    max_rounds = body.max_rounds if body.max_rounds is not None else 5
+    result = await answer_question(
+        question=body.question, ctx=ctx, agent_client=agent_client, max_rounds=max_rounds,
+    )
+    return AskResponse.model_validate(result)

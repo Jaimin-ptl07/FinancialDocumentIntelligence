@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fdi.pipeline.agent import AgentClient
 from fdi.pipeline.dispatch import StageDispatcher
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.evaluation import CandidateRegistry
@@ -117,6 +118,11 @@ def get_graph_store(request: Request) -> GraphStore | None:
     return graph_store
 
 
+def get_agent_client(request: Request) -> AgentClient | None:
+    agent_client: AgentClient | None = request.app.state.agent_client
+    return agent_client
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
@@ -128,3 +134,4 @@ EmbedderDep = Annotated[EmbeddingClient | None, Depends(get_embedder)]
 VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]
 EntityThresholdDep = Annotated[float, Depends(get_entity_threshold)]
 GraphStoreDep = Annotated[GraphStore | None, Depends(get_graph_store)]
+AgentClientDep = Annotated[AgentClient | None, Depends(get_agent_client)]

@@ -392,3 +392,35 @@ class ConceptComparisonView(BaseModel):
     doc_key: str
     concept: str
     versions: list[ConceptComparisonVersionView]
+
+
+class AskRequest(BaseModel):
+    question: str
+    max_rounds: int | None = None
+
+
+class AskCitationView(BaseModel):
+    doc_id: str | None = None
+    doc_key: str | None = None
+    version: int | None = None
+    heading: str | None = None
+    page: int | None = None
+    chunk_id: str | None = None
+    table_index: int | None = None
+    row_label: str | None = None
+    column_header: str | None = None
+    node_id: str | None = None
+
+
+class AskToolTraceEntryView(BaseModel):
+    round: int
+    tool: str
+    arguments: dict[str, object]
+    result: object
+    error: str | None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[AskCitationView]
+    tool_trace: list[AskToolTraceEntryView]

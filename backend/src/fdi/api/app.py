@@ -12,6 +12,7 @@ from fdi.api.middleware import CorrelationIdMiddleware
 from fdi.api.routes import router
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
+from fdi.platform.agent import AzureOpenAIAgentClient
 from fdi.platform.config import get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.embeddings import BgeEmbeddingClient
@@ -75,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.vector_store = MilvusVectorStore.from_settings(settings)
     app.state.graph_store = Neo4jGraphStore.from_settings(settings)
     app.state.entity_threshold = settings.entity_sim_threshold
+    app.state.agent_client = AzureOpenAIAgentClient.from_settings(settings)
 
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things

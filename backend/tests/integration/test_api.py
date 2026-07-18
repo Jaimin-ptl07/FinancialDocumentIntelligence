@@ -1828,3 +1828,95 @@ async def test_reading_order_route_returns_sections_without_paragraphs(
                 },
             }
         ]
+
+
+# --------------------------------------------------------------------------
+# RT-8: POST /ask -- the retrieval agent.
+# --------------------------------------------------------------------------
+
+
+async def test_ask_503_when_agent_client_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/ask", json={"question": "What was revenue?"})
+    assert r.status_code == 503
+    assert "agent_client" in r.json()["detail"]
+
+
+async def test_ask_returns_cited_answer_with_fake_agent_client_override(
+    make_client, session_factory, store, _alembic_applied
+) -> None:
+    import uuid
+
+    from fdi.api.deps import get_agent_client
+    from fdi.core.agent import AgentResponse, ToolCall
+    from fdi.pipeline.agent import FakeAgentClient
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.retrieval import index_chunks_fts
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.semantic import FakeSemanticClient
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.chunks import ChunksStage
+    from fdi.pipeline.stages.graph import GraphStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
+    from fdi.pipeline.stages.semantic import SemanticStage
+
+    marker = uuid.uuid4().hex
+    reg = StageRegistry()
+    for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
+                  ProvenanceStage(), ChunksStage()):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+        "paragraphs": [
+            {"role": "sectionHeading", "content": "Balance Sheet"},
+            {"content": f"Total Assets 100 {marker}"},
+        ],
+        "tables": [],
+    })
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(), filename="bs.pdf",
+        doc_key=f"acme-{marker}", content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    common = {"doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+              "store": store, "registry": reg, "resolver": resolver}
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="semantic", run_id=str(uuid.uuid4()),
+        services={"semantic": FakeSemanticClient({"Balance Sheet": "BALANCE_SHEET"})}, **common,
+    )
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+    async with session_factory() as s:
+        await index_chunks_fts(session=s, store=store, doc_id=doc.id)
+        await s.commit()
+
+    fake = FakeAgentClient([
+        AgentResponse(tool_calls=[ToolCall(
+            id="c1", name="search", arguments={"query": f"Total Assets 100 {marker}"}
+        )]),
+        AgentResponse(content=f"Total Assets were 100 (see {doc.id}:s0)."),
+    ])
+
+    async with make_client(
+        dependency_overrides={get_agent_client: lambda: fake}
+    ) as client:
+        r = await client.post("/ask", json={"question": f"total assets, marker {marker}?"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["answer"] == f"Total Assets were 100 (see {doc.id}:s0)."
+    assert body["citations"]
+    assert body["tool_trace"][0]["tool"] == "search"
