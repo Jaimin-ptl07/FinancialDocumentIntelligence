@@ -12,6 +12,7 @@ no live Neo4j call in the suite."""
 
 from collections.abc import Mapping
 
+from fdi.core.graph import order_reading_chain
 from fdi.platform.config import Settings
 from neo4j import Driver, GraphDatabase, ManagedTransaction
 
@@ -84,6 +85,100 @@ class Neo4jGraphStore:
                 source=edge["source"], target=edge["target"], type=edge["type"],
             )
         return len(nodes), len(edges)
+
+    def neighbors(self, node_id: str) -> list[dict[str, object]]:
+        with self._driver.session() as session:
+            return session.execute_read(self._neighbors_tx, node_id)
+
+    @staticmethod
+    def _neighbors_tx(tx: ManagedTransaction, node_id: str) -> list[dict[str, object]]:
+        rows = tx.run(
+            "MATCH (n {id: $id})-[r]->(m) "
+            "RETURN type(r) AS relationship, 'out' AS direction, "
+            "m.id AS id, m.type AS type, m.label AS label, m.doc_id AS doc_id "
+            "UNION "
+            "MATCH (n {id: $id})<-[r]-(m) "
+            "RETURN type(r) AS relationship, 'in' AS direction, "
+            "m.id AS id, m.type AS type, m.label AS label, m.doc_id AS doc_id",
+            id=node_id,
+        )
+        return [
+            {
+                "node": {
+                    "id": r["id"], "type": r["type"], "label": r["label"], "doc_id": r["doc_id"],
+                },
+                "relationship": r["relationship"],
+                "direction": r["direction"],
+            }
+            for r in rows
+        ]
+
+    def document_structure(self, doc_id: str) -> dict[str, object]:
+        with self._driver.session() as session:
+            return session.execute_read(self._document_structure_tx, doc_id)
+
+    @staticmethod
+    def _sections_in_reading_order(tx: ManagedTransaction, doc_id: str) -> list[dict[str, object]]:
+        sections = [
+            {"id": r["id"], "type": "section", "label": r["label"], "doc_id": doc_id}
+            for r in tx.run(
+                "MATCH (s:Section {doc_id: $doc_id}) RETURN s.id AS id, s.label AS label",
+                doc_id=doc_id,
+            )
+        ]
+        edges = [
+            {"source": r["source"], "target": r["target"], "type": "READING_ORDER"}
+            for r in tx.run(
+                "MATCH (a:Section {doc_id: $doc_id})-[:READING_ORDER]->"
+                "(b:Section {doc_id: $doc_id}) RETURN a.id AS source, b.id AS target",
+                doc_id=doc_id,
+            )
+        ]
+        return order_reading_chain(sections, edges)
+
+    @staticmethod
+    def _document_structure_tx(tx: ManagedTransaction, doc_id: str) -> dict[str, object]:
+        doc_row = tx.run(
+            "MATCH (d:Document {doc_id: $doc_id}) RETURN d.id AS id, d.label AS label",
+            doc_id=doc_id,
+        ).single()
+        document = (
+            {"id": doc_row["id"], "type": "document", "label": doc_row["label"], "doc_id": doc_id}
+            if doc_row is not None
+            else None
+        )
+        ordered_sections = Neo4jGraphStore._sections_in_reading_order(tx, doc_id)
+
+        paragraphs = [
+            {"id": r["id"], "type": "paragraph", "label": r["label"], "section_id": r["section_id"]}
+            for r in tx.run(
+                "MATCH (s:Section {doc_id: $doc_id})-[:CONTAINS]->(p:Paragraph {doc_id: $doc_id}) "
+                "RETURN p.id AS id, p.label AS label, s.id AS section_id",
+                doc_id=doc_id,
+            )
+        ]
+        para_edges = [
+            {"source": r["source"], "target": r["target"], "type": "READING_ORDER"}
+            for r in tx.run(
+                "MATCH (a:Paragraph {doc_id: $doc_id})-[:READING_ORDER]->"
+                "(b:Paragraph {doc_id: $doc_id}) RETURN a.id AS source, b.id AS target",
+                doc_id=doc_id,
+            )
+        ]
+        by_section: dict[str, list[dict[str, object]]] = {}
+        for p in paragraphs:
+            by_section.setdefault(str(p["section_id"]), []).append(
+                {"id": p["id"], "type": p["type"], "label": p["label"], "doc_id": doc_id}
+            )
+        sections = [
+            {**s, "paragraphs": order_reading_chain(by_section.get(str(s["id"]), []), para_edges)}
+            for s in ordered_sections
+        ]
+        return {"document": document, "sections": sections}
+
+    def reading_order(self, doc_id: str) -> list[dict[str, object]]:
+        with self._driver.session() as session:
+            return session.execute_read(self._sections_in_reading_order, doc_id)
 
     def close(self) -> None:
         self._driver.close()
