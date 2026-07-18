@@ -82,6 +82,17 @@ class RegistryRepository:
             )
         ).scalars().first()
 
+    async def list_documents(self) -> list[Document]:
+        """Every document in the corpus, ordered by id (deterministic).
+
+        Corpus-scale note (SP-16): this materializes all documents; at 5000+ docs
+        a streamed/paginated variant is the scale path, deferred with on-demand
+        entity resolution (spec §6)."""
+        rows = (
+            await self._s.execute(sqlalchemy.select(Document).order_by(Document.id))
+        ).scalars().all()
+        return list(rows)
+
     async def latest_runs(self, doc_id: str) -> dict[str, StageRun]:
         """The latest `stage_run` per `stage_name` for this document, any status."""
         rows = (
