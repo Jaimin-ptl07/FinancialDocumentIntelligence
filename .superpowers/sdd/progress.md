@@ -94,3 +94,10 @@ SP-12: MERGED (wave 3; ProvenanceStage 2-dep; base 276 passed, gates green)
 PARALLEL WAVE 3 COMPLETE: SP-12 + SP-17b merged; 11 stages; first two 2-dep stages
 WAVE 4 DISPATCHED (base 03ba130): SP-13 embeddings + SP-9b neo4j-loader — store layers, mockable seam + real clients (opt-in). SP-9b adds neo4j dep + FDI_NEO4J_*; SP-13 adds FDI_EMBED_*. Merge SP-13 first (no dep), then SP-9b; preserve config trio + resolve additive config/compose/.env/worker/__init__ conflicts.
 SP-13: MERGED (wave 4; EmbeddingStage; base 286 passed, gates green)
+SP-9b: MERGED (wave 4; GraphLoadStage; 6 additive conflicts resolved incl config trio; base 294 passed, gates green)
+PARALLEL WAVE 4 COMPLETE: SP-13 + SP-9b merged; 13 stages; real Azure-embed + Neo4j clients (opt-in). NOTE: merge tail-truncation nearly missed 3 conflicts (test_config/compose/roadmap) — caught via pytest collection error; always full marker-sweep after a wide merge.
+SP-14 DRAFT DISPATCHED (base 318c5e6): vector retrieval — VectorStore seam + IndexStage + POST /search; Milvus opt-in. Single SP (parallelism shrinking — SP-15/16 likely depend on SP-14/graph). Next: execute in a worktree, then assess SP-15/16.
+SP-14: MERGED (vector retrieval; IndexStage + POST /search + Milvus opt-in; base 306 passed, gates green). Clean merge (no parallel partner).
+NOTE: pymilvus resolved 3.0.0 vs compose milvus 2.6.20 server — live-integration compat to verify when the vector profile is exercised (opt-in; does not affect the mocked suite).
+RESUMED post-restart. State: SP-14 merged (306 passed); SP-13 shipped Azure embeddings but user wants BGE-small — correcting.
+WAVE 5 DISPATCHED: SP-13b (BGE-small via fastembed, 384-dim, replaces Azure embed backend; config restructured) + SP-15 (KnowledgeStage, first 3-dep). Disjoint; parallel worktrees. Merge SP-13b first (config trio), then SP-15 (roadmap-only conflict).

@@ -787,6 +787,160 @@ async def test_search_returns_the_best_match_first(make_client, _alembic_applied
 
 
 # --------------------------------------------------------------------------
+# RT-2: POST /retrieve/vector -- text + citations, section_type/doc_key/version filters.
+# --------------------------------------------------------------------------
+
+
+async def test_retrieve_vector_503_when_unconfigured(client: AsyncClient, _alembic_applied) -> None:
+    r = await client.post("/retrieve/vector", json={"query": "Balance Sheet"})
+    assert r.status_code == 503
+    assert "vector_store" in r.json()["detail"]
+
+
+async def _seed_processed_doc(session_factory, store) -> dict[str, object]:
+    """One fully-processed document (real chunks artifact + a real Document
+    row), for exercising the route's Postgres join / resolve_chunks path --
+    NOT the raw synthetic-vector shape /search's own test uses."""
+    from fdi.core.semantic import SectionType
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.semantic import FakeSemanticClient
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.chunks import ChunksStage
+    from fdi.pipeline.stages.graph import GraphStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
+    from fdi.pipeline.stages.semantic import SemanticStage
+
+    doc_key = f"annual-{uuid.uuid4()}"
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=doc_key, content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+        "paragraphs": [
+            {"role": "sectionHeading", "content": "Balance Sheet"},
+            {"content": "Total Assets 100"},
+        ],
+        "tables": [],
+    })
+    fake_semantic = FakeSemanticClient({"Balance Sheet": SectionType.BALANCE_SHEET.value})
+
+    reg = StageRegistry()
+    for stage in (
+        OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
+        ProvenanceStage(), ChunksStage(),
+    ):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    common = {
+        "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+        "store": store, "registry": reg, "resolver": resolver,
+    }
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="semantic", run_id=str(uuid.uuid4()),
+        services={"semantic": fake_semantic}, **common,
+    )
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+    return {"doc_id": doc.id, "doc_key": doc_key}
+
+
+async def test_retrieve_vector_returns_text_and_citation(
+    make_client, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.api.deps import get_embedder, get_vector_store
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
+    from fdi.pipeline.vectorstore import FakeVectorStore
+
+    seeded = await _seed_processed_doc(session_factory, store)
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_store = FakeVectorStore()
+    fake_store.upsert([{
+        "id": f"{seeded['doc_id']}:s0",
+        "vector": fake_embedder.embed(["Balance Sheet\nTotal Assets 100"])[0],
+        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
+                      "section_type": "BALANCE_SHEET", "page": 1},
+    }])
+
+    async with make_client(
+        dependency_overrides={
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_store,
+        }
+    ) as client:
+        r = await client.post(
+            "/retrieve/vector",
+            json={"query": "Balance Sheet\nTotal Assets 100", "k": 1},
+        )
+
+    assert r.status_code == 200, r.text
+    result = r.json()["results"][0]
+    assert result["doc_id"] == seeded["doc_id"]
+    assert result["doc_key"] == seeded["doc_key"]
+    assert result["version"] == 1
+    assert result["chunk_id"] == "s0"
+    assert result["section_type"] == "BALANCE_SHEET"
+    assert "Total Assets 100" in result["text"]
+    assert result["score"] == pytest.approx(1.0)
+
+
+async def test_retrieve_vector_section_type_filter(
+    make_client, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.api.deps import get_embedder, get_vector_store
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
+    from fdi.pipeline.vectorstore import FakeVectorStore
+
+    seeded = await _seed_processed_doc(session_factory, store)
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_store = FakeVectorStore()
+    fake_store.upsert([{
+        "id": f"{seeded['doc_id']}:s0",
+        "vector": fake_embedder.embed(["Balance Sheet\nTotal Assets 100"])[0],
+        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
+                      "section_type": "BALANCE_SHEET", "page": 1},
+    }])
+
+    async with make_client(
+        dependency_overrides={
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_store,
+        }
+    ) as client:
+        miss = await client.post(
+            "/retrieve/vector",
+            json={
+                "query": "Balance Sheet\nTotal Assets 100", "k": 5,
+                "filters": {"section_type": "NOTES"},
+            },
+        )
+        hit = await client.post(
+            "/retrieve/vector",
+            json={
+                "query": "Balance Sheet\nTotal Assets 100", "k": 5,
+                "filters": {"section_type": "BALANCE_SHEET"},
+            },
+        )
+
+    assert miss.json()["results"] == []
+    assert len(hit.json()["results"]) == 1
+
+
+# --------------------------------------------------------------------------
 # Task 6 (SP-16): POST /entities/resolve
 # --------------------------------------------------------------------------
 #

@@ -57,3 +57,40 @@ async def test_create_get_and_version(
         versions = await repo.list_by_doc_key(key)
     assert [d.version for d in versions] == [1, 2]
     assert d2.filename == "a2.pdf"
+
+
+async def test_get_many_returns_known_ids_only(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    key = f"key-{uuid.uuid4()}"
+    async with session_factory() as s:
+        repo = DocumentRepository(s)
+        d1 = await repo.create(
+            id=str(uuid.uuid4()),
+            checksum=str(uuid.uuid4()),
+            filename="a.pdf",
+            byte_size=10,
+            content_type="application/pdf",
+            doc_key=key,
+            version=1,
+        )
+        d2 = await repo.create(
+            id=str(uuid.uuid4()),
+            checksum=str(uuid.uuid4()),
+            filename="b.pdf",
+            byte_size=11,
+            content_type="application/pdf",
+            doc_key=key,
+            version=2,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        repo = DocumentRepository(s)
+        found = await repo.get_many([d1.id, d2.id, "no-such-doc-id"])
+        assert set(found) == {d1.id, d2.id}
+        assert found[d1.id].filename == "a.pdf"
+        assert found[d2.id].version == 2
+
+        empty = await repo.get_many([])
+        assert empty == {}

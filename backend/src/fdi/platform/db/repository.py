@@ -231,3 +231,17 @@ class DocumentRepository:
             )
         ).scalars().all()
         return list(rows)
+
+    async def get_many(self, ids: list[str]) -> dict[str, Document]:
+        """Every `Document` row whose id is in `ids`, keyed by id. Empty input ->
+        no query (RT-2's vector_search calls this once per request for its
+        doc_key/version filter check AND its doc_key/version citation join --
+        an empty hit list must not become a wasted round trip). Unknown ids are
+        simply absent from the result, not an error -- same "omit, don't raise"
+        posture as resolve_chunks (fdi/pipeline/retrieval.py)."""
+        if not ids:
+            return {}
+        rows = (
+            await self._s.execute(select(Document).where(Document.id.in_(ids)))
+        ).scalars().all()
+        return {d.id: d for d in rows}

@@ -1,0 +1,2665 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema-descriptor",
+  "title": "Financial Document Intelligence - RAG Field Extraction Spec",
+  "description": "Module-wise catalogue of every field to extract from a company's annual report, expressed as RAG extraction queries. Each field is self-contained: `retrieval_query` (plus `keywords`) drives hybrid retrieval over the knowledge graph and embedding store to gather context; `extraction_prompt` instructs the LLM to answer the field from that context and return the value WITH its source citation. Only fields with rag_extractable=true are answered via retrieval; the rest are sourced by the pipeline.",
+  "version": "2.0.0",
+  "usage": {
+    "pipeline": [
+      "1. For each rag_extractable field, embed retrieval_query and run hybrid (vector + graph + keyword) retrieval to gather candidate context.",
+      "2. Pass the retrieved context together with extraction_prompt to the LLM.",
+      "3. The LLM returns an answer conforming to output_contract (value + source + confidence).",
+      "4. Post-process: apply the field's `normalization`, validate against `data_type`/`enum_values`, and keep the source citation."
+    ],
+    "routing": "Fields where rag_extractable=false (metadata / external_lookup / computed / constant / not_extracted) are filled by the pipeline from the source named in `source_hint`, not by retrieval."
+  },
+  "output_contract": {
+    "value": "The extracted value normalized per the field, or null if not found in context.",
+    "source": {
+      "page": "1-based page number(s) the evidence came from",
+      "snippet": "verbatim supporting text from the document",
+      "evidence_ids": "ids of the retrieved graph nodes / embedding chunks used to answer"
+    },
+    "confidence": "model confidence in [0.0, 1.0]"
+  },
+  "source_types": {
+    "document_content": "Answered via RAG - retrieved from the annual-report body (OCR text, tables, knowledge graph, embeddings).",
+    "metadata": "Taken from the PDF filename / filesystem metadata, not RAG.",
+    "external_lookup": "Supplied from an upstream database or external Excel; not present in the PDF body.",
+    "computed": "Derived from other extracted fields or is a process/status value.",
+    "constant": "Fixed / hardcoded value assigned by the pipeline.",
+    "not_extracted": "Detection is defined but the field is not currently populated (WIP)."
+  },
+  "data_types": [
+    "string",
+    "integer",
+    "decimal",
+    "date",
+    "enum",
+    "text",
+    "link",
+    "list",
+    "boolean"
+  ],
+  "modules": [
+    {
+      "id": 0,
+      "name": "PREPROCESS",
+      "folder": "0-preprocess",
+      "purpose": "Establish document identity and physical properties before any content extraction.",
+      "fields": [
+        {
+          "field_name": "Company name",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Legal / registered name of the company that owns the annual report.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Company name from the PDF filename / file metadata (not document retrieval). Rule: Take filename text before the first '-'. Expand abbreviations via companyFullFormsDict: ltd->limited, inds->industries, engg->engineering, co->company, corpn/corp->corporation, &->and, spg->spinning. Title-case the result.",
+          "keywords": [],
+          "example": "Reliance Industries Limited",
+          "normalization": "Take filename text before the first '-'. Expand abbreviations via companyFullFormsDict: ltd->limited, inds->industries, engg->engineering, co->company, corpn/corp->corporation, &->and, spg->spinning. Title-case the result.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Document / financial year",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "integer",
+          "description": "Financial year the annual report covers (reporting year).",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Document / financial year from the PDF filename / file metadata (not document retrieval). Rule: Last 4 characters before the '.' extension in the filename. Interpret as a 4-digit year.",
+          "keywords": [],
+          "example": "2023",
+          "normalization": "Last 4 characters before the '.' extension in the filename. Interpret as a 4-digit year.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "PDF filename",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Original PDF file name on disk.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the PDF filename from the PDF filename / file metadata (not document retrieval). Rule: Verbatim filesystem name.",
+          "keywords": [],
+          "example": "Reliance Industries Ltd-2023.pdf",
+          "normalization": "Verbatim filesystem name.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Total page count",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Number of pages in the PDF.",
+          "retrieval_query": "Number of pages in the PDF",
+          "extraction_prompt": "Using only the retrieved context, determine the Total page count. Number of pages in the PDF. Return the value as integer. Normalize the answer as follows: Integer count. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "312",
+          "normalization": "Integer count.",
+          "source_hint": "PDF filename and file properties"
+        },
+        {
+          "field_name": "Page-count remark",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Quality bucket derived from page count.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the Page-count remark from other extracted fields / process state (not document retrieval). Rule: Derived: <50 -> 'useless'; <=100 -> 'check'; >100 -> 'good'.",
+          "keywords": [],
+          "enum_values": [
+            "useless",
+            "check",
+            "good"
+          ],
+          "example": "good",
+          "normalization": "Derived: <50 -> 'useless'; <=100 -> 'check'; >100 -> 'good'.",
+          "source_hint": "Derived from other extracted fields or process status"
+        },
+        {
+          "field_name": "Google Drive file link",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "link",
+          "description": "Google Drive object id / path for the source document.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Google Drive file link from the PDF filename / file metadata (not document retrieval). Rule: Raw xattr value.",
+          "keywords": [],
+          "example": "1AbCdEf...driveId",
+          "normalization": "Raw xattr value.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Batch name",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Processing batch label.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Batch name to the fixed value assigned by the pipeline (not extracted). Rule: Hardcoded per run.",
+          "keywords": [],
+          "example": "BATCH_2023_Q3",
+          "normalization": "Hardcoded per run.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "STATEMENT IDENTIFICATION",
+      "folder": "1-statement-identification",
+      "purpose": "Locate the financial statement pages (BS/PL/CF/SOCE), the Notes range, currency and standalone/consolidated flag using keyword scoring over page text.",
+      "fields": [
+        {
+          "field_name": "Balance Sheet page number(s)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Page number(s) containing the Balance Sheet.",
+          "retrieval_query": "Page number(s) containing the Balance Sheet | key terms: balance sheet, total assets, total equity and liabilities, non-current assets, current assets, shareholders funds, property plant and equipment",
+          "extraction_prompt": "Using only the retrieved context, determine the Balance Sheet page number(s). Page number(s) containing the Balance Sheet. Return the value as list. Normalize the answer as follows: 1-based page indices. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "balance sheet",
+            "total assets",
+            "total equity and liabilities",
+            "non-current assets",
+            "current assets",
+            "shareholders funds",
+            "property plant and equipment"
+          ],
+          "example": "[145]",
+          "normalization": "1-based page indices.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "BS confidence (word-match count)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Count of Balance-Sheet keyword hits on the chosen page; confidence proxy.",
+          "retrieval_query": "Count of Balance-Sheet keyword hits on the chosen page; confidence proxy",
+          "extraction_prompt": "Using only the retrieved context, determine the BS confidence (word-match count). Count of Balance-Sheet keyword hits on the chosen page; confidence proxy. Return the value as integer. Normalize the answer as follows: Integer hit count. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "41",
+          "normalization": "Integer hit count.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "P&L page number(s)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Page number(s) containing the Statement of Profit and Loss.",
+          "retrieval_query": "Page number(s) containing the Statement of Profit and Loss | key terms: statement of profit and loss, revenue from operations, total income, profit before tax, earnings per equity share, total expenses",
+          "extraction_prompt": "Using only the retrieved context, determine the P&L page number(s). Page number(s) containing the Statement of Profit and Loss. Return the value as list. Normalize the answer as follows: 1-based page indices. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "statement of profit and loss",
+            "revenue from operations",
+            "total income",
+            "profit before tax",
+            "earnings per equity share",
+            "total expenses"
+          ],
+          "example": "[147]",
+          "normalization": "1-based page indices.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "P&L confidence",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Count of P&L keyword hits; confidence proxy.",
+          "retrieval_query": "Count of P&L keyword hits; confidence proxy",
+          "extraction_prompt": "Using only the retrieved context, determine the P&L confidence. Count of P&L keyword hits; confidence proxy. Return the value as integer. Normalize the answer as follows: Integer hit count. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "52",
+          "normalization": "Integer hit count.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Cash Flow page number(s)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Page number(s) containing the Cash Flow Statement.",
+          "retrieval_query": "Page number(s) containing the Cash Flow Statement | key terms: cash flow statement, cash flow from operating activities, cash flow from investing activities, cash flow from financing activities, net increase in cash and cash equivalents",
+          "extraction_prompt": "Using only the retrieved context, determine the Cash Flow page number(s). Page number(s) containing the Cash Flow Statement. Return the value as list. Normalize the answer as follows: 1-based page indices; searched only between signature pages. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "cash flow statement",
+            "cash flow from operating activities",
+            "cash flow from investing activities",
+            "cash flow from financing activities",
+            "net increase in cash and cash equivalents"
+          ],
+          "example": "[149]",
+          "normalization": "1-based page indices; searched only between signature pages.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Changes-in-Equity page(s)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Page(s) with the Statement of Changes in Equity.",
+          "retrieval_query": "Page(s) with the Statement of Changes in Equity | key terms: statement of changes in equity, other equity, reserves and surplus, securities premium, retained earnings",
+          "extraction_prompt": "Using only the retrieved context, determine the Changes-in-Equity page(s). Page(s) with the Statement of Changes in Equity. Return the value as list. Normalize the answer as follows: 1-based page indices. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "statement of changes in equity",
+            "other equity",
+            "reserves and surplus",
+            "securities premium",
+            "retained earnings"
+          ],
+          "example": "[146]",
+          "normalization": "1-based page indices.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Notes range start page",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "First page of the Notes-to-Accounts range.",
+          "retrieval_query": "First page of the Notes-to-Accounts range | key terms: notes to the financial statements, notes forming part of",
+          "extraction_prompt": "Using only the retrieved context, determine the Notes range start page. First page of the Notes-to-Accounts range. Return the value as integer. Normalize the answer as follows: 1-based; determined by largest gap between consecutive signed pages. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "notes to the financial statements",
+            "notes forming part of"
+          ],
+          "example": "151",
+          "normalization": "1-based; determined by largest gap between consecutive signed pages.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Notes range end page",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Last page of the Notes-to-Accounts range.",
+          "retrieval_query": "Last page of the Notes-to-Accounts range",
+          "extraction_prompt": "Using only the retrieved context, determine the Notes range end page. Last page of the Notes-to-Accounts range. Return the value as integer. Normalize the answer as follows: 1-based. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "230",
+          "normalization": "1-based.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Notes-range verification",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Verification signal that the Notes range is correct.",
+          "retrieval_query": "Verification signal that the Notes range is correct | key terms: significant accounting policies, basis of preparation, notes to the financial statements",
+          "extraction_prompt": "Using only the retrieved context, determine the Notes-range verification. Verification signal that the Notes range is correct. Return the value as string. Normalize the answer as follows: Derived from keyword presence. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "significant accounting policies",
+            "basis of preparation",
+            "notes to the financial statements"
+          ],
+          "example": "verified",
+          "normalization": "Derived from keyword presence.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "BS / PL / CF currency",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Reporting currency/magnitude unit per statement.",
+          "retrieval_query": "Reporting currency/magnitude unit per statement | key terms: in millions, in lakhs, in thousands, rupees in, amount in inr, (₹ in crore)",
+          "extraction_prompt": "Using only the retrieved context, determine the BS / PL / CF currency. Reporting currency/magnitude unit per statement. The answer MUST be exactly one of: Million, Lakhs, Thousands, Rupees. Return the value as enum. Normalize the answer as follows: Map via currencyDict to one of the enum buckets. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "in millions",
+            "in lakhs",
+            "in thousands",
+            "rupees in",
+            "amount in inr",
+            "(₹ in crore)"
+          ],
+          "enum_values": [
+            "Million",
+            "Lakhs",
+            "Thousands",
+            "Rupees"
+          ],
+          "example": "Lakhs",
+          "normalization": "Map via currencyDict to one of the enum buckets.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Standalone-vs-Consolidated flag",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Whether the statement set is standalone or consolidated.",
+          "retrieval_query": "Whether the statement set is standalone or consolidated | key terms: standalone, consolidated",
+          "extraction_prompt": "Using only the retrieved context, determine the Standalone-vs-Consolidated flag. Whether the statement set is standalone or consolidated. The answer MUST be exactly one of: standalone, consolidated. Return the value as enum. Normalize the answer as follows: re.search('standalone') / re.search('consolidated') on page text. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "standalone",
+            "consolidated"
+          ],
+          "enum_values": [
+            "standalone",
+            "consolidated"
+          ],
+          "example": "standalone",
+          "normalization": "re.search('standalone') / re.search('consolidated') on page text.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Signature / signed-page detection",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Pages carrying auditor / director signatures; used to bound statement search.",
+          "retrieval_query": "Pages carrying auditor / director signatures; used to bound statement search | key terms: Chartered Accountants, CFO, Chief Financial Officer, Director, Company Secretary, FRN, Membership No, Partner",
+          "extraction_prompt": "Using only the retrieved context, determine the Signature / signed-page detection. Pages carrying auditor / director signatures; used to bound statement search. Return the value as list. Normalize the answer as follows: Page indices where signature words appear. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "Chartered Accountants",
+            "CFO",
+            "Chief Financial Officer",
+            "Director",
+            "Company Secretary",
+            "FRN",
+            "Membership No",
+            "Partner"
+          ],
+          "example": "[150, 231]",
+          "normalization": "Page indices where signature words appear.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Total pages",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Page count (mirror of Module 0).",
+          "retrieval_query": "Page count (mirror of Module 0)",
+          "extraction_prompt": "Using only the retrieved context, determine the Total pages. Page count (mirror of Module 0). Return the value as integer. Normalize the answer as follows: Integer. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "312",
+          "normalization": "Integer.",
+          "source_hint": "Financial statements section (Balance Sheet, P&L, Cash Flow, Notes range) and their headings"
+        },
+        {
+          "field_name": "Identification status / logic",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Derived audit trail of how pages were chosen.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the Identification status / logic from other extracted fields / process state (not document retrieval). Rule: Derived.",
+          "keywords": [],
+          "example": "DONE / scored-by-keywords",
+          "normalization": "Derived.",
+          "source_hint": "Derived from other extracted fields or process status"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "STATEMENT EXTRACTION",
+      "folder": "2-statement-extraction",
+      "purpose": "Turn the identified statement pages into raw per-page table grids via OCR table detection.",
+      "fields": [
+        {
+          "field_name": "Per-page table cell grid (raw)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Raw cell grid of every detected table on a statement page (no named fields yet).",
+          "retrieval_query": "Raw cell grid of every detected table on a statement page (no named fields yet)",
+          "extraction_prompt": "Using only the retrieved context, determine the Per-page table cell grid (raw). Raw cell grid of every detected table on a statement page (no named fields yet). Return the value as text. Normalize the answer as follows: Raw cell text preserved as-is. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "CSV grid of rows x cols with cell text",
+          "normalization": "Raw cell text preserved as-is.",
+          "source_hint": "Financial statement pages (raw table grids)"
+        },
+        {
+          "field_name": "Split-page status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Whether the page was split into a single-page PDF for OCR.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Split-page status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal + timestamp.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal + timestamp.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        },
+        {
+          "field_name": "Extraction status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Whether Textract extraction completed.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Extraction status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING",
+            "ERROR"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "MAIN STATEMENT DB PUSH",
+      "folder": "3-main-statement-db-push",
+      "purpose": "Core financial line-item extraction from the raw statement grids into Optmization_BatchProcessStatementMainTableData.",
+      "fields": [
+        {
+          "field_name": "Line-item description",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Text label of a statement row (e.g. 'Revenue from operations').",
+          "retrieval_query": "Text label of a statement row (e.g. 'Revenue from operations')",
+          "extraction_prompt": "Using only the retrieved context, determine the Line-item description. Text label of a statement row (e.g. 'Revenue from operations'). Return the value as string. Normalize the answer as follows: Choose the description column (most alphabetic cells); clean with re.sub(r'[^a-zA-Z]','') for matching but keep display text. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Property, plant and equipment",
+          "normalization": "Choose the description column (most alphabetic cells); clean with re.sub(r'[^a-zA-Z]','') for matching but keep display text.",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Note number (BS/PL only)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Note reference number cited by a BS/PL line item.",
+          "retrieval_query": "Note reference number cited by a BS/PL line item",
+          "extraction_prompt": "Using only the retrieved context, determine the Note number (BS/PL only). Note reference number cited by a BS/PL line item. Return the value as integer. Normalize the answer as follows: Integer 1-50; extracted via re.search(r'\\b([1-9][0-9]?)\\b'). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "3",
+          "normalization": "Integer 1-50; extracted via re.search(r'\\b([1-9][0-9]?)\\b').",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Current-year value",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "decimal",
+          "description": "Current reporting-year numeric value for the line item. (DB column name is misspelled 'Vale'.)",
+          "retrieval_query": "Current reporting-year numeric value for the line item. (DB column name is misspelled 'Vale'.)",
+          "extraction_prompt": "Using only the retrieved context, determine the Current-year value. Current reporting-year numeric value for the line item. (DB column name is misspelled 'Vale'.). Return the value as decimal. Normalize the answer as follows: Top numeric column; strip non-digits str.replace(r'[^0-9]',''); apply sign/parens handling downstream. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "125430.00",
+          "normalization": "Top numeric column; strip non-digits str.replace(r'[^0-9]',''); apply sign/parens handling downstream.",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Previous-year value",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "decimal",
+          "description": "Prior reporting-year numeric value for the line item.",
+          "retrieval_query": "Prior reporting-year numeric value for the line item",
+          "extraction_prompt": "Using only the retrieved context, determine the Previous-year value. Prior reporting-year numeric value for the line item. Return the value as decimal. Normalize the answer as follows: 2nd numeric column; same digit-strip rule. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "118220.00",
+          "normalization": "2nd numeric column; same digit-strip rule.",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Reporting-period dates",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "date",
+          "description": "Period-end dates that head the value columns.",
+          "retrieval_query": "Period-end dates that head the value columns | key terms: as at, for the year ended, 31 march, 31st march",
+          "extraction_prompt": "Using only the retrieved context, determine the Reporting-period dates. Period-end dates that head the value columns. Return the value as date. Normalize the answer as follows: Parse 10 date formats via dateutil.parser.parse; store ISO. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "as at",
+            "for the year ended",
+            "31 march",
+            "31st march"
+          ],
+          "example": "2023-03-31",
+          "normalization": "Parse 10 date formats via dateutil.parser.parse; store ISO.",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Position: table row",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Row index of the cell within the source grid.",
+          "retrieval_query": "Row index of the cell within the source grid",
+          "extraction_prompt": "Using only the retrieved context, determine the Position: table row. Row index of the cell within the source grid. Return the value as integer. Normalize the answer as follows: Counter. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "12",
+          "normalization": "Counter.",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Position: table column",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Column index of the cell within the source grid.",
+          "retrieval_query": "Column index of the cell within the source grid",
+          "extraction_prompt": "Using only the retrieved context, determine the Position: table column. Column index of the cell within the source grid. Return the value as integer. Normalize the answer as follows: Counter. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "3",
+          "normalization": "Counter.",
+          "source_hint": "Balance Sheet / Statement of Profit and Loss / Cash Flow statement tables"
+        },
+        {
+          "field_name": "Document+page key",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Composite key linking value to its document and page.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Document+page key from the upstream database or external Excel (not document retrieval). Rule: Derived composite.",
+          "keywords": [],
+          "example": "Reliance-2023_p145",
+          "normalization": "Derived composite.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "CSV filename",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Source CSV grid filename.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the CSV filename from the PDF filename / file metadata (not document retrieval). Rule: Filesystem name.",
+          "keywords": [],
+          "example": "table-2.csv",
+          "normalization": "Filesystem name.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Drive link",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "link",
+          "description": "Drive path of the extracted artifact.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Drive link from the PDF filename / file metadata (not document retrieval). Rule: xattr value.",
+          "keywords": [],
+          "example": "drive/.../table-2.csv",
+          "normalization": "xattr value.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Push status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Insert / validation status.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Push status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING",
+            "ERROR"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "NOTES IDENTIFICATION",
+      "folder": "4-notes-identification",
+      "purpose": "Find the page(s) where each named note appears by co-occurrence of note name + value + year.",
+      "fields": [
+        {
+          "field_name": "Note page number(s)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Page(s) where a specific note's value and year co-occur.",
+          "retrieval_query": "Page(s) where a specific note's value and year co-occur",
+          "extraction_prompt": "Using only the retrieved context, determine the Note page number(s). Page(s) where a specific note's value and year co-occur. Return the value as list. Normalize the answer as follows: 1-based; Advance_search refines the candidate page. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "[178]",
+          "normalization": "1-based; Advance_search refines the candidate page.",
+          "source_hint": "Notes to Accounts pages"
+        },
+        {
+          "field_name": "Note-name match found",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "boolean",
+          "description": "Whether the note name text was located on the page.",
+          "retrieval_query": "Whether the note name text was located on the page",
+          "extraction_prompt": "Using only the retrieved context, determine the Note-name match found. Whether the note name text was located on the page. Return the value as boolean. Normalize the answer as follows: 1 = found, 0 = not. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "1",
+          "normalization": "1 = found, 0 = not.",
+          "source_hint": "Notes to Accounts pages"
+        },
+        {
+          "field_name": "Value match found",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "boolean",
+          "description": "Whether the expected note value was located on the page.",
+          "retrieval_query": "Whether the expected note value was located on the page",
+          "extraction_prompt": "Using only the retrieved context, determine the Value match found. Whether the expected note value was located on the page. Return the value as boolean. Normalize the answer as follows: 1 = found, 0 = not. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "1",
+          "normalization": "1 = found, 0 = not.",
+          "source_hint": "Notes to Accounts pages"
+        },
+        {
+          "field_name": "Process status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Note-identification process status.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Process status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING",
+            "ERROR"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        },
+        {
+          "field_name": "25 NoteNames searched",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "The fixed vocabulary of note names the identifier searches for.",
+          "retrieval_query": "The fixed vocabulary of note names the identifier searches for | key terms: property plant equipment, borrowings, finance cost, intangible assets, inventories, loans, other current assets, other current liabilities, other equity, other expense",
+          "extraction_prompt": "Using only the retrieved context, determine the 25 NoteNames searched. The fixed vocabulary of note names the identifier searches for. Return the value as list. Normalize the answer as follows: Match note headings against this controlled list. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "property plant equipment",
+            "borrowings",
+            "finance cost",
+            "intangible assets",
+            "inventories",
+            "loans",
+            "other current assets",
+            "other current liabilities",
+            "other equity",
+            "other expense",
+            "other financial assets",
+            "other financial liabilities",
+            "other income",
+            "other non-current assets",
+            "other non-current liabilities",
+            "provisions",
+            "revenue from operation",
+            "Employee benefits expense",
+            "Cost of materials consumed",
+            "Changes in inventories",
+            "Trade receivables",
+            "Cash and cash equivalents",
+            "Bank balances other than above",
+            "Depreciation and amortisation expense",
+            "EXCEPTIONAL ITEMS"
+          ],
+          "example": "property plant equipment",
+          "normalization": "Match note headings against this controlled list.",
+          "source_hint": "Notes to Accounts pages"
+        },
+        {
+          "field_name": "Upstream note attributes (passthrough)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Note name, expected value, year and page-range bounds supplied from the upstream DB.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Upstream note attributes (passthrough) from the upstream database or external Excel (not document retrieval). Rule: Passthrough.",
+          "keywords": [],
+          "example": "Borrowings / 45000 / 2023 / pages 170-185",
+          "normalization": "Passthrough.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "NOTES EXTRACTION",
+      "folder": "5-notes-extraction",
+      "purpose": "Extract the note detail table cells, orient the table, verify the sum against the expected total, and flag region-wise rejections.",
+      "fields": [
+        {
+          "field_name": "Note table cell text values",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Every cell of the note detail table (description col + total col up to total row).",
+          "retrieval_query": "Every cell of the note detail table (description col + total col up to total row)",
+          "extraction_prompt": "Using only the retrieved context, determine the Note table cell text values. Every cell of the note detail table (description col + total col up to total row). Return the value as text. Normalize the answer as follows: Raw cell text. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Land / 12000",
+          "normalization": "Raw cell text.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Row position",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Row order of the cell.",
+          "retrieval_query": "Row order of the cell",
+          "extraction_prompt": "Using only the retrieved context, determine the Row position. Row order of the cell. Return the value as integer. Normalize the answer as follows: Counter. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "4",
+          "normalization": "Counter.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Column position",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Column index of the cell.",
+          "retrieval_query": "Column index of the cell",
+          "extraction_prompt": "Using only the retrieved context, determine the Column position. Column index of the cell. Return the value as integer. Normalize the answer as follows: Counter. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "2",
+          "normalization": "Counter.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Description column index",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Which column holds line-item descriptions.",
+          "retrieval_query": "Which column holds line-item descriptions",
+          "extraction_prompt": "Using only the retrieved context, determine the Description column index. Which column holds line-item descriptions. Return the value as integer. Normalize the answer as follows: Column with >=50% non-numeric cells. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "0",
+          "normalization": "Column with >=50% non-numeric cells.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Total-value row",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Row where the cell equals the expected total.",
+          "retrieval_query": "Row where the cell equals the expected total | key terms: total",
+          "extraction_prompt": "Using only the retrieved context, determine the Total-value row. Row where the cell equals the expected total. Return the value as integer. Normalize the answer as follows: Row index. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "total"
+          ],
+          "example": "9",
+          "normalization": "Row index.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Total-value column",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Column of the total value.",
+          "retrieval_query": "Column of the total value",
+          "extraction_prompt": "Using only the retrieved context, determine the Total-value column. Column of the total value. Return the value as integer. Normalize the answer as follows: Column index. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "1",
+          "normalization": "Column index.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Latest-year header row/col",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Position of the latest-year date header.",
+          "retrieval_query": "Position of the latest-year date header | key terms: march, 2023, 2022",
+          "extraction_prompt": "Using only the retrieved context, determine the Latest-year header row/col. Position of the latest-year date header. Return the value as integer. Normalize the answer as follows: Row/col indices of month/year tokens. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "march",
+            "2023",
+            "2022"
+          ],
+          "example": "0 / 1",
+          "normalization": "Row/col indices of month/year tokens.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Table orientation",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Layout orientation of the note table.",
+          "retrieval_query": "Layout orientation of the note table",
+          "extraction_prompt": "Using only the retrieved context, determine the Table orientation. Layout orientation of the note table. The answer MUST be exactly one of: Horizontal, Vertical, Manual check. Return the value as enum. Normalize the answer as follows: find_ver_hor classification. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "Horizontal",
+            "Vertical",
+            "Manual check"
+          ],
+          "example": "Horizontal",
+          "normalization": "find_ver_hor classification.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Sum-start row",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Row where the summation chain begins.",
+          "retrieval_query": "Row where the summation chain begins",
+          "extraction_prompt": "Using only the retrieved context, determine the Sum-start row. Row where the summation chain begins. Return the value as integer. Normalize the answer as follows: check_sum walks upward from total row. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "2",
+          "normalization": "check_sum walks upward from total row.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Sum result",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Whether summed components match the total.",
+          "retrieval_query": "Whether summed components match the total",
+          "extraction_prompt": "Using only the retrieved context, determine the Sum result. Whether summed components match the total. The answer MUST be exactly one of: DONE, less than total, greater than total. Return the value as enum. Normalize the answer as follows: Compare summed value to total. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "less than total",
+            "greater than total"
+          ],
+          "example": "DONE",
+          "normalization": "Compare summed value to total.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Region-rejection flag",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "boolean",
+          "description": "Flag when the table is a geographic/region breakdown (rejected).",
+          "retrieval_query": "Flag when the table is a geographic/region breakdown (rejected) | key terms: america, asia, europe, india, region, united, qatar",
+          "extraction_prompt": "Using only the retrieved context, determine the Region-rejection flag. Flag when the table is a geographic/region breakdown (rejected). Return the value as boolean. Normalize the answer as follows: Set if any of the 7 region words appear. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "america",
+            "asia",
+            "europe",
+            "india",
+            "region",
+            "united",
+            "qatar"
+          ],
+          "example": "true",
+          "normalization": "Set if any of the 7 region words appear.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "CSV filename",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Accumulated CSV file names.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the CSV filename from the PDF filename / file metadata (not document retrieval). Rule: Filesystem.",
+          "keywords": [],
+          "example": "note-3.csv",
+          "normalization": "Filesystem.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Drive link",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "link",
+          "description": "Drive path of the extracted note artifact.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Drive link from the PDF filename / file metadata (not document retrieval). Rule: xattr.",
+          "keywords": [],
+          "example": "drive/.../note-3.csv",
+          "normalization": "xattr.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Note linkage (passthrough)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Linkage columns identifying which statement row this note explains.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Note linkage (passthrough) from the upstream database or external Excel (not document retrieval). Rule: Passthrough from upstream.",
+          "keywords": [],
+          "example": "3 / Property plant equipment / ...",
+          "normalization": "Passthrough from upstream.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "NOTES DB PUSH",
+      "folder": "6-notes-db-push",
+      "purpose": "Production version of Module 5 with the same field set; adds a batch tag.",
+      "fields": [
+        {
+          "field_name": "(Same field set as Module 5)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Identical to Module 5 NOTES EXTRACTION field set (note cells, positions, orientation, sum verification, region flag).",
+          "retrieval_query": "Identical to Module 5 NOTES EXTRACTION field set (note cells, positions, orientation, sum verification, region flag)",
+          "extraction_prompt": "Using only the retrieved context, determine the (Same field set as Module 5). Identical to Module 5 NOTES EXTRACTION field set (note cells, positions, orientation, sum verification, region flag). Return the value as text. Normalize the answer as follows: See Module 5. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "see module 5",
+          "normalization": "See Module 5.",
+          "source_hint": "Notes to Accounts detail tables"
+        },
+        {
+          "field_name": "Temp batch tag",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Batch tag distinguishing this production push.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the Temp batch tag from other extracted fields / process state (not document retrieval). Rule: Generated batch id.",
+          "keywords": [],
+          "example": "TMP_20230801_01",
+          "normalization": "Generated batch id.",
+          "source_hint": "Derived from other extracted fields or process status"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "CARO",
+      "folder": "7-caro",
+      "purpose": "Extract the CARO/Annexure report, run each CARO question through GPT-4o, and classify sentiment.",
+      "fields": [
+        {
+          "field_name": "CARO / Annexure full text",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Full text of the CARO annexure page range.",
+          "retrieval_query": "Full text of the CARO annexure page range | key terms: annexure to the independent auditors report, companies auditors report order, CARO, assets, property plant and equipment",
+          "extraction_prompt": "Using only the retrieved context, determine the CARO / Annexure full text. Full text of the CARO annexure page range. Return the value as text. Normalize the answer as follows: Located via 45 annexure-keyword variants + 'assets'/'property plant and equipment'; excludes Consolidated / IFC sections. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "annexure to the independent auditors report",
+            "companies auditors report order",
+            "CARO",
+            "assets",
+            "property plant and equipment"
+          ],
+          "example": "Annexure A to the Independent Auditor's Report ...",
+          "normalization": "Located via 45 annexure-keyword variants + 'assets'/'property plant and equipment'; excludes Consolidated / IFC sections.",
+          "source_hint": "CARO annexure to the Independent Auditor's Report"
+        },
+        {
+          "field_name": "CARO Question No.",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "CARO clause / question number.",
+          "retrieval_query": "CARO clause / question number",
+          "extraction_prompt": "Using only the retrieved context, determine the CARO Question No.. CARO clause / question number. Return the value as string. Normalize the answer as follows: GPT-4o markdown table -> parts[1]. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "3(i)(a)",
+          "normalization": "GPT-4o markdown table -> parts[1].",
+          "source_hint": "CARO annexure to the Independent Auditor's Report"
+        },
+        {
+          "field_name": "CARO Question text",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Canonical CARO question wording.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the CARO Question text from the upstream database or external Excel (not document retrieval). Rule: Lookup from List_of_Questions_for_CARO_report.xlsx.",
+          "keywords": [],
+          "example": "Whether the company is maintaining proper records of property, plant and equipment.",
+          "normalization": "Lookup from List_of_Questions_for_CARO_report.xlsx.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "GPT answer",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "GPT-generated YES/NO answer with reason and any amounts inline.",
+          "retrieval_query": "GPT-generated YES/NO answer with reason and any amounts inline",
+          "extraction_prompt": "Using only the retrieved context, determine the GPT answer. GPT-generated YES/NO answer with reason and any amounts inline. Return the value as text. Normalize the answer as follows: GPT-4o free-text; leading YES/NO. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "YES. The company maintains proper records ...",
+          "normalization": "GPT-4o free-text; leading YES/NO.",
+          "source_hint": "CARO annexure to the Independent Auditor's Report"
+        },
+        {
+          "field_name": "Sentiment / Signal",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "3-class compliance sentiment of the answer.",
+          "retrieval_query": "3-class compliance sentiment of the answer",
+          "extraction_prompt": "Using only the retrieved context, determine the Sentiment / Signal. 3-class compliance sentiment of the answer. The answer MUST be exactly one of: green, orange, red. Return the value as enum. Normalize the answer as follows: Fine-tuned BERT 3-class classifier. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "green",
+            "orange",
+            "red"
+          ],
+          "example": "green",
+          "normalization": "Fine-tuned BERT 3-class classifier.",
+          "source_hint": "CARO annexure to the Independent Auditor's Report"
+        },
+        {
+          "field_name": "Set no",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "integer",
+          "description": "Hardcoded set number.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Set no to the fixed value assigned by the pipeline (not extracted). Rule: Hardcoded.",
+          "keywords": [],
+          "example": "43",
+          "normalization": "Hardcoded.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        },
+        {
+          "field_name": "Expected compliance (benchmark)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Benchmark expected compliance answer.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Expected compliance (benchmark) from the upstream database or external Excel (not document retrieval). Rule: Lookup table.",
+          "keywords": [],
+          "example": "YES",
+          "normalization": "Lookup table.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Modified / 'Llama' answer",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Manually reviewed / corrected answer.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Modified / 'Llama' answer from the upstream database or external Excel (not document retrieval). Rule: From manual review Excel.",
+          "keywords": [],
+          "example": "YES (reviewed)",
+          "normalization": "From manual review Excel.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "CorrectAns / CorrectSignal",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Reviewer fill-in fields.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the CorrectAns / CorrectSignal from other extracted fields / process state (not document retrieval). Rule: Reviewer entry.",
+          "keywords": [],
+          "example": "YES / green",
+          "normalization": "Reviewer entry.",
+          "source_hint": "Derived from other extracted fields or process status"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "CMA WRITING",
+      "folder": "8-cma-writing",
+      "purpose": "Pure DB->Excel writer. Extracts NOTHING from the PDF; writes formulas into CMA template sheets.",
+      "fields": [
+        {
+          "field_name": "CMA formula cells (no PDF extraction)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Formulas written into CMA template sheets from SP output (lineitemTag, SumOfValue, OneBasedCmaRowNo, FinalValueExpression).",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the CMA formula cells (no PDF extraction) from the upstream database or external Excel (not document retrieval). Rule: N/A - derived from DB via SP [CreationofExcel_FromData].",
+          "keywords": [],
+          "example": "=SUM(...)",
+          "normalization": "N/A - derived from DB via SP [CreationofExcel_FromData].",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "SUMMARY REPORT",
+      "folder": "9-summary-report",
+      "purpose": "Produce narrative report sections derived from PDF-sourced financials and KPI tags (not raw extraction).",
+      "fields": [
+        {
+          "field_name": "Narrative sections",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Narrative sections sourced from pre-derived DB tables.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Narrative sections from the upstream database or external Excel (not document retrieval). Rule: Generated narrative.",
+          "keywords": [],
+          "example": "The company was incorporated in ...",
+          "normalization": "Generated narrative.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Financial KPI sections",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "KPI-driven financial narrative sections.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Financial KPI sections from the upstream database or external Excel (not document retrieval). Rule: Derived from KPI tags (RGR351, RAR20, RAR23, CWIP, TOTBOR, NCFOPR, etc.).",
+          "keywords": [
+            "RGR351",
+            "RAR20",
+            "RAR23",
+            "CWIP",
+            "TOTBOR",
+            "NCFOPR"
+          ],
+          "example": "Revenue grew 8% YoY ...",
+          "normalization": "Derived from KPI tags (RGR351, RAR20, RAR23, CWIP, TOTBOR, NCFOPR, etc.).",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Sector 2 (NBFC) extras",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "NBFC-specific narrative sections.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Sector 2 (NBFC) extras from the upstream database or external Excel (not document retrieval). Rule: From tags DSN, TOTDFN.",
+          "keywords": [
+            "DSN",
+            "TOTDFN"
+          ],
+          "example": "Debt securities outstanding ...",
+          "normalization": "From tags DSN, TOTDFN.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Opinion / CARO narrative + counts",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Opinion and CARO narrative plus strength/weakness/neutral counts.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Opinion / CARO narrative + counts from the upstream database or external Excel (not document retrieval). Rule: Populated by upstream SPs.",
+          "keywords": [],
+          "example": "Unmodified opinion; 3 strengths ...",
+          "normalization": "Populated by upstream SPs.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "KPI tables",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Structured KPI tables from SP result sets.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the KPI tables from the upstream database or external Excel (not document retrieval). Rule: SP result sets.",
+          "keywords": [],
+          "example": "table of KPI rows",
+          "normalization": "SP result sets.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Rephrased report",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "GenAI-rephrased report body.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Rephrased report from the upstream database or external Excel (not document retrieval). Rule: GenAI rephrase.",
+          "keywords": [],
+          "example": "rephrased narrative",
+          "normalization": "GenAI rephrase.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Joint Auditor narrative",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "text",
+          "description": "Narrative listing all joint auditors.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Joint Auditor narrative from the upstream database or external Excel (not document retrieval). Rule: From JointAuditorCompanies.",
+          "keywords": [],
+          "example": "Joint auditors: ...",
+          "normalization": "From JointAuditorCompanies.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "REPORT ON AUDITOR'S OPINION",
+      "folder": "10-auditors-opinion",
+      "purpose": "Extract Basis for Qualified Opinion, Emphasis of Matter and Going Concern sections via LAYOUT, then GPT-summarize observations.",
+      "fields": [
+        {
+          "field_name": "Basis for Qualified Opinion text",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Body text under the 'Basis for Qualified Opinion' heading.",
+          "retrieval_query": "Body text under the 'Basis for Qualified Opinion' heading | key terms: basis for qualified opinion, basis for adverse opinion, basis for disclaimer of opinion",
+          "extraction_prompt": "Using only the retrieved context, determine the Basis for Qualified Opinion text. Body text under the 'Basis for Qualified Opinion' heading. Return the value as text. Normalize the answer as follows: Header match then join body rows. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "basis for qualified opinion",
+            "basis for adverse opinion",
+            "basis for disclaimer of opinion"
+          ],
+          "example": "We draw attention to ...",
+          "normalization": "Header match then join body rows.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Emphasis of Matter text",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Body text under Emphasis of Matter (4 header variants).",
+          "retrieval_query": "Body text under Emphasis of Matter (4 header variants) | key terms: emphasis of matter, emphasis of matters",
+          "extraction_prompt": "Using only the retrieved context, determine the Emphasis of Matter text. Body text under Emphasis of Matter (4 header variants). Return the value as text. Normalize the answer as follows: Header match then join body rows. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "emphasis of matter",
+            "emphasis of matters"
+          ],
+          "example": "We draw attention to Note X ...",
+          "normalization": "Header match then join body rows.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Going Concern text",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Body text under Going Concern / Material Uncertainty.",
+          "retrieval_query": "Body text under Going Concern / Material Uncertainty | key terms: going concern, material uncertainty related to going concern",
+          "extraction_prompt": "Using only the retrieved context, determine the Going Concern text. Body text under Going Concern / Material Uncertainty. Return the value as text. Normalize the answer as follows: Header match then join body rows. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "going concern",
+            "material uncertainty related to going concern"
+          ],
+          "example": "Material uncertainty related to going concern ...",
+          "normalization": "Header match then join body rows.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Section-has-tables flag",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "boolean",
+          "description": "Whether a section contains tables.",
+          "retrieval_query": "Whether a section contains tables",
+          "extraction_prompt": "Using only the retrieved context, determine the Section-has-tables flag. Whether a section contains tables. Return the value as boolean. Normalize the answer as follows: True if LAYOUT_TABLE present. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "true",
+          "normalization": "True if LAYOUT_TABLE present.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Observation Heading (GPT)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "GPT-generated heading summarizing the observation.",
+          "retrieval_query": "GPT-generated heading summarizing the observation",
+          "extraction_prompt": "Using only the retrieved context, determine the Observation Heading (GPT). GPT-generated heading summarizing the observation. Return the value as string. Normalize the answer as follows: GPT-4o output. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Pending litigation on tax matters",
+          "normalization": "GPT-4o output.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Concern (GPT)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "GPT-extracted concern.",
+          "retrieval_query": "GPT-extracted concern",
+          "extraction_prompt": "Using only the retrieved context, determine the Concern (GPT). GPT-extracted concern. Return the value as text. Normalize the answer as follows: GPT-4o; regex 'Concern:\\s*(.*?)'. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Recoverability of receivables is uncertain",
+          "normalization": "GPT-4o; regex 'Concern:\\s*(.*?)'.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Amount Involved (GPT)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Monetary amount tied to the observation.",
+          "retrieval_query": "Monetary amount tied to the observation",
+          "extraction_prompt": "Using only the retrieved context, determine the Amount Involved (GPT). Monetary amount tied to the observation. Return the value as string. Normalize the answer as follows: GPT-4o; regex 'Amount Involved:\\s*(.*)'. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Rs. 12.5 crore",
+          "normalization": "GPT-4o; regex 'Amount Involved:\\s*(.*)'.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Report / requirement type",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Classification of which section the observation came from.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the Report / requirement type from other extracted fields / process state (not document retrieval). Rule: Classification.",
+          "keywords": [],
+          "enum_values": [
+            "BasisForQO",
+            "EOM",
+            "goingConcern"
+          ],
+          "example": "EOM",
+          "normalization": "Classification.",
+          "source_hint": "Derived from other extracted fields or process status"
+        },
+        {
+          "field_name": "Cleaned observation / head",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "SQL-cleaned final observation text.",
+          "retrieval_query": "SQL-cleaned final observation text",
+          "extraction_prompt": "Using only the retrieved context, determine the Cleaned observation / head. SQL-cleaned final observation text. Return the value as text. Normalize the answer as follows: SQL text cleaning. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Litigation on tax matters",
+          "normalization": "SQL text cleaning.",
+          "source_hint": "Independent Auditor's Report - Basis for Qualified Opinion / Emphasis of Matter / Going Concern sections"
+        },
+        {
+          "field_name": "Serial nos",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "integer",
+          "description": "Serial numbering of observations.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the Serial nos from other extracted fields / process state (not document retrieval). Rule: DENSE_RANK / ROW_NUMBER.",
+          "keywords": [],
+          "example": "1 / 1.2",
+          "normalization": "DENSE_RANK / ROW_NUMBER.",
+          "source_hint": "Derived from other extracted fields or process status"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "A2 AWS LOGIC (Directors / KMP)",
+      "folder": "11-a2-directors-kmp",
+      "purpose": "Extract directors / key managerial personnel details from tables with fuzzy name matching.",
+      "fields": [
+        {
+          "field_name": "Executive / Director name",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Name of a director / KMP.",
+          "retrieval_query": "Name of a director / KMP | key terms: director, chairman, managing director, whole-time director, CEO, CFO, company secretary",
+          "extraction_prompt": "Using only the retrieved context, determine the Executive / Director name. Name of a director / KMP. Return the value as string. Normalize the answer as follows: Fuzzy name match (difflib / fuzzywuzzy); honorifics stripped (Mr/Mrs/Ms/Dr/Shri/Smt). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "director",
+            "chairman",
+            "managing director",
+            "whole-time director",
+            "CEO",
+            "CFO",
+            "company secretary"
+          ],
+          "example": "Rajesh Kumar Sharma",
+          "normalization": "Fuzzy name match (difflib / fuzzywuzzy); honorifics stripped (Mr/Mrs/Ms/Dr/Shri/Smt).",
+          "source_hint": "Board's Report / Corporate Governance report - directors & KMP tables"
+        },
+        {
+          "field_name": "DIN",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Director Identification Number (8 digits).",
+          "retrieval_query": "Director Identification Number (8 digits) | key terms: DIN, Director Identification Number",
+          "extraction_prompt": "Using only the retrieved context, determine the DIN. Director Identification Number (8 digits). Return the value as string. Normalize the answer as follows: int64 column match mapped to name. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "DIN",
+            "Director Identification Number"
+          ],
+          "example": "01234567",
+          "normalization": "int64 column match mapped to name.",
+          "source_hint": "Board's Report / Corporate Governance report - directors & KMP tables"
+        },
+        {
+          "field_name": "Designation",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Board designation / role.",
+          "retrieval_query": "Board designation / role | key terms: managing director, independent director, executive director, non-executive",
+          "extraction_prompt": "Using only the retrieved context, determine the Designation. Board designation / role. Return the value as string. Normalize the answer as follows: remOtherDetails() then fuzz.token_set_ratio >= 80. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "managing director",
+            "independent director",
+            "executive director",
+            "non-executive"
+          ],
+          "example": "Managing Director",
+          "normalization": "remOtherDetails() then fuzz.token_set_ratio >= 80.",
+          "source_hint": "Board's Report / Corporate Governance report - directors & KMP tables"
+        },
+        {
+          "field_name": "From-date (since)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "date",
+          "description": "Date the person's tenure began.",
+          "retrieval_query": "Date the person's tenure began | key terms: since, appointed on, date of appointment",
+          "extraction_prompt": "Using only the retrieved context, determine the From-date (since). Date the person's tenure began. Return the value as date. Normalize the answer as follows: convert_date() (20 formats) -> '%d %B %Y'. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "since",
+            "appointed on",
+            "date of appointment"
+          ],
+          "example": "2019-04-01",
+          "normalization": "convert_date() (20 formats) -> '%d %B %Y'.",
+          "source_hint": "Board's Report / Corporate Governance report - directors & KMP tables"
+        },
+        {
+          "field_name": "To-date (upto)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "date",
+          "description": "Date the tenure ended (if any).",
+          "retrieval_query": "Date the tenure ended (if any) | key terms: upto, cessation, resigned on",
+          "extraction_prompt": "Using only the retrieved context, determine the To-date (upto). Date the tenure ended (if any). Return the value as date. Normalize the answer as follows: convert_date() (20 formats). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "upto",
+            "cessation",
+            "resigned on"
+          ],
+          "example": "2024-03-31",
+          "normalization": "convert_date() (20 formats).",
+          "source_hint": "Board's Report / Corporate Governance report - directors & KMP tables"
+        },
+        {
+          "field_name": "Remuneration",
+          "source_type": "not_extracted",
+          "rag_extractable": false,
+          "data_type": "decimal",
+          "description": "Director remuneration.",
+          "retrieval_query": null,
+          "extraction_prompt": "The Remuneration is defined but NOT currently populated; leave null. Rule: WIP; not in active chain -> always NULL. Note: Detection code exists but is NOT in the active chain; value is always NULL.",
+          "keywords": [
+            "remuneration",
+            "sitting fees",
+            "commission"
+          ],
+          "example": "NULL",
+          "normalization": "WIP; not in active chain -> always NULL.",
+          "source_hint": "Board's Report / Corporate Governance report - directors & KMP tables - detection defined but not currently populated",
+          "notes": "Detection code exists but is NOT in the active chain; value is always NULL."
+        },
+        {
+          "field_name": "DocYear / CompanyId (passthrough)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "integer",
+          "description": "Document year and company id passthrough.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the DocYear / CompanyId (passthrough) from the upstream database or external Excel (not document retrieval). Rule: DB lookup.",
+          "keywords": [],
+          "example": "2023 / 4021",
+          "normalization": "DB lookup.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Extraction status.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING",
+            "ERROR"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "XBRL IDENTIFICATION",
+      "folder": "12-xbrl-identification",
+      "purpose": "Alternative BS/PL/CF page finder for XBRL-format PDFs, using the same keyword dictionaries plus Camelot table extraction.",
+      "fields": [
+        {
+          "field_name": "BS/PL/CF page numbers",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Statement page numbers for XBRL-format documents.",
+          "retrieval_query": "Statement page numbers for XBRL-format documents | key terms: balance sheet, statement of profit and loss, cash flow statement",
+          "extraction_prompt": "Using only the retrieved context, determine the BS/PL/CF page numbers. Statement page numbers for XBRL-format documents. Return the value as list. Normalize the answer as follows: Keyword scoring (same dictionaries as Module 1) + Camelot flavor='stream'. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "balance sheet",
+            "statement of profit and loss",
+            "cash flow statement"
+          ],
+          "example": "[88, 90, 92]",
+          "normalization": "Keyword scoring (same dictionaries as Module 1) + Camelot flavor='stream'.",
+          "source_hint": "XBRL-format financial statement pages"
+        },
+        {
+          "field_name": "XBRL-format flag",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "boolean",
+          "description": "Whether the PDF is XBRL-format (gates this module).",
+          "retrieval_query": "Whether the PDF is XBRL-format (gates this module) | key terms: XBRL, eXtensible Business Reporting Language, taxonomy",
+          "extraction_prompt": "Using only the retrieved context, determine the XBRL-format flag. Whether the PDF is XBRL-format (gates this module). Return the value as boolean. Normalize the answer as follows: checkIfXbrlFormatPdf: 5 first-page keywords. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "XBRL",
+            "eXtensible Business Reporting Language",
+            "taxonomy"
+          ],
+          "example": "true",
+          "normalization": "checkIfXbrlFormatPdf: 5 first-page keywords.",
+          "source_hint": "XBRL-format financial statement pages"
+        },
+        {
+          "field_name": "Standalone / consolidated validation",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Standalone/consolidated flag for XBRL docs.",
+          "retrieval_query": "Standalone/consolidated flag for XBRL docs | key terms: standalone, consolidated",
+          "extraction_prompt": "Using only the retrieved context, determine the Standalone / consolidated validation. Standalone/consolidated flag for XBRL docs. The answer MUST be exactly one of: standalone, consolidated. Return the value as enum. Normalize the answer as follows: getFlagStatus. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "standalone",
+            "consolidated"
+          ],
+          "enum_values": [
+            "standalone",
+            "consolidated"
+          ],
+          "example": "consolidated",
+          "normalization": "getFlagStatus.",
+          "source_hint": "XBRL-format financial statement pages"
+        },
+        {
+          "field_name": "Statement table CSVs",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Camelot-extracted statement tables.",
+          "retrieval_query": "Camelot-extracted statement tables",
+          "extraction_prompt": "Using only the retrieved context, determine the Statement table CSVs. Camelot-extracted statement tables. Return the value as text. Normalize the answer as follows: Camelot output CSVs. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "xbrl-bs.csv",
+          "normalization": "Camelot output CSVs.",
+          "source_hint": "XBRL-format financial statement pages"
+        },
+        {
+          "field_name": "Identification status / logic",
+          "source_type": "computed",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Derived audit trail.",
+          "retrieval_query": null,
+          "extraction_prompt": "Compute the Identification status / logic from other extracted fields / process state (not document retrieval). Rule: Derived.",
+          "keywords": [],
+          "example": "DONE",
+          "normalization": "Derived.",
+          "source_hint": "Derived from other extracted fields or process status"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "NVES EXTRACTION (face value)",
+      "folder": "13-nves-extraction",
+      "purpose": "Extract the nominal / face value per equity share.",
+      "fields": [
+        {
+          "field_name": "Nominal Value per Equity Share (face value)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "decimal",
+          "description": "Face value per equity share.",
+          "retrieval_query": "Face value per equity share | key terms: face value, nominal value, nves, per share, par value",
+          "extraction_prompt": "Using only the retrieved context, determine the Nominal Value per Equity Share (face value). Face value per equity share. Return the value as decimal. Normalize the answer as follows: IdentifyValue() recognizes only 10 / 5 / 2 / 1. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "face value",
+            "nominal value",
+            "nves",
+            "per share",
+            "par value"
+          ],
+          "example": "10",
+          "normalization": "IdentifyValue() recognizes only 10 / 5 / 2 / 1.",
+          "source_hint": "Statement of Profit and Loss / share-capital note (face value, EPS)",
+          "notes": "IdentifyValue() only recognizes the values 10, 5, 2, 1."
+        },
+        {
+          "field_name": "Verbatim answer line",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Verbatim source line asserting the face value.",
+          "retrieval_query": "Verbatim source line asserting the face value | key terms: face value, of Rs, each",
+          "extraction_prompt": "Using only the retrieved context, determine the Verbatim answer line. Verbatim source line asserting the face value. Return the value as text. Normalize the answer as follows: getAnsLine(). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "face value",
+            "of Rs",
+            "each"
+          ],
+          "example": "Equity shares of face value Rs. 10 each",
+          "normalization": "getAnsLine().",
+          "source_hint": "Statement of Profit and Loss / share-capital note (face value, EPS)"
+        },
+        {
+          "field_name": "Upserted P&L row (side effect)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Upserts a 'Nominal Value Per Equity Share' row into the P&L.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Upserted P&L row (side effect) from the upstream database or external Excel (not document retrieval). Rule: SP InsertNvesValues_STATEMENT.",
+          "keywords": [],
+          "example": "Nominal Value Per Equity Share = 10",
+          "normalization": "SP InsertNvesValues_STATEMENT.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "A3 STATUTORY AUDITOR",
+      "folder": "14-a3-statutory-auditor",
+      "purpose": "Extract the Independent Auditor's Report page range and the statutory auditor's identifiers (FRN, UDIN, membership no, firm, partner, date, audit type).",
+      "fields": [
+        {
+          "field_name": "IAR start page",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "First page of the Independent Auditor's Report.",
+          "retrieval_query": "First page of the Independent Auditor's Report | key terms: independent auditors report, to the members, report on the audit of the financial statements, opinion",
+          "extraction_prompt": "Using only the retrieved context, determine the IAR start page. First page of the Independent Auditor's Report. Return the value as integer. Normalize the answer as follows: 'IndependentAuditorsReport' + >=5 start keywords. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "independent auditors report",
+            "to the members",
+            "report on the audit of the financial statements",
+            "opinion"
+          ],
+          "example": "120",
+          "normalization": "'IndependentAuditorsReport' + >=5 start keywords.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "IAR end page",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Last page of the Independent Auditor's Report.",
+          "retrieval_query": "Last page of the Independent Auditor's Report | key terms: for and on behalf, chartered accountants, firm registration number, membership number",
+          "extraction_prompt": "Using only the retrieved context, determine the IAR end page. Last page of the Independent Auditor's Report. Return the value as integer. Normalize the answer as follows: Scan forward, >=4 IAR code categories. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "for and on behalf",
+            "chartered accountants",
+            "firm registration number",
+            "membership number"
+          ],
+          "example": "132",
+          "normalization": "Scan forward, >=4 IAR code categories.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Firm Registration Number (FRN)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "ICAI firm registration number.",
+          "retrieval_query": "ICAI firm registration number | key terms: FRN, Firm Registration No, Firm's Registration Number",
+          "extraction_prompt": "Using only the retrieved context, determine the Firm Registration Number (FRN). ICAI firm registration number. Return the value as string. Normalize the answer as follows: regex \\d{5,7}\\w{1} (region code N/E/W/S/C) or \\d{5,7}\\w{1}/\\w{1}\\d{5,7}. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "FRN",
+            "Firm Registration No",
+            "Firm's Registration Number"
+          ],
+          "example": "301003E",
+          "normalization": "regex \\d{5,7}\\w{1} (region code N/E/W/S/C) or \\d{5,7}\\w{1}/\\w{1}\\d{5,7}.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "UDIN",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Unique Document Identification Number.",
+          "retrieval_query": "Unique Document Identification Number | key terms: UDIN",
+          "extraction_prompt": "Using only the retrieved context, determine the UDIN. Unique Document Identification Number. Return the value as string. Normalize the answer as follows: regex \\d{7,8}\\w{6}\\d{4}. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "UDIN"
+          ],
+          "example": "23123456ABCDEF1234",
+          "normalization": "regex \\d{7,8}\\w{6}\\d{4}.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Membership Number (MNO)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "ICAI membership number of the signing partner.",
+          "retrieval_query": "ICAI membership number of the signing partner | key terms: Membership No, M. No, Membership Number",
+          "extraction_prompt": "Using only the retrieved context, determine the Membership Number (MNO). ICAI membership number of the signing partner. Return the value as string. Normalize the answer as follows: \\d{5,6}, or derived from UDIN chars [2:8]. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "Membership No",
+            "M. No",
+            "Membership Number"
+          ],
+          "example": "123456",
+          "normalization": "\\d{5,6}, or derived from UDIN chars [2:8].",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Auditing Firm Name",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Name of the audit firm.",
+          "retrieval_query": "Name of the audit firm | key terms: for, LLP, Associates, & Co, Chartered Accountants",
+          "extraction_prompt": "Using only the retrieved context, determine the Auditing Firm Name. Name of the audit firm. Return the value as string. Normalize the answer as follows: Text after 'for', ending in LLP / Associates / & Co. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "for",
+            "LLP",
+            "Associates",
+            "& Co",
+            "Chartered Accountants"
+          ],
+          "example": "S R B C & Co LLP",
+          "normalization": "Text after 'for', ending in LLP / Associates / & Co.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Signing Partner Name",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Name of the partner who signed.",
+          "retrieval_query": "Name of the partner who signed | key terms: Partner, per",
+          "extraction_prompt": "Using only the retrieved context, determine the Signing Partner Name. Name of the partner who signed. Return the value as string. Normalize the answer as follows: nltk pos_tag NNP proper-noun extraction. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "Partner",
+            "per"
+          ],
+          "example": "Anil Jobanputra",
+          "normalization": "nltk pos_tag NNP proper-noun extraction.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Date of Signing",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "date",
+          "description": "Date the audit report was signed.",
+          "retrieval_query": "Date the audit report was signed | key terms: date, place, mumbai",
+          "extraction_prompt": "Using only the retrieved context, determine the Date of Signing. Date the audit report was signed. Return the value as date. Normalize the answer as follows: Multi-format date regex. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "date",
+            "place",
+            "mumbai"
+          ],
+          "example": "2023-05-12",
+          "normalization": "Multi-format date regex.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Type of Audit (Sole / Joint)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Whether the audit is sole or joint.",
+          "retrieval_query": "Whether the audit is sole or joint",
+          "extraction_prompt": "Using only the retrieved context, determine the Type of Audit (Sole / Joint). Whether the audit is sole or joint. The answer MUST be exactly one of: Sole, Joint. Return the value as enum. Normalize the answer as follows: >1 FRN -> Joint; ==1 -> Sole. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "Sole",
+            "Joint"
+          ],
+          "example": "Sole",
+          "normalization": ">1 FRN -> Joint; ==1 -> Sole.",
+          "source_hint": "Independent Auditor's Report signature block"
+        },
+        {
+          "field_name": "Place of signing",
+          "source_type": "not_extracted",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "City where the report was signed.",
+          "retrieval_query": null,
+          "extraction_prompt": "The Place of signing is defined but NOT currently populated; leave null. Rule: Detected but never persisted. Note: Detected but never persisted to DB.",
+          "keywords": [
+            "place",
+            "mumbai",
+            "delhi",
+            "chennai"
+          ],
+          "example": "Mumbai",
+          "normalization": "Detected but never persisted.",
+          "source_hint": "Independent Auditor's Report signature block - detection defined but not currently populated",
+          "notes": "Detected but never persisted to DB."
+        },
+        {
+          "field_name": "Status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Extraction status.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING",
+            "ERROR"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "PAYMENT TO AUDITOR",
+      "folder": "15-payment-to-auditor",
+      "purpose": "Extract the auditor-payment table cells (raw) via Textract, keyed to the Other Expenses note.",
+      "fields": [
+        {
+          "field_name": "Auditor-payment table cell",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Each cell of the auditor-payment table (audit fee, tax audit fee, limited review fee, certifications, reimbursement, total) kept as raw text.",
+          "retrieval_query": "Each cell of the auditor-payment table (audit fee, tax audit fee, limited review fee, certifications, reimbursement, total) kept as raw text | key terms: audit fee, statutory audit, tax audit fee, auditor's remuneration, payment to auditor, limited review fee, certifications, expenses reimbursed, reimbursement of expenses",
+          "extraction_prompt": "Using only the retrieved context, determine the Auditor-payment table cell. Each cell of the auditor-payment table (audit fee, tax audit fee, limited review fee, certifications, reimbursement, total) kept as raw text. Return the value as text. Normalize the answer as follows: Raw text cells (not named columns). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "audit fee",
+            "statutory audit",
+            "tax audit fee",
+            "auditor's remuneration",
+            "payment to auditor",
+            "limited review fee",
+            "certifications",
+            "expenses reimbursed",
+            "reimbursement of expenses"
+          ],
+          "example": "Audit fee / 2500000",
+          "normalization": "Raw text cells (not named columns).",
+          "source_hint": "Auditor's remuneration note (within Other Expenses / Payment to Auditor)"
+        },
+        {
+          "field_name": "Row position",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Row position of the cell.",
+          "retrieval_query": "Row position of the cell",
+          "extraction_prompt": "Using only the retrieved context, determine the Row position. Row position of the cell. Return the value as integer. Normalize the answer as follows: Counter. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "3",
+          "normalization": "Counter.",
+          "source_hint": "Auditor's remuneration note (within Other Expenses / Payment to Auditor)"
+        },
+        {
+          "field_name": "Column position",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Column index of the cell.",
+          "retrieval_query": "Column index of the cell",
+          "extraction_prompt": "Using only the retrieved context, determine the Column position. Column index of the cell. Return the value as integer. Normalize the answer as follows: Counter. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "1",
+          "normalization": "Counter.",
+          "source_hint": "Auditor's remuneration note (within Other Expenses / Payment to Auditor)"
+        },
+        {
+          "field_name": "Note name (hardcoded)",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Hardcoded note name linkage.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Note name (hardcoded) to the fixed value assigned by the pipeline (not extracted). Rule: Literal.",
+          "keywords": [],
+          "example": "Other Expenses",
+          "normalization": "Literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        },
+        {
+          "field_name": "Line-item desc (hardcoded)",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Hardcoded line-item description.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Line-item desc (hardcoded) to the fixed value assigned by the pipeline (not extracted). Rule: Literal.",
+          "keywords": [],
+          "example": "Other Expenses",
+          "normalization": "Literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        },
+        {
+          "field_name": "Statement linkage",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Linkage to the statement row/col.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Statement linkage from the upstream database or external Excel (not document retrieval). Rule: From input Excel.",
+          "keywords": [],
+          "example": "S12/R4/C1",
+          "normalization": "From input Excel.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "49 identification keywords",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "list",
+          "description": "Keyword set used to locate the auditor-payment page.",
+          "retrieval_query": "Keyword set used to locate the auditor-payment page | key terms: audit fee, statutory audit, tax audit fee, auditor's remuneration, payment to auditor, limited review fee, certifications, expenses reimbursed",
+          "extraction_prompt": "Using only the retrieved context, determine the 49 identification keywords. Keyword set used to locate the auditor-payment page. Return the value as list. Normalize the answer as follows: Page-finding keyword hits. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "audit fee",
+            "statutory audit",
+            "tax audit fee",
+            "auditor's remuneration",
+            "payment to auditor",
+            "limited review fee",
+            "certifications",
+            "expenses reimbursed"
+          ],
+          "example": "payment to auditor",
+          "normalization": "Page-finding keyword hits.",
+          "source_hint": "Auditor's remuneration note (within Other Expenses / Payment to Auditor)"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "STATEMENT CREATION",
+      "folder": "16-statement-creation",
+      "purpose": "Pure SQL. Produces the canonical star schema (the FINAL extracted financial fields) from Modules 3 & 6 data.",
+      "fields": [
+        {
+          "field_name": "Statement type",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Which statement this row belongs to.",
+          "retrieval_query": "Which statement this row belongs to",
+          "extraction_prompt": "Using only the retrieved context, determine the Statement type. Which statement this row belongs to. The answer MUST be exactly one of: BS=1, PL=2, CF=3. Return the value as enum. Normalize the answer as follows: Mapped id. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "BS=1",
+            "PL=2",
+            "CF=3"
+          ],
+          "example": "1",
+          "normalization": "Mapped id.",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Period-end date",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "date",
+          "description": "Reporting period end date for a value column.",
+          "retrieval_query": "Reporting period end date for a value column",
+          "extraction_prompt": "Using only the retrieved context, determine the Period-end date. Reporting period end date for a value column. Return the value as date. Normalize the answer as follows: 2 PEO dates enforced (current + prev). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "2023-03-31",
+          "normalization": "2 PEO dates enforced (current + prev).",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Line-item description",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Canonical line-item label.",
+          "retrieval_query": "Canonical line-item label",
+          "extraction_prompt": "Using only the retrieved context, determine the Line-item description. Canonical line-item label. Return the value as string. Normalize the answer as follows: Quotes stripped; multi-cell concatenated. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Property, plant and equipment",
+          "normalization": "Quotes stripped; multi-cell concatenated.",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Note number",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Note reference number.",
+          "retrieval_query": "Note reference number",
+          "extraction_prompt": "Using only the retrieved context, determine the Note number. Note reference number. Return the value as string. Normalize the answer as follows: Quotes stripped. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "3",
+          "normalization": "Quotes stripped.",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Line-item tag",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "KPI tag for the line item.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Line-item tag from the upstream database or external Excel (not document retrieval). Rule: NULL here; set by other modules.",
+          "keywords": [],
+          "example": "NULL (set by NVES etc.)",
+          "normalization": "NULL here; set by other modules.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Display order",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Ordering of rows / columns.",
+          "retrieval_query": "Ordering of rows / columns",
+          "extraction_prompt": "Using only the retrieved context, determine the Display order. Ordering of rows / columns. Return the value as integer. Normalize the answer as follows: DENSE_RANK / ROW_NUMBER. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "12",
+          "normalization": "DENSE_RANK / ROW_NUMBER.",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Numeric value",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "decimal",
+          "description": "Final parsed numeric value.",
+          "retrieval_query": "Final parsed numeric value",
+          "extraction_prompt": "Using only the retrieved context, determine the Numeric value. Final parsed numeric value. Return the value as decimal. Normalize the answer as follows: Parens -> negative; $ stripped; TRY_CONVERT. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "125430.000",
+          "normalization": "Parens -> negative; $ stripped; TRY_CONVERT.",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Text value",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Non-numeric value route.",
+          "retrieval_query": "Non-numeric value route",
+          "extraction_prompt": "Using only the retrieved context, determine the Text value. Non-numeric value route. Return the value as text. Normalize the answer as follows: Non-numeric route. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "Refer Note 12",
+          "normalization": "Non-numeric route.",
+          "source_hint": "Canonical star schema derived from Modules 3 & 6 (not re-read from the PDF)"
+        },
+        {
+          "field_name": "Row/Col type, Currency/Unit/Filing IDs & constants",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "integer",
+          "description": "Constant / classification identifiers attached to the star schema.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Row/Col type, Currency/Unit/Filing IDs & constants to the fixed value assigned by the pipeline (not extracted). Rule: Constants.",
+          "keywords": [],
+          "example": "PeriodMonths=12, SetNo=43, SectorId=1",
+          "normalization": "Constants.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "name": "INVESTMENTS EXTRACTION",
+      "folder": "17-investments-extraction",
+      "purpose": "Extract investment-note line items with a GPT fallback, and locate the investment note page range.",
+      "fields": [
+        {
+          "field_name": "Investment line-item description",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Description of an investment holding.",
+          "retrieval_query": "Description of an investment holding | key terms: investment in, equity shares, mutual funds, government securities, bonds",
+          "extraction_prompt": "Using only the retrieved context, determine the Investment line-item description. Description of an investment holding. Return the value as string. Normalize the answer as follows: Textract TABLES+LAYOUT (GPT-4.1-mini fallback). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "investment in",
+            "equity shares",
+            "mutual funds",
+            "government securities",
+            "bonds"
+          ],
+          "example": "Investment in equity shares of XYZ Ltd",
+          "normalization": "Textract TABLES+LAYOUT (GPT-4.1-mini fallback).",
+          "source_hint": "Investments note within Notes to Accounts"
+        },
+        {
+          "field_name": "Investment current-year value",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "decimal",
+          "description": "Current-year carrying value of the investment.",
+          "retrieval_query": "Current-year carrying value of the investment",
+          "extraction_prompt": "Using only the retrieved context, determine the Investment current-year value. Current-year carrying value of the investment. Return the value as decimal. Normalize the answer as follows: Value-column match. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "34500.00",
+          "normalization": "Value-column match.",
+          "source_hint": "Investments note within Notes to Accounts"
+        },
+        {
+          "field_name": "Display order / SrNo",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "1-based row order.",
+          "retrieval_query": "1-based row order",
+          "extraction_prompt": "Using only the retrieved context, determine the Display order / SrNo. 1-based row order. Return the value as integer. Normalize the answer as follows: 1-based index. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "1",
+          "normalization": "1-based index.",
+          "source_hint": "Investments note within Notes to Accounts"
+        },
+        {
+          "field_name": "Note number",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Note number of the investment note (from BS row).",
+          "retrieval_query": "Note number of the investment note (from BS row)",
+          "extraction_prompt": "Using only the retrieved context, determine the Note number. Note number of the investment note (from BS row). Return the value as string. Normalize the answer as follows: From BS row. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "7",
+          "normalization": "From BS row.",
+          "source_hint": "Investments note within Notes to Accounts"
+        },
+        {
+          "field_name": "Note name",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Investment note heading.",
+          "retrieval_query": "Investment note heading | key terms: investments, non-current investments, current investments",
+          "extraction_prompt": "Using only the retrieved context, determine the Note name. Investment note heading. Return the value as string. Normalize the answer as follows: Investment note heading text. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "investments",
+            "non-current investments",
+            "current investments"
+          ],
+          "example": "Non-current Investments",
+          "normalization": "Investment note heading text.",
+          "source_hint": "Investments note within Notes to Accounts"
+        },
+        {
+          "field_name": "Investment note seed (input)",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Seed rows: investment note no/desc/value + previous note no/desc/value.",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Investment note seed (input) from the upstream database or external Excel (not document retrieval). Rule: SQL: LineItemDescription LIKE '%INVEST%' (excl. property/subsidiary/JV/associate/debenture).",
+          "keywords": [
+            "INVEST"
+          ],
+          "example": "Note 7 / Investments / 34500",
+          "normalization": "SQL: LineItemDescription LIKE '%INVEST%' (excl. property/subsidiary/JV/associate/debenture).",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "Start / End page of investment note",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Page range of the investment note.",
+          "retrieval_query": "Page range of the investment note",
+          "extraction_prompt": "Using only the retrieved context, determine the Start / End page of investment note. Page range of the investment note. Return the value as integer. Normalize the answer as follows: fitz + value-text matching. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "192 / 195",
+          "normalization": "fitz + value-text matching.",
+          "source_hint": "Investments note within Notes to Accounts"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "A1 COMPANY GENERAL INFORMATION",
+      "folder": "18-a1-company-general-info",
+      "purpose": "28-column company master; 11 fields auto-extracted from PDF (CIN and its derivatives, addresses, website), rest from Excel.",
+      "fields": [
+        {
+          "field_name": "Company name",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Company legal name.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Company name from the PDF filename / file metadata (not document retrieval). Rule: Filename + fullFormsDict.",
+          "keywords": [],
+          "example": "Reliance Industries Limited",
+          "normalization": "Filename + fullFormsDict.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "CIN (21-char)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Corporate Identity Number (21 chars).",
+          "retrieval_query": "Corporate Identity Number (21 chars) | key terms: CIN, Corporate Identity Number, Corporate Identification Number",
+          "extraction_prompt": "Using only the retrieved context, determine the CIN (21-char). Corporate Identity Number (21 chars). Return the value as string. Normalize the answer as follows: regex \\w{1}\\d{5}\\w{2}\\d{4}\\w{3}\\d{6}. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "CIN",
+            "Corporate Identity Number",
+            "Corporate Identification Number"
+          ],
+          "example": "L17110MH1973PLC019786",
+          "normalization": "regex \\w{1}\\d{5}\\w{2}\\d{4}\\w{3}\\d{6}.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Date / Year of Incorporation",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Year of incorporation derived from CIN.",
+          "retrieval_query": "Year of incorporation derived from CIN",
+          "extraction_prompt": "Using only the retrieved context, determine the Date / Year of Incorporation. Year of incorporation derived from CIN. Return the value as integer. Normalize the answer as follows: CIN[8:12]. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "1973",
+          "normalization": "CIN[8:12].",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Financial Year Reported",
+          "source_type": "metadata",
+          "rag_extractable": false,
+          "data_type": "integer",
+          "description": "Reporting financial year.",
+          "retrieval_query": null,
+          "extraction_prompt": "Derive the Financial Year Reported from the PDF filename / file metadata (not document retrieval). Rule: From filename.",
+          "keywords": [],
+          "example": "2023",
+          "normalization": "From filename.",
+          "source_hint": "PDF filename / filesystem metadata"
+        },
+        {
+          "field_name": "Age of Company",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Company age in years.",
+          "retrieval_query": "Company age in years",
+          "extraction_prompt": "Using only the retrieved context, determine the Age of Company. Company age in years. Return the value as integer. Normalize the answer as follows: docYear - incorporation year. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "example": "50",
+          "normalization": "docYear - incorporation year.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Website",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Company website URL.",
+          "retrieval_query": "Company website URL | key terms: www., website, .com, .in",
+          "extraction_prompt": "Using only the retrieved context, determine the Website. Company website URL. Return the value as string. Normalize the answer as follows: regex www\\.[a-z0-9._]+\\.[a-z]+. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "www.",
+            "website",
+            ".com",
+            ".in"
+          ],
+          "example": "www.ril.com",
+          "normalization": "regex www\\.[a-z0-9._]+\\.[a-z]+.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Registered Office Address",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Registered office address.",
+          "retrieval_query": "Registered office address | key terms: registered office, regd. office, registered address",
+          "extraction_prompt": "Using only the retrieved context, determine the Registered Office Address. Registered office address. Return the value as text. Normalize the answer as follows: Keyword-triggered lines until a 6-digit PIN regex. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "registered office",
+            "regd. office",
+            "registered address"
+          ],
+          "example": "3rd Floor, Maker Chambers IV, Nariman Point, Mumbai 400021",
+          "normalization": "Keyword-triggered lines until a 6-digit PIN regex.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Corporate Address",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "text",
+          "description": "Corporate office address.",
+          "retrieval_query": "Corporate office address | key terms: corporate office, corporate address, head office",
+          "extraction_prompt": "Using only the retrieved context, determine the Corporate Address. Corporate office address. Return the value as text. Normalize the answer as follows: CorporateKeywords + PIN-terminated capture. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "corporate office",
+            "corporate address",
+            "head office"
+          ],
+          "example": "Reliance Corporate Park, Navi Mumbai 400701",
+          "normalization": "CorporateKeywords + PIN-terminated capture.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Listed / Unlisted",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Listing status from CIN first char.",
+          "retrieval_query": "Listing status from CIN first char",
+          "extraction_prompt": "Using only the retrieved context, determine the Listed / Unlisted. Listing status from CIN first char. The answer MUST be exactly one of: Listed, Unlisted. Return the value as enum. Normalize the answer as follows: CIN[0]=='L' -> Listed; 'U' -> Unlisted. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "Listed",
+            "Unlisted"
+          ],
+          "example": "Listed",
+          "normalization": "CIN[0]=='L' -> Listed; 'U' -> Unlisted.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Public / Private Sector",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Public/private classification from CIN.",
+          "retrieval_query": "Public/private classification from CIN",
+          "extraction_prompt": "Using only the retrieved context, determine the Public / Private Sector. Public/private classification from CIN. The answer MUST be exactly one of: Public, Private. Return the value as enum. Normalize the answer as follows: CIN 'PLC' -> Private; 'GOI'/'SGC' -> Public. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "Public",
+            "Private"
+          ],
+          "example": "Private",
+          "normalization": "CIN 'PLC' -> Private; 'GOI'/'SGC' -> Public.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Central / State Public Sector",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Central vs state PSU classification.",
+          "retrieval_query": "Central vs state PSU classification",
+          "extraction_prompt": "Using only the retrieved context, determine the Central / State Public Sector. Central vs state PSU classification. The answer MUST be exactly one of: Central, State. Return the value as enum. Normalize the answer as follows: CIN 'GOI' -> Central; 'SGC' -> State. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [],
+          "enum_values": [
+            "Central",
+            "State"
+          ],
+          "example": "Central",
+          "normalization": "CIN 'GOI' -> Central; 'SGC' -> State.",
+          "source_hint": "Cover page, general information page and Corporate Information note"
+        },
+        {
+          "field_name": "Excel-sourced master columns",
+          "source_type": "external_lookup",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Remaining master columns read from Excel / other sources (not PDF).",
+          "retrieval_query": null,
+          "extraction_prompt": "Populate the Excel-sourced master columns from the upstream database or external Excel (not document retrieval). Rule: Read from Excel.",
+          "keywords": [],
+          "example": "Sector=Refining, Industry=Oil & Gas",
+          "normalization": "Read from Excel.",
+          "source_hint": "Upstream database or external Excel (not the PDF body)"
+        },
+        {
+          "field_name": "PAN",
+          "source_type": "not_extracted",
+          "rag_extractable": false,
+          "data_type": "string",
+          "description": "Permanent Account Number.",
+          "retrieval_query": null,
+          "extraction_prompt": "The PAN is defined but NOT currently populated; leave null. Rule: Read but never inserted; no PAN regex exists. Note: Read but never inserted — no PAN regex exists.",
+          "keywords": [
+            "PAN",
+            "Permanent Account Number"
+          ],
+          "example": "NULL (never inserted)",
+          "normalization": "Read but never inserted; no PAN regex exists.",
+          "source_hint": "Cover page, general information page and Corporate Information note - detection defined but not currently populated",
+          "notes": "Read but never inserted — no PAN regex exists."
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "name": "CURRENCY UPDATION",
+      "folder": "19-currency-updation",
+      "purpose": "Determine the currency / magnitude unit from OCR text blocks.",
+      "fields": [
+        {
+          "field_name": "Currency / magnitude unit",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "enum",
+          "description": "Magnitude unit of the reported figures.",
+          "retrieval_query": "Magnitude unit of the reported figures | key terms: crore, million, lakhs, thousand, '000, billion, rs., inr, rupees",
+          "extraction_prompt": "Using only the retrieved context, determine the Currency / magnitude unit. Magnitude unit of the reported figures. The answer MUST be exactly one of: crore, million, lakhs, '000, billion, rs.. Return the value as enum. Normalize the answer as follows: Substring match against a 23-term currency_list; first hit wins (no regex). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "crore",
+            "million",
+            "lakhs",
+            "thousand",
+            "'000",
+            "billion",
+            "rs.",
+            "inr",
+            "rupees"
+          ],
+          "enum_values": [
+            "crore",
+            "million",
+            "lakhs",
+            "'000",
+            "billion",
+            "rs."
+          ],
+          "example": "crore",
+          "normalization": "Substring match against a 23-term currency_list; first hit wins (no regex).",
+          "source_hint": "Financial statement headers (currency / magnitude unit)"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "A3 SAR DETAILS (Company Secretary)",
+      "folder": "20-a3-sar-company-secretary",
+      "purpose": "Extract the Secretarial Audit Report page and the practising Company Secretary's identifiers.",
+      "fields": [
+        {
+          "field_name": "FRN (Firm Registration No.)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "CS firm registration number.",
+          "retrieval_query": "CS firm registration number | key terms: FRN, Firm Registration",
+          "extraction_prompt": "Using only the retrieved context, determine the FRN (Firm Registration No.). CS firm registration number. Return the value as string. Normalize the answer as follows: regex [A-Z]{1}[0-9]{4}[A-Z]{2}[0-9]{6}. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "FRN",
+            "Firm Registration"
+          ],
+          "example": "P2001MH012300",
+          "normalization": "regex [A-Z]{1}[0-9]{4}[A-Z]{2}[0-9]{6}.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "UDIN",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "18-char CS UDIN.",
+          "retrieval_query": "18-char CS UDIN | key terms: UDIN",
+          "extraction_prompt": "Using only the retrieved context, determine the UDIN. 18-char CS UDIN. Return the value as string. Normalize the answer as follows: regex [A-Z]{1}[0-9]{6}[A-Z]{1}[0-9]{9} (18-char). Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "UDIN"
+          ],
+          "example": "A012345B000123456",
+          "normalization": "regex [A-Z]{1}[0-9]{6}[A-Z]{1}[0-9]{9} (18-char).",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "Membership No.",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "CS membership number (F/A prefixed, 6-padded).",
+          "retrieval_query": "CS membership number (F/A prefixed, 6-padded) | key terms: Membership No, ACS, FCS, M. No",
+          "extraction_prompt": "Using only the retrieved context, determine the Membership No.. CS membership number (F/A prefixed, 6-padded). Return the value as string. Normalize the answer as follows: From UDIN[:7] or MNO/ACS/FCS keyword + \\d+; zero-pad to 6; prefix F/A. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "Membership No",
+            "ACS",
+            "FCS",
+            "M. No"
+          ],
+          "example": "F007123",
+          "normalization": "From UDIN[:7] or MNO/ACS/FCS keyword + \\d+; zero-pad to 6; prefix F/A.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "FCS / ACS / MNO / CPNO (intermediates)",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Intermediate membership / certificate-of-practice numbers.",
+          "retrieval_query": "Intermediate membership / certificate-of-practice numbers | key terms: ACS, FCS, CP No, Certificate of Practice, COP",
+          "extraction_prompt": "Using only the retrieved context, determine the FCS / ACS / MNO / CPNO (intermediates). Intermediate membership / certificate-of-practice numbers. Return the value as string. Normalize the answer as follows: Keyword-anchored \\d+; CPNO only in Excel. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "ACS",
+            "FCS",
+            "CP No",
+            "Certificate of Practice",
+            "COP"
+          ],
+          "example": "ACS 12345 / CP 8765",
+          "normalization": "Keyword-anchored \\d+; CPNO only in Excel.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "Date of Signing",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "date",
+          "description": "Date the SAR was signed.",
+          "retrieval_query": "Date the SAR was signed | key terms: date, place",
+          "extraction_prompt": "Using only the retrieved context, determine the Date of Signing. Date the SAR was signed. Return the value as date. Normalize the answer as follows: Month-name+year regex, numeric dd/mm fallback. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "date",
+            "place"
+          ],
+          "example": "2023-05-20",
+          "normalization": "Month-name+year regex, numeric dd/mm fallback.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "CS Firm Name",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Name of the CS firm.",
+          "retrieval_query": "Name of the CS firm | key terms: For, & Co, Associates, Company Secretaries",
+          "extraction_prompt": "Using only the retrieved context, determine the CS Firm Name. Name of the CS firm. Return the value as string. Normalize the answer as follows: 'For ... & Co / Associates / Company Secretaries' parsing. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "For",
+            "& Co",
+            "Associates",
+            "Company Secretaries"
+          ],
+          "example": "For ABC & Associates, Company Secretaries",
+          "normalization": "'For ... & Co / Associates / Company Secretaries' parsing.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "Signing Partner / CS Name",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "string",
+          "description": "Name of the signing Company Secretary.",
+          "retrieval_query": "Name of the signing Company Secretary | key terms: CS, Practising Company Secretary, Name",
+          "extraction_prompt": "Using only the retrieved context, determine the Signing Partner / CS Name. Name of the signing Company Secretary. Return the value as string. Normalize the answer as follows: DB lookup by membershipNo; fallback 'dr'/'cs'/'name' line. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "CS",
+            "Practising Company Secretary",
+            "Name"
+          ],
+          "example": "CS Ramesh Gupta",
+          "normalization": "DB lookup by membershipNo; fallback 'dr'/'cs'/'name' line.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "SAR page number",
+          "source_type": "document_content",
+          "rag_extractable": true,
+          "data_type": "integer",
+          "description": "Page of the Secretarial Audit Report.",
+          "retrieval_query": "Page of the Secretarial Audit Report | key terms: secretarial audit report, to the members, Form No. MR-3, MR-3",
+          "extraction_prompt": "Using only the retrieved context, determine the SAR page number. Page of the Secretarial Audit Report. Return the value as integer. Normalize the answer as follows: 'To the Members' + SAR keyword scoring. Report the source: the page number(s) and the verbatim snippet that supports the answer. If the retrieved context does not contain the answer, return null.",
+          "keywords": [
+            "secretarial audit report",
+            "to the members",
+            "Form No. MR-3",
+            "MR-3"
+          ],
+          "example": "245",
+          "normalization": "'To the Members' + SAR keyword scoring.",
+          "source_hint": "Secretarial Audit Report (Form MR-3)"
+        },
+        {
+          "field_name": "Status",
+          "source_type": "constant",
+          "rag_extractable": false,
+          "data_type": "enum",
+          "description": "Extraction status.",
+          "retrieval_query": null,
+          "extraction_prompt": "Set the Status to the fixed value assigned by the pipeline (not extracted). Rule: Status literal.",
+          "keywords": [],
+          "enum_values": [
+            "DONE",
+            "PENDING",
+            "ERROR"
+          ],
+          "example": "DONE",
+          "normalization": "Status literal.",
+          "source_hint": "Fixed value assigned by the pipeline (not extracted)"
+        }
+      ]
+    }
+  ]
+}
