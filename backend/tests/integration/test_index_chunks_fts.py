@@ -24,6 +24,7 @@ from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
 from fdi.pipeline.stages.provenance import ProvenanceStage
 from fdi.pipeline.stages.semantic import SemanticStage
+from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.db.repository import DocumentRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -83,7 +84,7 @@ async def processed_doc(session_factory, store) -> str:
     )
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(),
-                  GraphStage(), ProvenanceStage(), ChunksStage()):
+                  GraphStage(), ProvenanceStage(), StructureStage(), ChunksStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
     common = {
@@ -99,6 +100,7 @@ async def processed_doc(session_factory, store) -> str:
                      services={"semantic": fake_semantic}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     return doc.id
 

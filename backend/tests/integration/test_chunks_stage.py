@@ -1,8 +1,9 @@
-"""ChunksStage auto-chains off AstStage, SemanticStage, AND ProvenanceStage:
-`chunks` is the RT-1 retrieval foundation, joining a document's section text
-(ast), section type (semantic), and page (provenance) into one per-document
-`chunks` record under the shared `s{i}` chunk identity. Against real Postgres +
-MinIO with FAKE OCR + semantic clients."""
+"""ChunksStage auto-chains off AstStage, SemanticStage, ProvenanceStage, AND (Phase
+3a) StructureStage: `chunks` is the RT-1 retrieval foundation, joining a document's
+section text (ast), section type (semantic), page (provenance), and table-derived
+row/whole-table chunks (structure) into one per-document `chunks` record under the
+shared `s{i}`/`t{i}`/`t{i}r{j}` chunk identities. Against real Postgres + MinIO with
+FAKE OCR + semantic clients."""
 
 import uuid
 
@@ -25,6 +26,7 @@ from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
 from fdi.pipeline.stages.provenance import ProvenanceStage
 from fdi.pipeline.stages.semantic import SemanticStage
+from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -74,7 +76,23 @@ def _fake_ocr() -> FakeOcrClient:
                     "boundingRegions": [{"pageNumber": 2, "polygon": [0, 1, 1, 1, 1, 2, 0, 2]}],
                 },
             ],
-            "tables": [],
+            "tables": [
+                {
+                    "rowCount": 2,
+                    "columnCount": 2,
+                    "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                    "spans": [{"offset": 100, "length": 10}],
+                    "caption": {"content": "Balance Sheet"},
+                    "cells": [
+                        {"rowIndex": 0, "columnIndex": 0, "kind": "columnHeader",
+                         "content": "Item"},
+                        {"rowIndex": 0, "columnIndex": 1, "kind": "columnHeader",
+                         "content": "Value"},
+                        {"rowIndex": 1, "columnIndex": 0, "content": "Cash"},
+                        {"rowIndex": 1, "columnIndex": 1, "content": "100"},
+                    ],
+                },
+            ],
         }
     )
 
@@ -104,6 +122,7 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     reg.register(SemanticStage())
     reg.register(GraphStage())
     reg.register(ProvenanceStage())
+    reg.register(StructureStage())
     reg.register(ChunksStage())
     resolver = DagResolver(reg.all())
 
@@ -128,6 +147,7 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     )
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
@@ -136,12 +156,13 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     chunks_key = artifact_key(
         doc.id,
         "chunks",
-        1,
+        2,
         derived_input_hash(
             [
                 facts["ast"].output_hash,
                 facts["semantic"].output_hash,
                 facts["provenance"].output_hash,
+                facts["structure"].output_hash,
             ]
         ),
     )
@@ -165,11 +186,27 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
                 "page": 2,
                 "para_count": 1,
             },
+            {
+                "chunk_id": "t0r1",
+                "heading": "Balance Sheet",
+                "text": "Balance Sheet | Cash: Value=100",
+                "section_type": None,
+                "page": 1,
+                "para_count": None,
+            },
+            {
+                "chunk_id": "t0",
+                "heading": "Balance Sheet",
+                "text": "Balance Sheet\nValue\nCash: Value=100",
+                "section_type": None,
+                "page": 1,
+                "para_count": None,
+            },
         ],
     }
 
 
-async def test_chunks_is_successor_of_all_three_deps() -> None:
+async def test_chunks_is_successor_of_all_four_deps() -> None:
     import fdi.pipeline.stages  # noqa: F401 - registers built-ins
     from fdi.pipeline.registry import REGISTRY
     from fdi.pipeline.resolver import DagResolver as _DagResolver
@@ -178,3 +215,4 @@ async def test_chunks_is_successor_of_all_three_deps() -> None:
     assert "chunks" in resolver.successors("ast")
     assert "chunks" in resolver.successors("semantic")
     assert "chunks" in resolver.successors("provenance")
+    assert "chunks" in resolver.successors("structure")
