@@ -104,9 +104,17 @@ async def hybrid_corpus(
     vector_store = FakeVectorStore()
     marker = uuid.uuid4().hex
 
+    # doc_key is deliberately NOT the literal "alpha"/"beta" test_vector_search.py's
+    # own two_docs fixture uses: Postgres' `document` table is session-scoped
+    # across the WHOLE integration suite (same collision class the module
+    # docstring's marker treatment covers for chunk TEXT), and intake_document
+    # allocates the NEXT version per doc_key -- a shared literal doc_key here
+    # would silently consume two_docs' expected version==1 slot depending on
+    # file collection order. `marker` (already a fresh uuid4 hex) doubles as
+    # the doc_key uniqueness source.
     specs = {
         "bs": (
-            "alpha",
+            f"alpha-{marker}",
             _fake_ocr([
                 {"role": "sectionHeading", "content": "Balance Sheet"},
                 {"content": f"Total Assets 100 {marker}"},
@@ -114,7 +122,7 @@ async def hybrid_corpus(
             {"Balance Sheet": SectionType.BALANCE_SHEET.value},
         ),
         "notes": (
-            "beta",
+            f"beta-{marker}",
             _fake_ocr([
                 {"role": "sectionHeading", "content": "Notes"},
                 {"content": "See appendix"},
