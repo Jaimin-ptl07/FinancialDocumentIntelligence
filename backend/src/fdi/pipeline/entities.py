@@ -14,8 +14,10 @@ from collections.abc import Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fdi.core.entities import build_entity_timeline
+from fdi.core.entities import build_concept_comparison, build_entity_timeline
+from fdi.core.ontology import CanonicalConcept
 from fdi.pipeline.crossdoc import read_artifact
+from fdi.pipeline.tables import concept_lookup
 from fdi.platform.db.repository import DocumentRepository, RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -37,3 +39,18 @@ async def entity_timeline(
             "knowledge": knowledge if knowledge is not None else {},
         })
     return build_entity_timeline(doc_key, members)
+
+
+async def compare_concept_across_versions(
+    *, session: AsyncSession, store: ArtifactStore, doc_key: str, concept: CanonicalConcept
+) -> dict[str, object] | None:
+    docs = await DocumentRepository(session).list_by_doc_key(doc_key)
+    if not docs:
+        return None
+    member_lookups: list[Mapping[str, object]] = []
+    for doc in docs:
+        rows = await concept_lookup(session=session, store=store, doc_id=doc.id, concept=concept)
+        member_lookups.append({
+            "doc_id": doc.id, "doc_key": doc.doc_key, "version": doc.version, "rows": rows,
+        })
+    return build_concept_comparison(doc_key, concept.value, member_lookups)
