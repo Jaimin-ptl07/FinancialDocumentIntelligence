@@ -1,8 +1,10 @@
 # RT-7 — Cross-Document / Entity Retrieval (filing timelines + concept comparison)
 
-- **Status:** Draft — 2026-07-18. Seventh sub-project of the retrieval layer (`docs/architecture/
+- **Status:** Implemented — 2026-07-18. Seventh sub-project of the retrieval layer (`docs/architecture/
   retrieval-roadmap.md`), Wave C (parallel with RT-4; RT-7 depends on RT-6 for `concept_lookup` and on
-  SP-16's crossdoc foundation for `consolidate_entity`).
+  SP-16's crossdoc foundation for `consolidate_entity`). See `docs/superpowers/plans/2026-07-18-rt7-
+  crossdoc-entity-retrieval.md` for the implementation plan and `docs/architecture/retrieval-roadmap.md`'s
+  "What RT-7 shipped that RT-8 must know" for the handoff.
 - **Depends on (complete):**
   - **RT-6** (`fdi.pipeline.tables.concept_lookup(*, session, store, doc_id, concept) ->
     list[dict] | None`; each match `{table_index, row_label, values: [{column_header, raw, value}]}`;
