@@ -106,6 +106,11 @@ def get_vector_store(request: Request) -> VectorStore | None:
     return vector_store
 
 
+def get_entity_threshold(request: Request) -> float:
+    threshold: float = request.app.state.entity_threshold
+    return threshold
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
@@ -115,3 +120,4 @@ SessionFactoryDep = Annotated["async_sessionmaker[AsyncSession]", Depends(get_se
 CandidatesDep = Annotated[CandidateRegistry, Depends(get_candidates)]
 EmbedderDep = Annotated[EmbeddingClient | None, Depends(get_embedder)]
 VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]
+EntityThresholdDep = Annotated[float, Depends(get_entity_threshold)]

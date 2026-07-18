@@ -14,6 +14,7 @@ from fdi.api.deps import (
     CorrelationIdDep,
     DispatcherDep,
     EmbedderDep,
+    EntityThresholdDep,
     ResolverDep,
     SessionDep,
     SessionFactoryDep,
@@ -24,6 +25,8 @@ from fdi.api.schemas import (
     DocumentVersionsView,
     DocumentView,
     EmbeddingTriggerView,
+    EntitiesView,
+    EntityResolveRequest,
     EvalAccepted,
     EvalRequest,
     GraphLoadTriggerView,
@@ -42,6 +45,7 @@ from fdi.api.schemas import (
     StagesView,
     StaleView,
 )
+from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.eval_service import run_evaluation
 from fdi.pipeline.intake import intake_document
 from fdi.platform.broker.health import check_broker
@@ -437,3 +441,24 @@ async def search(
             for h in hits
         ]
     )
+
+
+# --------------------------------------------------------------------------
+# Task 6 (SP-16): POST /entities/resolve -- cross-document entity resolution.
+# --------------------------------------------------------------------------
+
+
+@router.post("/entities/resolve", response_model=EntitiesView)
+async def resolve_entities_route(
+    body: EntityResolveRequest,
+    session: SessionDep,
+    store: StoreDep,
+    default_threshold: EntityThresholdDep,
+) -> EntitiesView:
+    """Corpus-level cross-document entity resolution (on-demand, task-free like
+    /search). Clusters documents on embedding similarity and returns entity
+    records; body `threshold` overrides the configured default for this call.
+    """
+    threshold = body.threshold if body.threshold is not None else default_threshold
+    result = await resolve_entities(session=session, store=store, threshold=threshold)
+    return EntitiesView.model_validate(result)

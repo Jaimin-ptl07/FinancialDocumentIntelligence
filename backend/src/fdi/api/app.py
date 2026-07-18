@@ -72,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.embedder = BgeEmbeddingClient.from_settings(settings)
     app.state.vector_store = MilvusVectorStore.from_settings(settings)
+    app.state.entity_threshold = settings.entity_sim_threshold
 
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class JobAccepted(BaseModel):
@@ -108,3 +108,42 @@ class SearchResultView(BaseModel):
 
 class SearchResultsView(BaseModel):
     results: list[SearchResultView]
+
+
+class EntityMemberView(BaseModel):
+    doc_id: str
+    doc_key: str | None
+    version: int | None
+    section_count: int
+    concept_count: int
+    quality_ok: bool
+
+
+class QualityTrendPoint(BaseModel):
+    version: int | None
+    ok: bool
+    error_count: int
+    warning_count: int
+
+
+class EntityView(BaseModel):
+    schema_version: int
+    entity_id: str
+    member_count: int
+    members: list[EntityMemberView]
+    concepts: list[str]
+    # presence value is a member version (int) or, for a version-less member, its doc_id (str)
+    concept_presence: dict[str, list[int | str]]
+    quality_trend: list[QualityTrendPoint]
+
+
+class EntityResolveRequest(BaseModel):
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class EntitiesView(BaseModel):
+    schema_version: int
+    threshold: float
+    entity_count: int
+    entities: list[EntityView]
+    unresolved: list[str]

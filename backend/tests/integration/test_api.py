@@ -784,3 +784,195 @@ async def test_search_returns_the_best_match_first(make_client, _alembic_applied
     # exactly. `test_vectorstore.py`'s own `== 1.0` assertions only hold
     # because THAT test's vectors ([1.0, 0.0]) have an exact unit norm.
     assert body["results"][0]["score"] == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------
+# Task 6 (SP-16): POST /entities/resolve
+# --------------------------------------------------------------------------
+#
+# `resolved_corpus_via_api` drives three documents through the full stage
+# chain DIRECTLY (via run_stage against this file's own `session_factory` /
+# `store` fixtures -- bucket "artifacts", the same bucket `client`'s app
+# reads through settings.s3_bucket's default), not through the HTTP trigger
+# endpoints: those only ever `dispatch()` to Celery, which nothing in this
+# suite runs, so a stage_run would never actually reach "done". This mirrors
+# test_resolve_entities.py's `resolved_corpus` fixture one layer up (API
+# instead of the bare pipeline function).
+#
+# Counts are asserted by which of THIS fixture's own three doc ids share an
+# entity, not by the response's raw `entity_count` -- `/entities/resolve`
+# scans the WHOLE corpus (spec decision 8, no per-call scoping) and this
+# fixture may run more than once across sibling tests in the same
+# session-scoped Postgres, so a raw total is not a stable count. See
+# test_resolve_entities.py's module docstring for the full rationale.
+
+
+class _SequencedEmbeddingClient:
+    """Deterministic, call-ordered stand-in -- see test_resolve_entities.py."""
+
+    model = "fake-sequenced"
+
+    def __init__(self, vectors: list[list[float]]) -> None:
+        self._vectors = vectors
+        self.calls = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vector = self._vectors[self.calls]
+        self.calls += 1
+        return [vector for _ in texts]
+
+
+@pytest.fixture
+async def resolved_corpus_via_api(session_factory, store) -> dict[str, str]:
+    """Three fully-processed documents: A, B near-identical (cosine ~0.99),
+    C orthogonal to both -- same numbers as test_resolve_entities.py."""
+    from fdi.core.semantic import SectionType
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.semantic import FakeSemanticClient
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.embedding import EmbeddingStage
+    from fdi.pipeline.stages.knowledge import KnowledgeStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.ontology import OntologyStage
+    from fdi.pipeline.stages.quality import QualityStage
+    from fdi.pipeline.stages.semantic import SemanticStage
+    from fdi.pipeline.stages.structure import StructureStage
+
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    reg.register(NormalizeStage())
+    reg.register(AstStage())
+    reg.register(StructureStage())
+    reg.register(SemanticStage())
+    reg.register(OntologyStage())
+    reg.register(QualityStage())
+    reg.register(KnowledgeStage())
+    reg.register(EmbeddingStage())
+    resolver = DagResolver(reg.all())
+
+    fake_ocr = FakeOcrClient(
+        {
+            "content": "ACME",
+            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [
+                {"role": "title", "content": "ACME LTD Annual Report"},
+                {"role": "sectionHeading", "content": "Balance Sheet"},
+                {"content": "Total Assets"},
+            ],
+            "tables": [],
+        }
+    )
+    fake_semantic = FakeSemanticClient({"Balance Sheet": SectionType.BALANCE_SHEET.value})
+    embedder = _SequencedEmbeddingClient([[1.0, 0.0], [0.99, 0.14], [0.0, 1.0]])
+
+    ids: dict[str, str] = {}
+    for key in ("a", "b", "c"):
+        doc = await intake_document(
+            pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+            filename=f"{key}.pdf",
+            doc_key=str(uuid.uuid4()),
+            content_type="application/pdf",
+            session_factory=session_factory,
+            store=store,
+        )
+        common = {
+            "doc_id": doc.id,
+            "correlation_id": "c1",
+            "session_factory": session_factory,
+            "store": store,
+            "registry": reg,
+            "resolver": resolver,
+        }
+        await run_stage(
+            stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+        )
+        await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(
+            stage_name="semantic",
+            run_id=str(uuid.uuid4()),
+            services={"semantic": fake_semantic},
+            **common,
+        )
+        await run_stage(stage_name="ontology", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="knowledge", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(
+            stage_name="embedding",
+            run_id=str(uuid.uuid4()),
+            services={"embedder": embedder},
+            **common,
+        )
+        ids[key] = doc.id
+    return ids
+
+
+def _entity_ids_for(body: dict, doc_ids: dict[str, str]) -> dict[str, str]:
+    """{"a": <entity_id>, "b": ..., "c": ...} -- which entity each of our own
+    three documents landed in, read off the response body."""
+    result: dict[str, str] = {}
+    for key, doc_id in doc_ids.items():
+        entity = next(
+            e for e in body["entities"] if doc_id in [m["doc_id"] for m in e["members"]]
+        )
+        result[key] = entity["entity_id"]
+    return result
+
+
+async def test_entities_resolve_returns_entities(
+    client: AsyncClient, _alembic_applied, resolved_corpus_via_api
+) -> None:
+    resp = await client.post("/entities/resolve", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["schema_version"] == 1
+    assert body["threshold"] == 0.85  # configured default
+
+    by = _entity_ids_for(body, resolved_corpus_via_api)
+    assert by["a"] == by["b"]  # A, B cluster together at the default threshold
+    assert by["a"] != by["c"]  # C is a separate entity
+
+
+async def test_entities_resolve_threshold_override(
+    client: AsyncClient, _alembic_applied, resolved_corpus_via_api
+) -> None:
+    resp = await client.post("/entities/resolve", json={"threshold": 0.999})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["threshold"] == 0.999
+
+    by = _entity_ids_for(body, resolved_corpus_via_api)
+    assert len({by["a"], by["b"], by["c"]}) == 3  # A, B no longer merge
+
+
+async def test_entities_resolve_rejects_out_of_range_threshold(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    resp = await client.post("/entities/resolve", json={"threshold": 1.5})
+    assert resp.status_code == 422
+
+
+async def test_entities_resolve_valid_shape_with_no_corpus_setup(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    """No 503, no raise -- entity resolution needs neither Milvus nor an
+    embedder at request time (spec §3.3), unlike /search. A literal empty
+    corpus is not assertable here (see test_resolve_entities.py's module
+    docstring: Postgres is session-scoped across the whole integration
+    suite), so this pins the documented shape and the echoed default
+    threshold instead."""
+    resp = await client.post("/entities/resolve", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["schema_version"] == 1
+    assert body["threshold"] == 0.85
+    assert isinstance(body["entity_count"], int)
+    assert isinstance(body["entities"], list)
+    assert isinstance(body["unresolved"], list)
+    assert body["entity_count"] == len(body["entities"])
