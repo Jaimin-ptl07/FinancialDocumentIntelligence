@@ -17,7 +17,7 @@ class CanonicalConcept(StrEnum):
 
 
 # Indian-annual-report starter set. Keys are ALREADY in normalized form
-# (lowercase, no punctuation, single-spaced) -- see _normalize_label.
+# (lowercase, no punctuation, single-spaced) -- see normalize_label.
 _SYNONYMS: dict[str, CanonicalConcept] = {
     "revenue": CanonicalConcept.REVENUE,
     "sales": CanonicalConcept.REVENUE,
@@ -53,7 +53,7 @@ _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
 
 
-def _normalize_label(label: str) -> str:
+def normalize_label(label: str) -> str:
     lowered = label.lower()
     stripped_punct = _PUNCT_RE.sub("", lowered)
     return _WS_RE.sub(" ", stripped_punct).strip()
@@ -65,8 +65,18 @@ def map_label(label: str) -> CanonicalConcept:
     Returns CanonicalConcept.UNKNOWN for anything not recognized -- an
     expected, non-error outcome, not a failure mode.
     """
-    normalized = _normalize_label(label)
+    normalized = normalize_label(label)
     return _SYNONYMS.get(normalized, CanonicalConcept.UNKNOWN)
+
+
+def synonyms_for(concept: CanonicalConcept) -> list[str]:
+    """Every normalized synonym key in `_SYNONYMS` that maps to `concept`, in
+    dict-declaration order. `CanonicalConcept.UNKNOWN` -> [] (no dictionary
+    entry ever maps to UNKNOWN by construction). Used by
+    `fdi.core.tables.find_concept_rows` (RT-6) -- see the design spec's
+    decision 2b for why that module reuses this data via a public function
+    rather than reimplementing/duplicating the synonym dictionary."""
+    return [k for k, v in _SYNONYMS.items() if v is concept]
 
 
 def map_document(ast: Mapping[str, object]) -> dict[str, object]:

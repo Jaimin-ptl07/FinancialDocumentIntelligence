@@ -976,3 +976,133 @@ async def test_entities_resolve_valid_shape_with_no_corpus_setup(
     assert isinstance(body["entities"], list)
     assert isinstance(body["unresolved"], list)
     assert body["entity_count"] == len(body["entities"])
+
+
+# --------------------------------------------------------------------------
+# RT-6: GET /documents/{doc_id}/tables, GET /documents/{doc_id}/concepts/{concept}
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def doc_with_numeric_table(session_factory, store) -> str:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.structure import StructureStage
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf",
+        doc_key=str(uuid.uuid4()),
+        content_type="application/pdf",
+        session_factory=session_factory,
+        store=store,
+    )
+    fake_ocr = FakeOcrClient(
+        {
+            "content": "ACME LTD",
+            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [
+                {
+                    "role": "title", "content": "ACME LTD",
+                    "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                    "spans": [{"offset": 0, "length": 8}],
+                },
+            ],
+            "tables": [
+                {
+                    "rowCount": 2, "columnCount": 2,
+                    "spans": [{"offset": 20, "length": 40}],
+                    "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                    "cells": [
+                        {
+                            "rowIndex": 0, "columnIndex": 0,
+                            "kind": "columnHeader", "content": "Particulars",
+                        },
+                        {
+                            "rowIndex": 0, "columnIndex": 1,
+                            "kind": "columnHeader", "content": "FY24",
+                        },
+                        {
+                            "rowIndex": 1, "columnIndex": 0,
+                            "content": "Total revenue from operations",
+                        },
+                        {"rowIndex": 1, "columnIndex": 1, "content": "12,345"},
+                    ],
+                },
+            ],
+            "sections": [],
+        }
+    )
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    reg.register(StructureStage())
+    resolver = DagResolver(reg.all())
+    common = {
+        "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+        "store": store, "registry": reg, "resolver": resolver,
+    }
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    return doc.id
+
+
+async def test_get_tables_route(
+    client: AsyncClient, _alembic_applied, doc_with_numeric_table
+) -> None:
+    resp = await client.get(f"/documents/{doc_with_numeric_table}/tables")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["doc_id"] == doc_with_numeric_table
+    assert len(body["tables"]) == 1
+    assert body["tables"][0]["table_index"] == 0
+    assert body["tables"][0]["grid"]["column_headers"] == ["Particulars", "FY24"]
+
+
+async def test_get_tables_route_keyword_filter(
+    client: AsyncClient, _alembic_applied, doc_with_numeric_table
+) -> None:
+    resp = await client.get(
+        f"/documents/{doc_with_numeric_table}/tables", params={"keyword": "fy99"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["tables"] == []
+
+
+async def test_get_tables_route_404_unknown_doc(client: AsyncClient, _alembic_applied) -> None:
+    resp = await client.get("/documents/no-such-doc/tables")
+    assert resp.status_code == 404
+
+
+async def test_concept_lookup_route(
+    client: AsyncClient, _alembic_applied, doc_with_numeric_table
+) -> None:
+    resp = await client.get(f"/documents/{doc_with_numeric_table}/concepts/REVENUE")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["doc_id"] == doc_with_numeric_table
+    assert body["concept"] == "REVENUE"
+    assert body["rows"] == [{
+        "table_index": 0,
+        "row_label": "Total revenue from operations",
+        "values": [{"column_header": "FY24", "raw": "12,345", "value": 12345.0}],
+    }]
+
+
+async def test_concept_lookup_route_invalid_concept_422(
+    client: AsyncClient, _alembic_applied, doc_with_numeric_table
+) -> None:
+    resp = await client.get(f"/documents/{doc_with_numeric_table}/concepts/NOT_A_CONCEPT")
+    assert resp.status_code == 422
+
+
+async def test_concept_lookup_route_404_unknown_doc(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    resp = await client.get("/documents/no-such-doc/concepts/REVENUE")
+    assert resp.status_code == 404
