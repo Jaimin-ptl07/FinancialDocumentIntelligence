@@ -6,9 +6,11 @@ one chunk per AST section, under the shared identity `s{i}` that EmbeddingStage/
 IndexStage/Milvus already use. Every text-returning retrieval tool resolves a hit
 id back to text via this record. build_vector_results (RT-2) is the first such
 consumer: pure filter/join/truncate of an already-fetched vector-store hit list.
-Reads inputs as plain Mappings -- no import of fdi.core.ast/semantic/provenance,
-no import of fdi.platform.*/fdi.pipeline.*. Never raises: malformed/partial input
-degrades per-field (section_type/page -> None).
+fuse (RT-4) is the second: pure Reciprocal Rank Fusion over RT-2's vector_search
+and RT-3's keyword_search hit lists. Reads inputs as plain Mappings -- no import
+of fdi.core.ast/semantic/provenance, no import of fdi.platform.*/fdi.pipeline.*.
+Never raises: malformed/partial input degrades per-field (section_type/page ->
+None).
 """
 
 from collections.abc import Mapping, Sequence
@@ -164,3 +166,61 @@ def chunk_rows_for_index(
             "page": _int_or_none(c.get("page")),
         })
     return rows
+
+
+_RRF_K = 60
+
+
+def _citation_richness(hit: Mapping[str, object]) -> int:
+    return sum(
+        1
+        for key in ("doc_key", "version", "heading", "page", "section_type")
+        if hit.get(key) is not None
+    )
+
+
+def fuse(
+    vector_hits: list[Mapping[str, object]],
+    keyword_hits: list[Mapping[str, object]],
+    *,
+    k: int,
+    rrf_k: int = _RRF_K,
+) -> list[dict[str, object]]:
+    """Reciprocal Rank Fusion (RRF) over two best-first, citation-shaped hit
+    lists (RT-2's vector_search / RT-3's keyword_search output shape --
+    {doc_id, doc_key, version, chunk_id, heading, page, section_type, text,
+    score}). Each hit is identified by "{doc_id}:{chunk_id}" (roadmap
+    cross-cutting decision 1; computed here, not read off a field). A hit's
+    fused score is the sum, over every list it appears in, of
+    1/(rrf_k + rank), rank 1-based -- a hit found by both lists therefore
+    routinely outranks one found by only one. Output is sorted by fused
+    score descending, ties broken by the "{doc_id}:{chunk_id}" string
+    ascending (deterministic; never relies on input order or sort stability
+    once scores tie), truncated to k. When the same chunk appears in both
+    lists with citations of different completeness, the RICHEST citation
+    (most non-None among doc_key/version/heading/page/section_type) is kept
+    on the fused record; a tie keeps whichever hit was seen first --
+    vector_hits before keyword_hits, this function's own argument order. A
+    hit missing a str doc_id/chunk_id is skipped, not erred. Pure, total,
+    never raises. No I/O."""
+    scores: dict[str, float] = {}
+    richest: dict[str, Mapping[str, object]] = {}
+    for hits in (vector_hits, keyword_hits):
+        for rank, hit in enumerate(hits, start=1):
+            doc_id = hit.get("doc_id")
+            chunk_id = hit.get("chunk_id")
+            if not isinstance(doc_id, str) or not isinstance(chunk_id, str):
+                continue
+            full_id = f"{doc_id}:{chunk_id}"
+            scores[full_id] = scores.get(full_id, 0.0) + 1.0 / (rrf_k + rank)
+            current = richest.get(full_id)
+            if current is None or _citation_richness(hit) > _citation_richness(current):
+                richest[full_id] = hit
+
+    ordered_ids = sorted(scores, key=lambda fid: (-scores[fid], fid))
+    results: list[dict[str, object]] = []
+    for full_id in ordered_ids[:k]:
+        rec = dict(richest[full_id])
+        rec["score"] = scores[full_id]
+        results.append(rec)
+    return results
