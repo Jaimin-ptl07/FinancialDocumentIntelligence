@@ -147,3 +147,64 @@ class EntitiesView(BaseModel):
     entity_count: int
     entities: list[EntityView]
     unresolved: list[str]
+
+
+class GraphCitationView(BaseModel):
+    doc_id: str | None
+    doc_key: str | None
+    version: int | None
+    heading: str | None
+    page: int | None
+    bounding_regions: list[dict[str, object]] | None
+
+
+class GraphNodeView(BaseModel):
+    id: str
+    type: str
+    label: str
+    doc_id: str | None = None
+    citation: GraphCitationView
+
+
+class GraphParagraphView(BaseModel):
+    id: str
+    type: str
+    label: str
+    citation: GraphCitationView
+
+
+class GraphSectionView(BaseModel):
+    id: str
+    type: str
+    label: str
+    citation: GraphCitationView
+    paragraphs: list[GraphParagraphView]
+
+
+class GraphNeighborsRequest(BaseModel):
+    node_id: str
+
+
+class GraphNeighborView(BaseModel):
+    node: GraphNodeView
+    relationship: str
+    direction: str
+
+
+class GraphNeighborsView(BaseModel):
+    schema_version: int
+    node_id: str
+    neighbors: list[GraphNeighborView]
+
+
+class DocumentStructureView(BaseModel):
+    schema_version: int
+    doc_id: str
+    document: GraphNodeView | None
+    sections: list[GraphSectionView]
+
+
+class ReadingOrderView(BaseModel):
+    schema_version: int
+    doc_id: str
+    sections: list[GraphNodeView]

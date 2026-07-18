@@ -976,3 +976,32 @@ async def test_entities_resolve_valid_shape_with_no_corpus_setup(
     assert isinstance(body["entities"], list)
     assert isinstance(body["unresolved"], list)
     assert body["entity_count"] == len(body["entities"])
+
+
+# --------------------------------------------------------------------------
+# RT-5: graph retrieval routes -- 503 when graph_store is unconfigured.
+# --------------------------------------------------------------------------
+
+
+async def test_graph_neighbors_503_when_graph_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.post("/graph/neighbors", json={"node_id": "d1:s0"})
+    assert r.status_code == 503
+    assert "graph_store" in r.json()["detail"]
+
+
+async def test_document_structure_503_when_graph_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.get("/documents/no-such-doc/graph/structure")
+    assert r.status_code == 503
+    assert "graph_store" in r.json()["detail"]
+
+
+async def test_reading_order_503_when_graph_store_unconfigured(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    r = await client.get("/documents/no-such-doc/graph/reading-order")
+    assert r.status_code == 503
+    assert "graph_store" in r.json()["detail"]
