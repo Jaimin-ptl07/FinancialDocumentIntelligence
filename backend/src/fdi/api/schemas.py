@@ -147,3 +147,32 @@ class EntitiesView(BaseModel):
     entity_count: int
     entities: list[EntityView]
     unresolved: list[str]
+
+
+class IndexFtsView(BaseModel):
+    doc_id: str
+    chunks_indexed: int
+
+
+class KeywordSearchRequest(BaseModel):
+    query: str
+    k: int = 5
+    section_type: str | None = None
+    doc_key: str | None = None
+    version: int | None = None
+
+
+class KeywordHitView(BaseModel):
+    doc_id: str
+    doc_key: str | None
+    version: int | None
+    chunk_id: str
+    heading: str | None
+    page: int | None
+    section_type: str | None
+    text: str
+    score: float
+
+
+class KeywordSearchResultsView(BaseModel):
+    results: list[KeywordHitView]
