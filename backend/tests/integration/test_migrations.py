@@ -78,9 +78,16 @@ async def test_chunk_tsv_is_generated_and_searchable(migrated_engine: AsyncEngin
             "('d-fts:s0', 'd-fts', 's0', 'Balance Sheet total assets'), "
             "('d-fts:s1', 'd-fts', 's1', 'Directors report narrative')"
         ))
+    # Scoped to doc_id='d-fts': `chunk` is a table shared across the whole
+    # integration suite (Postgres is session-scoped), and several other RT-3
+    # test files' fixtures also insert "Balance Sheet" text -- an unscoped
+    # query would pick up their rows too depending on run order. Scoping
+    # proves the SAME thing (the generated column populates and is
+    # searchable) without assuming this test is the table's only writer.
     async with migrated_engine.connect() as conn:
         result = await conn.execute(sqlalchemy.text(
-            "SELECT id FROM chunk WHERE tsv @@ plainto_tsquery('english', 'balance sheet')"
+            "SELECT id FROM chunk WHERE doc_id = 'd-fts' "
+            "AND tsv @@ plainto_tsquery('english', 'balance sheet')"
         ))
         ids = [row[0] for row in result.all()]
     assert ids == ["d-fts:s0"]
