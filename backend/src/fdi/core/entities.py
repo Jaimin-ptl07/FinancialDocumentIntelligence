@@ -83,3 +83,43 @@ def build_entity_timeline(
         "concepts": entity["concepts"],
         "concept_presence": concept_presence,
     }
+
+
+def build_concept_comparison(
+    doc_key: str, concept: str, member_lookups: list[Mapping[str, object]]
+) -> dict[str, object]:
+    """`member_lookups`: [{doc_id, doc_key, version, rows: list[Mapping] | None}]
+    -- `rows` is exactly fdi.pipeline.tables.concept_lookup's return value for
+    that member, UNCHANGED. `status` makes concept_lookup's None ("no
+    structure artifact yet") vs [] ("structure present, concept not found")
+    distinction explicit and durable through this assembly step rather than
+    collapsing both to an indistinguishable empty `rows` list. Defensively
+    re-sorts by version (mirrors consolidate_entity's own posture) regardless
+    of input order."""
+    versions: list[dict[str, object]] = []
+    for ml in sorted(member_lookups, key=_version_sort_key):
+        rows_raw = ml.get("rows")
+        status: str
+        rows: list[dict[str, object]]
+        if isinstance(rows_raw, list) and rows_raw:
+            status = "matched"
+            rows = [dict(r) for r in rows_raw if isinstance(r, Mapping)]
+        elif isinstance(rows_raw, list):
+            status, rows = "no_match", []
+        else:
+            status, rows = "no_structure", []  # None, or malformed -> degrade safely
+
+        versions.append({
+            "doc_id": ml.get("doc_id"),
+            "doc_key": ml.get("doc_key"),
+            "version": ml.get("version"),
+            "status": status,
+            "rows": rows,
+        })
+
+    return {
+        "schema_version": 1,
+        "doc_key": doc_key,
+        "concept": concept,
+        "versions": versions,
+    }
