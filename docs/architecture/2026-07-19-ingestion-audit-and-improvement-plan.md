@@ -1,6 +1,20 @@
 # Ingestion Pipeline — Deep Audit Findings & Improvement Plan
 
-- **Date:** 2026-07-19. **Status:** Findings final; plan agreed; Phase 0+1 starting.
+- **Date:** 2026-07-19. **Status:** Findings final; plan agreed. **Progress: Phase 0 ✅, Phase 1 ✅,
+  Phase 2 ✅, Phase 3a ✅ (all merged to `feature/sp-1-project-setup`).** Remaining: Phase 3b (graph
+  table/figure nodes), Phase 4 (values + reconciliation), Phase 5 (robustness).
+  - **Phase 0** (`fd11ee3`): OCR schema 4→5 — retains `cells[].elements`/`bounding_regions`, table
+    caption/footnotes, page spans/marks, low-confidence words.
+  - **Phase 1** (`942256f`): table-cell paragraphs filtered by `cells[].elements` + dropped-titles
+    fix. Measured on STTL: AST bare-numeric-paragraph share **42.8% → 1.2%**; sections 538→607;
+    Cash Flow heading recovered; blocks still 1:1 (0 data loss).
+  - **Phase 2** (`dedaed0`): deterministic provenance via `source_index` (O(1) page lookup, text-
+    matching deleted) + per-cell geometry + full labels. Measured: 0 wrong-page collapses across 354
+    ambiguous groups; "Opinion" → `[83,90,141]` not all-83.
+  - **Phase 3a** (`a67e538`): table-derived row chunks (`t{i}r{j}`) + whole-table chunks + dedup +
+    embedding-reads-chunks. Measured: 1,985 row chunks; every headline GT number now in a structured,
+    page-correct row chunk (BS→p91, P&L→p92), searchable via hybrid_search.
+  - Integrated suite green: **632 passed / 12 skipped**, all four gates.
 - **Method:** Six independent layer-auditors run in parallel over the **real Silver Touch Technologies
   Ltd FY2023-24 annual report** (185 pages, 261 tables, 11,428 paragraphs, 538 AST sections), each
   materializing its artifact from the real Azure DI OCR JSON and measuring against the source + the
