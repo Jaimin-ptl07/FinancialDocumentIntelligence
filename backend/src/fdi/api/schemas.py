@@ -147,3 +147,31 @@ class EntitiesView(BaseModel):
     entity_count: int
     entities: list[EntityView]
     unresolved: list[str]
+
+
+class VectorSearchFilters(BaseModel):
+    section_type: str | None = None
+    doc_key: str | None = None
+    version: int | None = None
+
+
+class VectorSearchRequest(BaseModel):
+    query: str
+    k: int = 5
+    filters: VectorSearchFilters | None = None
+
+
+class VectorSearchResultView(BaseModel):
+    doc_id: str
+    doc_key: str | None
+    version: int | None
+    chunk_id: str
+    heading: str | None
+    page: int | None
+    section_type: str | None
+    text: str
+    score: float
+
+
+class VectorSearchResultsView(BaseModel):
+    results: list[VectorSearchResultView]

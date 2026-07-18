@@ -44,10 +44,14 @@ from fdi.api.schemas import (
     StageStatusView,
     StagesView,
     StaleView,
+    VectorSearchRequest,
+    VectorSearchResultsView,
+    VectorSearchResultView,
 )
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.eval_service import run_evaluation
 from fdi.pipeline.intake import intake_document
+from fdi.pipeline.retrieval import vector_search
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
 from fdi.platform.db.models import Document
@@ -440,6 +444,59 @@ async def search(
             )
             for h in hits
         ]
+    )
+
+
+# --------------------------------------------------------------------------
+# RT-2: POST /retrieve/vector -- semantic search WITH text + citations,
+# filterable by section_type (Milvus metadata) and/or doc_key/version (a
+# Postgres join). POST /search above is UNCHANGED -- design spec
+# docs/superpowers/specs/2026-07-18-rt2-vector-retrieval-design.md sec 2
+# decision 5 -- /search stays the raw, never-dropping probe it always was;
+# this route is the additive, citation-first tool the retrieval roadmap's
+# vector_search(query, filters, k) describes.
+# --------------------------------------------------------------------------
+
+
+@router.post("/retrieve/vector", response_model=VectorSearchResultsView)
+async def retrieve_vector(
+    body: VectorSearchRequest,
+    session: SessionDep,
+    store: StoreDep,
+    embedder: EmbedderDep,
+    vector_store: VectorStoreDep,
+) -> VectorSearchResultsView:
+    missing = [
+        name
+        for name, svc in (("embedder", embedder), ("vector_store", vector_store))
+        if svc is None
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"retrieve/vector is not configured: missing {', '.join(missing)} "
+                "(set FDI_MILVUS_URI -- embeddings run locally via BGE and need no endpoint/key)"
+            ),
+        )
+    assert embedder is not None
+    assert vector_store is not None
+    filters = {
+        "section_type": body.filters.section_type if body.filters else None,
+        "doc_key": body.filters.doc_key if body.filters else None,
+        "version": body.filters.version if body.filters else None,
+    }
+    results = await vector_search(
+        session=session,
+        store=store,
+        embedder=embedder,
+        vector_store=vector_store,
+        query=body.query,
+        k=body.k,
+        filters=filters,
+    )
+    return VectorSearchResultsView(
+        results=[VectorSearchResultView.model_validate(r) for r in results]
     )
 
 
