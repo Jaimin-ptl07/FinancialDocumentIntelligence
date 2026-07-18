@@ -15,6 +15,38 @@ from collections.abc import Mapping
 from fdi.platform.config import Settings
 from neo4j import Driver, GraphDatabase, ManagedTransaction
 
+_NODE_LABELS: Mapping[str, str] = {
+    "document": "Document", "section": "Section", "paragraph": "Paragraph",
+}
+_EDGE_REL_TYPES: Mapping[str, str] = {"CONTAINS": "CONTAINS", "READING_ORDER": "READING_ORDER"}
+
+
+def _cypher_label(node_type: object) -> str:
+    """The real Cypher label for a graph node `type`, from a closed allowlist.
+
+    Cypher does not allow a parameterized label ($type in a label position is
+    a syntax error), so the label MUST be built into the query text -- doing
+    that from an unvalidated `type` would let a malformed artifact inject
+    arbitrary Cypher via the label position. Only this function's RETURN
+    VALUE (one of the dict's fixed literals, never `node_type` itself) may
+    ever reach an f-string. An unknown type raises rather than falling back
+    to a generic label: it means `build_graph`'s type vocabulary changed
+    without this module being updated, not a runtime fact to degrade past.
+    """
+    if not isinstance(node_type, str) or node_type not in _NODE_LABELS:
+        raise ValueError(f"unknown graph node type: {node_type!r}; known: {sorted(_NODE_LABELS)}")
+    return _NODE_LABELS[node_type]
+
+
+def _cypher_rel_type(edge_type: object) -> str:
+    """The real Cypher relationship type for a graph edge `type`. Same
+    injection-safety and fail-loud rationale as `_cypher_label`."""
+    if not isinstance(edge_type, str) or edge_type not in _EDGE_REL_TYPES:
+        raise ValueError(
+            f"unknown graph edge type: {edge_type!r}; known: {sorted(_EDGE_REL_TYPES)}"
+        )
+    return _EDGE_REL_TYPES[edge_type]
+
 
 class Neo4jGraphStore:
     """GraphStore backed by Neo4j. Lives in platform (does I/O)."""
@@ -38,14 +70,17 @@ class Neo4jGraphStore:
         edges: list[Mapping[str, object]],
     ) -> tuple[int, int]:
         for node in nodes:
+            label = _cypher_label(node.get("type"))
             tx.run(
-                "MERGE (n:Node {id: $id}) SET n.type = $type, n.label = $label",
-                id=node["id"], type=node["type"], label=node["label"],
+                f"MERGE (n:{label} {{id: $id}}) "
+                "SET n.type = $type, n.label = $label, n.doc_id = $doc_id",
+                id=node["id"], type=node["type"], label=node["label"], doc_id=node.get("doc_id"),
             )
         for edge in edges:
+            rel = _cypher_rel_type(edge.get("type"))
             tx.run(
-                "MATCH (a:Node {id: $source}), (b:Node {id: $target}) "
-                "MERGE (a)-[r:REL {type: $type}]->(b)",
+                f"MATCH (a {{id: $source}}), (b {{id: $target}}) "
+                f"MERGE (a)-[r:{rel}]->(b) SET r.type = $type",
                 source=edge["source"], target=edge["target"], type=edge["type"],
             )
         return len(nodes), len(edges)
