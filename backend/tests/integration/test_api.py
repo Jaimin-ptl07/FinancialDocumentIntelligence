@@ -707,6 +707,7 @@ async def rt3_indexed_doc(session_factory, store) -> tuple[str, str]:
     from fdi.pipeline.stages.ocr import OcrStage
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
+    from fdi.pipeline.stages.structure import StructureStage
 
     doc_key = f"rt3-{uuid.uuid4()}"
     doc = await intake_document(
@@ -741,7 +742,7 @@ async def rt3_indexed_doc(session_factory, store) -> tuple[str, str]:
     )
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(),
-                  GraphStage(), ProvenanceStage(), ChunksStage()):
+                  GraphStage(), ProvenanceStage(), StructureStage(), ChunksStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
     common = {
@@ -757,6 +758,7 @@ async def rt3_indexed_doc(session_factory, store) -> tuple[str, str]:
                      services={"semantic": fake_semantic}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     return doc.id, doc_key
 
@@ -960,6 +962,7 @@ async def _seed_processed_doc(session_factory, store) -> dict[str, object]:
     from fdi.pipeline.stages.ocr import OcrStage
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
+    from fdi.pipeline.stages.structure import StructureStage
 
     doc_key = f"annual-{uuid.uuid4()}"
     doc = await intake_document(
@@ -981,7 +984,7 @@ async def _seed_processed_doc(session_factory, store) -> dict[str, object]:
     reg = StageRegistry()
     for stage in (
         OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-        ProvenanceStage(), ChunksStage(),
+        ProvenanceStage(), StructureStage(), ChunksStage(),
     ):
         reg.register(stage)
     resolver = DagResolver(reg.all())
@@ -1000,6 +1003,7 @@ async def _seed_processed_doc(session_factory, store) -> dict[str, object]:
     )
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     return {"doc_id": doc.id, "doc_key": doc_key}
 
@@ -1115,6 +1119,7 @@ async def _seed_hybrid_doc(session_factory, store, *, marker: str) -> dict[str, 
     from fdi.pipeline.stages.ocr import OcrStage
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
+    from fdi.pipeline.stages.structure import StructureStage
 
     doc_key = f"hybrid-{uuid.uuid4()}"
     doc = await intake_document(
@@ -1136,7 +1141,7 @@ async def _seed_hybrid_doc(session_factory, store, *, marker: str) -> dict[str, 
     reg = StageRegistry()
     for stage in (
         OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-        ProvenanceStage(), ChunksStage(),
+        ProvenanceStage(), StructureStage(), ChunksStage(),
     ):
         reg.register(stage)
     resolver = DagResolver(reg.all())
@@ -1155,6 +1160,7 @@ async def _seed_hybrid_doc(session_factory, store, *, marker: str) -> dict[str, 
     )
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
@@ -1307,11 +1313,14 @@ async def resolved_corpus_via_api(session_factory, store) -> dict[str, str]:
     from fdi.pipeline.run import run_stage
     from fdi.pipeline.semantic import FakeSemanticClient
     from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.chunks import ChunksStage
     from fdi.pipeline.stages.embedding import EmbeddingStage
+    from fdi.pipeline.stages.graph import GraphStage
     from fdi.pipeline.stages.knowledge import KnowledgeStage
     from fdi.pipeline.stages.normalize import NormalizeStage
     from fdi.pipeline.stages.ocr import OcrStage
     from fdi.pipeline.stages.ontology import OntologyStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.quality import QualityStage
     from fdi.pipeline.stages.semantic import SemanticStage
     from fdi.pipeline.stages.structure import StructureStage
@@ -1322,6 +1331,9 @@ async def resolved_corpus_via_api(session_factory, store) -> dict[str, str]:
     reg.register(AstStage())
     reg.register(StructureStage())
     reg.register(SemanticStage())
+    reg.register(GraphStage())
+    reg.register(ProvenanceStage())
+    reg.register(ChunksStage())
     reg.register(OntologyStage())
     reg.register(QualityStage())
     reg.register(KnowledgeStage())
@@ -1373,6 +1385,9 @@ async def resolved_corpus_via_api(session_factory, store) -> dict[str, str]:
             services={"semantic": fake_semantic},
             **common,
         )
+        await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
         await run_stage(stage_name="ontology", run_id=str(uuid.uuid4()), services={}, **common)
         await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
         await run_stage(stage_name="knowledge", run_id=str(uuid.uuid4()), services={}, **common)
@@ -1865,11 +1880,12 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
     from fdi.pipeline.stages.ocr import OcrStage
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
+    from fdi.pipeline.stages.structure import StructureStage
 
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-                  ProvenanceStage(), ChunksStage()):
+                  ProvenanceStage(), StructureStage(), ChunksStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
     fake_ocr = FakeOcrClient({
@@ -1899,6 +1915,7 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
     )
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     async with session_factory() as s:
         await index_chunks_fts(session=s, store=store, doc_id=doc.id)
@@ -1968,11 +1985,12 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     from fdi.pipeline.stages.ocr import OcrStage
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
+    from fdi.pipeline.stages.structure import StructureStage
 
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-                  ProvenanceStage(), ChunksStage()):
+                  ProvenanceStage(), StructureStage(), ChunksStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
     fake_ocr = FakeOcrClient({
@@ -2002,6 +2020,7 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     )
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     async with session_factory() as s:
         await index_chunks_fts(session=s, store=store, doc_id=doc.id)

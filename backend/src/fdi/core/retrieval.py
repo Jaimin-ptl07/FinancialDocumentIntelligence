@@ -3,8 +3,9 @@
 build_chunks joins a document's `ast` (section body text), `semantic`
 (section_type), and `provenance` (page) into one per-document `chunks` record --
 one chunk per AST section, under the shared identity `s{i}` that EmbeddingStage/
-IndexStage/Milvus already use. Every text-returning retrieval tool resolves a hit
-id back to text via this record. build_vector_results (RT-2) is the first such
+IndexStage/Milvus already use. Phase 3a additionally derives table chunks from
+`structure` (below). Every text-returning retrieval tool resolves a hit id back
+to text via this record. build_vector_results (RT-2) is the first such
 consumer: pure filter/join/truncate of an already-fetched vector-store hit list.
 fuse (RT-4) is the second: pure Reciprocal Rank Fusion over RT-2's vector_search
 and RT-3's keyword_search hit lists. Reads inputs as plain Mappings -- no import
@@ -15,15 +16,142 @@ None).
 
 from collections.abc import Mapping, Sequence
 
+_WHOLE_TABLE_MAX_CHARS = 4000
+
 
 def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _table_context(table: Mapping[str, object], table_index: int) -> str:
+    """Priority: table's own `caption.content` (Azure-supplied), else
+    `f"Table {table_index}"` -- never blank. (Phase 3a does not resolve the
+    owning AST section's heading -- that requires `ast.table_refs`, deferred
+    to Phase 3b -- so caption is the first, not second, fallback here.)"""
+    caption = table.get("caption")
+    if isinstance(caption, Mapping):
+        content = caption.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return f"Table {table_index}"
+
+
+def _table_page(table: Mapping[str, object]) -> int | None:
+    """First bounding region's page, mirroring `core.provenance._page_of`'s
+    "first region" convention. None if absent/malformed."""
+    regions_raw = table.get("bounding_regions")
+    if isinstance(regions_raw, list) and regions_raw:
+        first = regions_raw[0]
+        if isinstance(first, Mapping):
+            return _int_or_none(first.get("page_number"))
+    return None
+
+
+def _row_label_and_pairs(
+    row: Sequence[object], column_headers: Sequence[object]
+) -> tuple[str, str]:
+    """`row[0]` is the row label (column 0); columns 1..N are rendered
+    "{header}={value}", blank cells (empty after `.strip()`) omitted
+    entirely -- never rendered as `header=`."""
+    label_raw = row[0] if row else ""
+    label = label_raw if isinstance(label_raw, str) else ""
+    pairs: list[str] = []
+    for c in range(1, len(row)):
+        val_raw = row[c]
+        val = val_raw if isinstance(val_raw, str) else ""
+        if not val.strip():
+            continue
+        header_raw = column_headers[c] if c < len(column_headers) else ""
+        header = header_raw if isinstance(header_raw, str) else ""
+        pairs.append(f"{header}={val}")
+    return label, ", ".join(pairs)
+
+
+def _table_chunks(structure: Mapping[str, object]) -> list[dict[str, object]]:
+    """One chunk per DATA row (`chunk_id=f"t{i}r{r}"`, `r` the row's absolute
+    index into `grid["grid"]` -- the same integer `core.tables.find_concept_rows`
+    iterates with -- NOT a data-row-relative counter) plus one capped
+    whole-table chunk (`chunk_id=f"t{i}"`) per table, `i` the table's position
+    in `structure["tables"]`. A `structure` with no/malformed `tables` list
+    emits nothing (degrades, never raises)."""
+    tables_raw = structure.get("tables")
+    tables = tables_raw if isinstance(tables_raw, list) else []
+
+    out: list[dict[str, object]] = []
+    for i, table_raw in enumerate(tables):
+        if not isinstance(table_raw, Mapping):
+            continue
+        context = _table_context(table_raw, i)
+        page = _table_page(table_raw)
+
+        grid_obj = table_raw.get("grid")
+        grid_map = grid_obj if isinstance(grid_obj, Mapping) else {}
+        n_rows_raw = grid_map.get("n_rows")
+        n_rows = n_rows_raw if isinstance(n_rows_raw, int) else 0
+        header_row_count_raw = grid_map.get("header_row_count")
+        header_row_count = (
+            header_row_count_raw if isinstance(header_row_count_raw, int) else 0
+        )
+        rows_raw = grid_map.get("grid")
+        rows = rows_raw if isinstance(rows_raw, list) else []
+        headers_raw = grid_map.get("column_headers")
+        column_headers = headers_raw if isinstance(headers_raw, list) else []
+
+        table_lines: list[str] = []
+        for r in range(header_row_count, n_rows):
+            row_obj = rows[r] if r < len(rows) else []
+            row = row_obj if isinstance(row_obj, list) else []
+            label, pairs_str = _row_label_and_pairs(row, column_headers)
+            row_text = f"{label}: {pairs_str}"
+            table_lines.append(row_text)
+            out.append({
+                "chunk_id": f"t{i}r{r}",
+                "heading": context,
+                "text": f"{context} | {row_text}",
+                "section_type": None,
+                "page": page,
+                "para_count": None,
+            })
+
+        header_line = ", ".join(
+            h for h in column_headers[1:] if isinstance(h, str) and h
+        )
+        whole_text = "\n".join([context, header_line, *table_lines])[
+            :_WHOLE_TABLE_MAX_CHARS
+        ]
+        out.append({
+            "chunk_id": f"t{i}",
+            "heading": context,
+            "text": whole_text,
+            "section_type": None,
+            "page": page,
+            "para_count": None,
+        })
+    return out
+
+
+def _dedup_by_text(chunks: list[dict[str, object]]) -> list[dict[str, object]]:
+    """One global exact-text pass: keep first occurrence in emission order,
+    drop later chunks whose `text` is byte-identical to an earlier one.
+    Survivors' ids are NEVER renumbered -- gaps are fine (the already-tested
+    `s{i}` id-gap contract; this pass is consistent with it, not a new one)."""
+    seen: set[str] = set()
+    out: list[dict[str, object]] = []
+    for c in chunks:
+        text = c.get("text")
+        key = text if isinstance(text, str) else ""
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
 
 
 def build_chunks(
     ast: Mapping[str, object],
     semantic: Mapping[str, object],
     provenance: Mapping[str, object],
+    structure: Mapping[str, object],
 ) -> dict[str, object]:
     page_by_node: dict[str, int] = {}
     node_prov = provenance.get("node_provenance")
@@ -73,7 +201,8 @@ def build_chunks(
         })
         k += 1
 
-    return {"schema_version": 1, "chunks": chunks}
+    table_chunks = _table_chunks(structure)
+    return {"schema_version": 1, "chunks": _dedup_by_text(chunks + table_chunks)}
 
 
 def build_vector_results(
