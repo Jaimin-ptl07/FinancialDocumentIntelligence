@@ -1,6 +1,6 @@
 import pytest
 
-from fdi.core.ontology import CanonicalConcept, map_label
+from fdi.core.ontology import CanonicalConcept, map_label, normalize_label, synonyms_for
 
 
 def test_canonical_concept_values() -> None:
@@ -46,3 +46,27 @@ def test_map_label_normalizes_case_whitespace_punctuation(variant: str) -> None:
 ])
 def test_map_label_unknown_for_unrecognized(label: str) -> None:
     assert map_label(label) == CanonicalConcept.UNKNOWN
+
+
+def test_normalize_label_public() -> None:
+    assert normalize_label("  Revenue: ") == "revenue"
+    assert normalize_label("REVENUE, net") == "revenue net"
+
+
+def test_synonyms_for_revenue() -> None:
+    syns = synonyms_for(CanonicalConcept.REVENUE)
+    assert set(syns) == {
+        "revenue", "sales", "turnover", "revenue from operations",
+        "income from operations", "total revenue",
+    }
+
+
+def test_synonyms_for_unknown_is_empty() -> None:
+    assert synonyms_for(CanonicalConcept.UNKNOWN) == []
+
+
+def test_synonyms_for_every_concept_nonempty_except_unknown() -> None:
+    for concept in CanonicalConcept:
+        if concept is CanonicalConcept.UNKNOWN:
+            continue
+        assert synonyms_for(concept), f"{concept} has no synonyms"
