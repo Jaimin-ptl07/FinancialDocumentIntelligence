@@ -414,7 +414,7 @@ async def search(
             status_code=503,
             detail=(
                 f"search is not configured: missing {', '.join(missing)} "
-                "(set FDI_EMBED_ENDPOINT/FDI_EMBED_KEY and/or FDI_MILVUS_URI)"
+                "(set FDI_MILVUS_URI -- embeddings run locally via BGE and need no endpoint/key)"
             ),
         )
     # `missing` above is a runtime check across a name/value tuple, which
