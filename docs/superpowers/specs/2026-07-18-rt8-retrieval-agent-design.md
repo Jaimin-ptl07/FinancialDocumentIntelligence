@@ -1,9 +1,12 @@
 # RT-8 — Retrieval Agent (`POST /ask`)
 
-- **Status:** Draft — 2026-07-18. The capstone of the retrieval layer
-  (`docs/architecture/retrieval-roadmap.md`). Registers every RT-2…RT-7 tool as
-  an LLM function-calling tool and runs a bounded plan→call→synthesize loop
-  that returns a cited answer.
+- **Status:** Implemented 2026-07-18. The capstone of the retrieval layer
+  (`docs/architecture/retrieval-roadmap.md`) — RT-1…RT-8 are now all complete.
+  Registers every RT-2…RT-7 tool as an LLM function-calling tool and runs a
+  bounded plan→call→synthesize loop that returns a cited answer. See
+  `docs/superpowers/plans/2026-07-18-rt8-retrieval-agent.md` for the
+  task-by-task execution record and the roadmap's "What RT-8 shipped" handoff
+  for what a future sub-project needs to know.
 - **Depends on (all done, 2026-07-18):**
   - **RT-1** — the `chunks` artifact + `{doc_id}:{chunk_id}` identity every
     text-returning tool resolves through.
