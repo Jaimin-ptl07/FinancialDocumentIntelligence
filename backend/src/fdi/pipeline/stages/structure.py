@@ -1,6 +1,9 @@
 """StructureStage: a DERIVED stage that removes header/footer/page-number
 paragraphs and stitches cross-page tables. Auto-chains off OcrStage via
-`deps=("ocr",)`."""
+`deps=("ocr",)`.
+
+# version=3: Phase 2 -- each table's `grid` additively carries `cell_regions`/
+# `cell_pages` (per-cell bounding geometry, from `canonicalize_table`)."""
 
 from collections.abc import Mapping
 from typing import cast
@@ -16,7 +19,7 @@ _DROP = {Role.HEADER, Role.FOOTER, Role.PAGE_NUMBER}
 
 class StructureStage:
     name = "structure"
-    version = 2
+    version = 3
     deps: tuple[str, ...] = ("ocr",)
 
     async def run(self, ctx: StageContext) -> object:
@@ -35,7 +38,7 @@ class StructureStage:
         for t in stitched:
             t["grid"] = canonicalize_table(t)
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "blocks": blocks,
             "tables": stitched,
         }

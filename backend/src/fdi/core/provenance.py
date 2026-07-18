@@ -1,34 +1,32 @@
 """Provenance: trace every SP-9 graph node back to its source OCR paragraph's
-page and bounding geometry. Pure, deterministic; no I/O."""
+page and bounding geometry. Pure, deterministic; no I/O.
+
+Resolution is a DIRECT INDEX LOOKUP: a `section`/`paragraph` node carries its
+origin OCR paragraph's position (`source_index`, threaded from `unified` ->
+`ast` -> `graph` by Phase 2), so `ocr["paragraphs"][source_index]` is the
+node's own paragraph -- never a text/label match, never ambiguous."""
 
 from collections.abc import Mapping
 
-_Candidate = tuple[str, list[dict[str, object]]]
 
-
-def _ocr_paragraph_candidates(ocr: Mapping[str, object]) -> list[_Candidate]:
-    """(content, bounding_regions) pairs from the OCR artifact's paragraphs,
-    in document order. A paragraph whose `content` isn't a `str` is dropped
-    -- it cannot be matched against a node's `str` label. `bounding_regions`
-    degrades to `[]` when absent/malformed (never raises)."""
-    candidates: list[_Candidate] = []
-    paragraphs_raw = ocr.get("paragraphs")
-    if not isinstance(paragraphs_raw, list):
-        return candidates
-    for para in paragraphs_raw:
-        if not isinstance(para, Mapping):
-            continue
-        content = para.get("content")
-        if not isinstance(content, str):
-            continue
-        regions_raw = para.get("bounding_regions")
-        regions: list[dict[str, object]] = []
-        if isinstance(regions_raw, list):
-            for region in regions_raw:
-                if isinstance(region, Mapping):
-                    regions.append(dict(region))
-        candidates.append((content, regions))
-    return candidates
+def _paragraph_regions(
+    ocr_paragraphs: list[object], index: object
+) -> list[dict[str, object]] | None:
+    """`ocr_paragraphs[index]["bounding_regions"]`, or `None` if `index` isn't
+    a valid in-range (non-bool) `int`, the paragraph isn't a `Mapping`, or its
+    `bounding_regions` is missing/malformed/empty. Never raises."""
+    if not isinstance(index, int) or isinstance(index, bool):
+        return None
+    if index < 0 or index >= len(ocr_paragraphs):
+        return None
+    para = ocr_paragraphs[index]
+    if not isinstance(para, Mapping):
+        return None
+    regions = para.get("bounding_regions")
+    if not isinstance(regions, list) or not regions:
+        return None
+    resolved = [dict(r) for r in regions if isinstance(r, Mapping)]
+    return resolved or None
 
 
 def _page_of(regions: list[dict[str, object]]) -> int | None:
@@ -39,31 +37,41 @@ def _page_of(regions: list[dict[str, object]]) -> int | None:
     return page if isinstance(page, int) else None
 
 
+def _ocr_paragraphs(ocr: Mapping[str, object]) -> list[object]:
+    paragraphs_raw = ocr.get("paragraphs")
+    return paragraphs_raw if isinstance(paragraphs_raw, list) else []
+
+
+def _first_paragraph_with_regions(ocr_paragraphs: list[object]) -> dict[str, object] | None:
+    """The FIRST ocr paragraph (document order) with usable `bounding_regions`
+    -- the `doc` node's fallback when it has no usable `source_index`. A
+    positional scan, not a label match, so it's unaffected by the ambiguity
+    bug and kept as-is (spec §2 decision 7)."""
+    for i in range(len(ocr_paragraphs)):
+        regions = _paragraph_regions(ocr_paragraphs, i)
+        if regions is not None and _page_of(regions) is not None:
+            return {"bounding_regions": regions, "page": _page_of(regions)}
+    return None
+
+
 def build_provenance(graph: Mapping[str, object], ocr: Mapping[str, object]) -> dict[str, object]:
     """Resolve every `graph` node to the page + bounding geometry of the OCR
-    paragraph it was built from.
+    paragraph it was built from, via a direct index lookup into
+    `ocr["paragraphs"][node["source_index"]]` -- O(1) per node, no text/label
+    matching anywhere in this function.
 
-    - a "paragraph" node: the FIRST ocr paragraph (document order) whose
-      `content` startswith the node's (80-char-truncated) `label`.
-    - a "section" node: the FIRST ocr paragraph whose `content` equals the
-      node's (untruncated) `label`.
-    - the "doc" node (`id == "doc"`): the page of the FIRST ocr paragraph
-      with any non-empty `bounding_regions`.
+    A node whose `source_index` is `None`, not a (non-bool) `int`, negative,
+    out of range, or whose paragraph is not a `Mapping` or has empty/unusable
+    `bounding_regions`, is OMITTED from `node_provenance` -- never emitted
+    with a null/placeholder page (unchanged conservative policy).
 
-    A node with no match, or whose matched paragraph has empty/unusable
-    geometry, is OMITTED from `node_provenance` -- never emitted with a
-    null/placeholder page. Ambiguous matches (shared prefixes/duplicate
-    headings) resolve to the first in document order -- deterministic, a
-    documented thin-slice limitation (spec §2 decision 3 / §6).
+    The `doc` node (`id == "doc"`) is index-first: if its `source_index`
+    resolves to a paragraph with usable geometry, use it directly; otherwise
+    fall back to the first OCR paragraph (document order) with any non-empty,
+    page-bearing `bounding_regions` -- this fallback scan is positional, not a
+    label match, so it predates and is unaffected by the ambiguity fix.
     """
-    candidates = _ocr_paragraph_candidates(ocr)
-
-    doc_entry: dict[str, object] | None = None
-    for _content, regions in candidates:
-        page = _page_of(regions)
-        if page is not None:
-            doc_entry = {"node_id": "doc", "page": page, "bounding_regions": regions}
-            break
+    ocr_paragraphs = _ocr_paragraphs(ocr)
 
     nodes_raw = graph.get("nodes")
     nodes: list[Mapping[str, object]] = []
@@ -75,28 +83,23 @@ def build_provenance(graph: Mapping[str, object], ocr: Mapping[str, object]) -> 
     node_provenance: list[dict[str, object]] = []
     for node in nodes:
         node_id = node.get("id")
-        if node_id == "doc":
-            if doc_entry is not None:
-                node_provenance.append(doc_entry)
+        if not isinstance(node_id, str):
             continue
 
-        node_type = node.get("type")
-        label_raw = node.get("label")
-        label = label_raw if isinstance(label_raw, str) else ""
+        regions = _paragraph_regions(ocr_paragraphs, node.get("source_index"))
+        page = _page_of(regions) if regions is not None else None
 
-        match: _Candidate | None = None
-        if node_type == "paragraph":
-            match = next((c for c in candidates if c[0].startswith(label)), None)
-        elif node_type == "section":
-            match = next((c for c in candidates if c[0] == label), None)
-        else:
+        if node_id == "doc" and page is None:
+            fallback = _first_paragraph_with_regions(ocr_paragraphs)
+            if fallback is not None:
+                node_provenance.append({
+                    "node_id": "doc",
+                    "page": fallback["page"],
+                    "bounding_regions": fallback["bounding_regions"],
+                })
             continue
 
-        if match is None or not isinstance(node_id, str):
-            continue
-        _, regions = match
-        page = _page_of(regions)
-        if page is None:
+        if page is None or regions is None:
             continue
         node_provenance.append({"node_id": node_id, "page": page, "bounding_regions": regions})
 

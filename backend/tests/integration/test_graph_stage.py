@@ -86,13 +86,15 @@ async def test_graph_chains_off_ast(session_factory, store) -> None:  # fixtures
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     graph_key = artifact_key(
-        doc.id, "graph", 1, derived_input_hash([facts["ast"].output_hash])
+        doc.id, "graph", 2, derived_input_hash([facts["ast"].output_hash])
     )
     body = await store.get_json(graph_key)
+    assert body["schema_version"] == 2
     assert body["nodes"] == [
-        {"id": "doc", "type": "document", "label": "ACME LTD"},
-        {"id": "s0", "type": "section", "label": "Directors' Report"},
-        {"id": "s0p0", "type": "paragraph", "label": "The board is pleased."},
+        {"id": "doc", "type": "document", "label": "ACME LTD", "source_index": 0},
+        {"id": "s0", "type": "section", "label": "Directors' Report", "source_index": 1},
+        {"id": "s0p0", "type": "paragraph", "label": "The board is pleased.",
+         "source_index": 2},
     ]
     assert body["edges"] == [
         {"source": "doc", "target": "s0", "type": "CONTAINS"},

@@ -1,6 +1,13 @@
 from collections.abc import Mapping, Sequence
 
 
+def _as_source_index(value: object) -> int | None:
+    """Degrade anything but a real (non-bool) `int` to `None`. Never raises."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
 def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
     """Build a typed CONTAINS/READING_ORDER node/edge graph over an AST.
 
@@ -13,18 +20,27 @@ def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
     Pure, deterministic: node ids are positional (`doc`, `s{i}`, `s{i}p{j}`),
     not UUIDs, so a re-run over the same AST produces a byte-identical graph.
 
+    Every node also carries `source_index` (int | None), read from the AST's
+    `title_source_index`/`heading_source_index`/`paragraph_source_indices`
+    (positionally, by the same index used to build the node id) -- a
+    non-`int`/missing value degrades to `None`, never raises. Paragraph node
+    labels are the full paragraph text (no truncation).
+
     Args:
         ast: AST dict with optional title and sections (as produced by
             `fdi.core.ast.build_ast`).
 
     Returns:
-        Graph dict with schema_version, nodes ({id, type, label}), and edges
-        ({source, target, type}).
+        Graph dict with schema_version, nodes ({id, type, label,
+        source_index}), and edges ({source, target, type}).
     """
     title_raw = ast.get("title")
     title = title_raw if isinstance(title_raw, str) else ""
+    title_source_index = _as_source_index(ast.get("title_source_index"))
 
-    nodes: list[dict[str, object]] = [{"id": "doc", "type": "document", "label": title}]
+    nodes: list[dict[str, object]] = [
+        {"id": "doc", "type": "document", "label": title, "source_index": title_source_index}
+    ]
     edges: list[dict[str, object]] = []
 
     sections_raw = ast.get("sections")
@@ -39,7 +55,11 @@ def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
         sid = f"s{i}"
         heading_raw = section.get("heading")
         heading = heading_raw if isinstance(heading_raw, str) else ""
-        nodes.append({"id": sid, "type": "section", "label": heading})
+        heading_source_index = _as_source_index(section.get("heading_source_index"))
+        nodes.append({
+            "id": sid, "type": "section", "label": heading,
+            "source_index": heading_source_index,
+        })
         edges.append({"source": "doc", "target": sid, "type": "CONTAINS"})
         if prev_section_id is not None:
             edges.append({"source": prev_section_id, "target": sid, "type": "READING_ORDER"})
@@ -52,16 +72,29 @@ def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
                 if isinstance(para, str):
                     paragraphs.append(para)
 
+        indices_raw = section.get("paragraph_source_indices")
+        paragraph_source_indices: list[object] = (
+            indices_raw if isinstance(indices_raw, list) else []
+        )
+
         prev_para_id: str | None = None
         for j, para in enumerate(paragraphs):
             pid = f"{sid}p{j}"
-            nodes.append({"id": pid, "type": "paragraph", "label": para[:80]})
+            para_source_index = (
+                _as_source_index(paragraph_source_indices[j])
+                if j < len(paragraph_source_indices)
+                else None
+            )
+            nodes.append({
+                "id": pid, "type": "paragraph", "label": para,
+                "source_index": para_source_index,
+            })
             edges.append({"source": sid, "target": pid, "type": "CONTAINS"})
             if prev_para_id is not None:
                 edges.append({"source": prev_para_id, "target": pid, "type": "READING_ORDER"})
             prev_para_id = pid
 
-    return {"schema_version": 1, "nodes": nodes, "edges": edges}
+    return {"schema_version": 2, "nodes": nodes, "edges": edges}
 
 
 def order_reading_chain(

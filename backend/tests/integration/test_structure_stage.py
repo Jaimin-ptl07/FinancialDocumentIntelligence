@@ -121,9 +121,10 @@ async def test_structure_stitches_and_filters(  # fixtures from conftest
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     structure_key = artifact_key(
-        doc.id, "structure", 2, derived_input_hash([facts["ocr"].output_hash])
+        doc.id, "structure", 3, derived_input_hash([facts["ocr"].output_hash])
     )
     body = await store.get_json(structure_key)
+    assert body["schema_version"] == 3
     assert len(body["tables"]) == 1 and body["tables"][0]["row_count"] == 5  # 2-page table stitched
     assert [b["role"] for b in body["blocks"]] == ["title"]  # footer removed
 
@@ -131,3 +132,5 @@ async def test_structure_stitches_and_filters(  # fixtures from conftest
     assert grid["n_rows"] == 5 and grid["n_cols"] == 3
     assert grid["header_row_count"] == 1
     assert grid["column_headers"] == ["Year", "Q1", "Q2"]
+    assert grid["cell_regions"][0][0] == []  # no bounding_regions on these fixture cells
+    assert grid["cell_pages"][0][0] is None
