@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from fdi.core.ontology import CanonicalConcept
+
 
 class JobAccepted(BaseModel):
     job_id: str
@@ -304,3 +306,61 @@ class ReadingOrderView(BaseModel):
     schema_version: int
     doc_id: str
     sections: list[GraphNodeView]
+
+
+class EntityTimelineQualityView(BaseModel):
+    ok: bool
+    error_count: int
+    warning_count: int
+
+
+class EntityTimelineEntryView(BaseModel):
+    doc_id: str
+    doc_key: str | None
+    version: int | None
+    section_count: int
+    concept_count: int
+    quality_ok: bool
+    concepts: list[str]
+    quality: EntityTimelineQualityView
+
+
+class EntityTimelineView(BaseModel):
+    schema_version: int
+    doc_key: str
+    member_count: int
+    timeline: list[EntityTimelineEntryView]
+    concepts: list[str]
+    concept_presence: dict[str, list[int | str]]
+
+
+class ConceptComparisonValueView(BaseModel):
+    column_header: str
+    raw: str
+    value: float | None
+
+
+class ConceptComparisonRowView(BaseModel):
+    table_index: int
+    row_label: str
+    values: list[ConceptComparisonValueView]
+
+
+class ConceptComparisonVersionView(BaseModel):
+    doc_id: str
+    doc_key: str | None
+    version: int | None
+    status: str
+    rows: list[ConceptComparisonRowView]
+
+
+class ConceptCompareRequest(BaseModel):
+    doc_key: str
+    concept: CanonicalConcept
+
+
+class ConceptComparisonView(BaseModel):
+    schema_version: int
+    doc_key: str
+    concept: str
+    versions: list[ConceptComparisonVersionView]

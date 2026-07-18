@@ -1408,6 +1408,120 @@ async def test_concept_lookup_route_404_unknown_doc(
 
 
 # --------------------------------------------------------------------------
+# RT-7: GET /entities/{doc_key}/timeline, POST /entities/compare
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def two_version_doc_key_via_api(session_factory, store) -> str:
+    """Two documents, SAME doc_key, DIFFERENT pdf bytes (distinct checksums ->
+    version 1 revenue FY24=12,345, version 2 revenue FY25=15,000). Mirrors
+    doc_with_numeric_table's OCR shape (RT-6, immediately above) but run
+    TWICE under one doc_key to exercise RT-7's cross-version comparison."""
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.structure import StructureStage
+
+    def _ocr(header: str, value: str) -> FakeOcrClient:
+        return FakeOcrClient({
+            "content": "ACME LTD",
+            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [{
+                "role": "title", "content": "ACME LTD",
+                "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                "spans": [{"offset": 0, "length": 8}],
+            }],
+            "tables": [{
+                "rowCount": 2, "columnCount": 2,
+                "spans": [{"offset": 20, "length": 40}],
+                "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                "cells": [
+                    {"rowIndex": 0, "columnIndex": 0, "kind": "columnHeader",
+                     "content": "Particulars"},
+                    {"rowIndex": 0, "columnIndex": 1, "kind": "columnHeader", "content": header},
+                    {"rowIndex": 1, "columnIndex": 0, "content": "Total revenue from operations"},
+                    {"rowIndex": 1, "columnIndex": 1, "content": value},
+                ],
+            }],
+            "sections": [],
+        })
+
+    doc_key = str(uuid.uuid4())
+    for header, value in (("FY24", "12,345"), ("FY25", "15,000")):
+        doc = await intake_document(
+            pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+            filename="a.pdf", doc_key=doc_key, content_type="application/pdf",
+            session_factory=session_factory, store=store,
+        )
+        reg = StageRegistry()
+        reg.register(OcrStage())
+        reg.register(StructureStage())
+        resolver = DagResolver(reg.all())
+        common = {
+            "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+            "store": store, "registry": reg, "resolver": resolver,
+        }
+        await run_stage(
+            stage_name="ocr", run_id=str(uuid.uuid4()),
+            services={"ocr": _ocr(header, value)}, **common,
+        )
+        await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    return doc_key
+
+
+async def test_compare_route_matched_across_versions(
+    client: AsyncClient, _alembic_applied, two_version_doc_key_via_api
+) -> None:
+    resp = await client.post(
+        "/entities/compare",
+        json={"doc_key": two_version_doc_key_via_api, "concept": "REVENUE"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["doc_key"] == two_version_doc_key_via_api
+    assert body["concept"] == "REVENUE"
+    assert [v["status"] for v in body["versions"]] == ["matched", "matched"]
+    assert body["versions"][0]["rows"][0]["values"][0] == {
+        "column_header": "FY24", "raw": "12,345", "value": 12345.0,
+    }
+    assert body["versions"][1]["rows"][0]["values"][0] == {
+        "column_header": "FY25", "raw": "15,000", "value": 15000.0,
+    }
+
+
+async def test_compare_route_404_unknown_doc_key(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    resp = await client.post(
+        "/entities/compare", json={"doc_key": "no-such-key", "concept": "REVENUE"}
+    )
+    assert resp.status_code == 404
+
+
+async def test_entity_timeline_route(
+    client: AsyncClient, _alembic_applied, two_version_doc_key_via_api
+) -> None:
+    resp = await client.get(f"/entities/{two_version_doc_key_via_api}/timeline")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["doc_key"] == two_version_doc_key_via_api
+    assert body["member_count"] == 2
+    assert "entity_id" not in body
+    assert [t["version"] for t in body["timeline"]] == [1, 2]
+
+
+async def test_entity_timeline_route_404_unknown_doc_key(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    resp = await client.get("/entities/no-such-key/timeline")
+    assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------
 # RT-5: graph retrieval routes -- 503 when graph_store is unconfigured.
 # --------------------------------------------------------------------------
 
