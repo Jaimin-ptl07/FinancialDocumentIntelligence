@@ -1,7 +1,9 @@
 # SP-16 — Cross-Document Entity Resolution (embedding clustering)
 
-- **Status:** Design — approved 2026-07-18 (entity-resolution strategy: embedding-similarity clustering;
-  delivery: on-demand API; default threshold 0.85 — all three user-selected). Awaiting spec review.
+- **Status:** Implemented 2026-07-18 (entity-resolution strategy: embedding-similarity clustering;
+  delivery: on-demand API; default threshold 0.85 — all three user-selected). All done criteria (§7)
+  met; see `docs/superpowers/plans/2026-07-18-sp16-crossdoc-entity-resolution.md` for the executed
+  plan and `docs/architecture/ingestion-roadmap.md`'s "What SP-16 shipped" for the handoff.
 - **Depends on:**
   - **SP-13/SP-13b** (`EmbeddingStage`, `deps=("ast",)` → `{schema_version:1, model, dim,
     chunks:[{chunk_id, heading, vector}]}` at a content-addressed key; `vector` is a `list[float]` of

@@ -1,6 +1,57 @@
 # Financial Document Intelligence — Ingestion Layer Roadmap
 
-- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-9b, SP-10, SP-11, SP-12, SP-13, SP-14, SP-17, SP-17b** — landed across four parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures + footnotes into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact); `GraphLoadStage` (`deps=("graph",)`, SP-9b) projects that graph into a real Neo4j via an injected `GraphStore` (idempotent Cypher `MERGE`; `FakeGraphStore` in the default suite, `Neo4jGraphStore` in prod; the `graph` Compose profile wired end-to-end with a healthcheck — Neo4j loading no longer deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps headings/paragraphs onto 10 `CanonicalConcept`s (pure dictionary, no LLM; LLM mapper an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins graph nodes to OCR page/geometry (SP-12) — `QualityStage`/`ProvenanceStage` are the first two-dependency stages; `EmbeddingStage` (`deps=("ast",)`, SP-13) embeds one chunk per AST section via an injected `EmbeddingClient` (`FakeEmbeddingClient` in tests, `BgeEmbeddingClient` — local `BAAI/bge-small-en-v1.5`, 384-dim, fastembed/ONNX/CPU, no credentials — in prod, swapped in at **SP-13b** replacing SP-13's Azure OpenAI backend), producing `{schema_version:1, model, dim, chunks:[{chunk_id, heading, vector}]}` at a content-addressed key (run-once-cache like SP-10). `IndexStage` (`deps=("embedding",)`, SP-14) upserts that artifact's vectors into Milvus via an injected `VectorStore` (`FakeVectorStore` in the default suite, `MilvusVectorStore` in prod; zero chunks skips the upsert entirely; a cache hit does not re-run it), and `POST /search` — the first synchronous, task-free route — embeds a query and returns the nearest sections; the `vector` Compose profile (etcd+milvus) is now fully wired. `POST /documents/{id}/embedding` and `POST /documents/{id}/graph_load` mirror the SP-10 semantic trigger. **Done: SP-15.** `KnowledgeStage` (`deps=("semantic","ontology","quality")`, the codebase's first THREE-dependency stage) folds SP-10's section classification, SP-11's concept mappings, and SP-17b's quality report into one per-document `knowledge` artifact via the pure `fdi.core.knowledge.consolidate`. **Next: SP-16.** A future sub-project should build a read/query API over the now-populated Neo4j graph, the remaining phase-11 index types (metadata/entity/section/clause/table) once their source artifacts exist, and SP-16's cross-document entity-resolution layer consuming each document's `knowledge` record as its per-document input. All measured via SP-3's harness.
+- **Status:** Roadmap agreed 2026-07-15. **STAGE 1 COMPLETE** (SP-1–SP-6, SP-8, SP-18). **Stage 2 underway:** SP-7 research done (`docs/architecture/research/2026-07-17-sp7-structural.md`). **Done: SP-7a, SP-7b, SP-7c, SP-7d, SP-9, SP-9b, SP-10, SP-11, SP-12, SP-13, SP-14, SP-17, SP-17b** — landed across four parallel git-worktree waves. OCR enriched to `schema_version 4` (geometry, spans, cells, sections, figures + captions); `StructureStage` (v2) stitches cross-page tables, removes header/footer, and canonicalizes each table's grid (`canonicalize_table`); `LinkingStage` surfaces figures + footnotes into a `linking` artifact; `GraphStage` builds the `CONTAINS`/`READING_ORDER` node/edge graph over the AST (JSON artifact); `GraphLoadStage` (`deps=("graph",)`, SP-9b) projects that graph into a real Neo4j via an injected `GraphStore` (idempotent Cypher `MERGE`; `FakeGraphStore` in the default suite, `Neo4jGraphStore` in prod; the `graph` Compose profile wired end-to-end with a healthcheck — Neo4j loading no longer deferred); `SemanticStage` classifies AST sections into 8 `SectionType`s (Azure OpenAI, mockable); `OntologyStage` maps headings/paragraphs onto 10 `CanonicalConcept`s (pure dictionary, no LLM; LLM mapper an SP-3 candidate); `QualityStage` (v2, `deps=("ast","structure")`) validates the AST AND the structure tables in one merged report (SP-17b); `ProvenanceStage` (`deps=("graph","ocr")`) joins graph nodes to OCR page/geometry (SP-12) — `QualityStage`/`ProvenanceStage` are the first two-dependency stages; `EmbeddingStage` (`deps=("ast",)`, SP-13) embeds one chunk per AST section via an injected `EmbeddingClient` (`FakeEmbeddingClient` in tests, `BgeEmbeddingClient` — local `BAAI/bge-small-en-v1.5`, 384-dim, fastembed/ONNX/CPU, no credentials — in prod, swapped in at **SP-13b** replacing SP-13's Azure OpenAI backend), producing `{schema_version:1, model, dim, chunks:[{chunk_id, heading, vector}]}` at a content-addressed key (run-once-cache like SP-10). `IndexStage` (`deps=("embedding",)`, SP-14) upserts that artifact's vectors into Milvus via an injected `VectorStore` (`FakeVectorStore` in the default suite, `MilvusVectorStore` in prod; zero chunks skips the upsert entirely; a cache hit does not re-run it), and `POST /search` — the first synchronous, task-free route — embeds a query and returns the nearest sections; the `vector` Compose profile (etcd+milvus) is now fully wired. `POST /documents/{id}/embedding` and `POST /documents/{id}/graph_load` mirror the SP-10 semantic trigger. `KnowledgeStage` (`deps=("semantic","ontology","quality")`, the codebase's first THREE-dependency stage) folds SP-10's section classification, SP-11's concept mappings, and SP-17b's quality report into one per-document `knowledge` artifact via the pure `fdi.core.knowledge.consolidate`. **Done: SP-16 (2026-07-18) — THE INGESTION LAYER ROADMAP IS COMPLETE (SP-1…SP-18 all landed).** `fdi.core.crossdoc` clusters documents into real-world entities by embedding-similarity (pure, single-linkage connected components over a cosine-threshold graph); `fdi.pipeline.crossdoc.resolve_entities` enumerates the corpus and folds each cluster's `knowledge` records into an entity record; `POST /entities/resolve` — the second synchronous, task-free route after `/search` — delivers it on-demand, no new Stage. A future project should build a read/query API over the now-populated Neo4j graph, the remaining phase-11 index types (metadata/entity/section/clause/table), and the scale/persistence/graph-merge follow-ons SP-16 deferred (see "What SP-16 shipped" below) — but those are enhancements to a complete ingestion layer, not gaps in it. All measured via SP-3's harness.
+
+### What SP-16 shipped — the ingestion layer roadmap is complete
+
+- **`fdi.core.crossdoc` (pure)** provides `document_vector` (mean-pool + L2-normalize an SP-13
+  `embedding` artifact's chunk vectors), `cosine` (guarded cosine similarity), `cluster`
+  (single-linkage connected components over the `cosine >= threshold` graph — deterministic,
+  order-independent, no k, no seed), and `consolidate_entity` (folds clustered members' `knowledge`
+  records into one entity record: version-ordered `members`, sorted-union `concepts`,
+  `concept_presence` mapping each concept to the member versions it appears in — the cross-document
+  reference — and a version-ordered `quality_trend`). `entity_id` is the min member `doc_id`
+  (deterministic, no wall-clock/RNG). Never raises; malformed/partial input degrades to a
+  smaller/emptier result. Imports neither `fdi.core.knowledge` nor `fdi.core.embeddings` — every
+  input is read as a plain `Mapping`/`Sequence`, the same defensive posture `consolidate`/
+  `build_graph` already use.
+- **`fdi.pipeline.crossdoc.resolve_entities`** is the corpus-level orchestrator: it calls the new
+  `RegistryRepository.list_documents()` to enumerate every `Document`, reads each one's latest
+  `embedding` + `knowledge` artifacts via the existing `latest_run` → `get_json` path (same read path
+  as `GET /documents/{id}/artifacts/{stage}`), clusters on embedding similarity, and folds each
+  cluster into an entity record. Makes no new embedding call — it reuses SP-13's already-cached
+  per-section vectors. A document with no `embedding` artifact (or an empty vector) is excluded from
+  clustering and reported in a top-level `unresolved` list, never silently dropped or forced into a
+  fabricated entity. A store-level read failure for one document's artifact degrades to "no
+  artifact" for that document alone rather than aborting the whole corpus scan (mirrors
+  `routes._probe`'s isolate-one-failure posture).
+- **`POST /entities/resolve`** — the second synchronous, task-free route after SP-14's `/search` — is
+  the delivery mechanism (user-selected: on-demand recomputation, no persisted entity index, no
+  staleness/refresh machinery). Body `{"threshold": float | null}` overrides
+  `Settings.entity_sim_threshold` (`FDI_ENTITY_SIM_THRESHOLD`, default 0.85, mirrored across
+  `config.py` / `compose.yml` / `.env.example` per the inert-config discipline) for that call only;
+  out-of-range (`0.0 <= threshold <= 1.0` violated) is a 422 before any work runs. No 503 gate: unlike
+  `/search`, entity resolution needs neither Milvus nor an embedder at request time — it only reads
+  already-stored artifacts — so an empty or under-processed corpus simply returns
+  `entity_count: 0, entities: [], unresolved: [...]`.
+- **No new Stage.** Entity resolution is corpus-level by design (spec decision 8) — it needs many
+  documents at once and does not fit the per-document `Stage`/DAG model. `fdi.pipeline.crossdoc`
+  imports `fdi.platform.db.repository` + `fdi.platform.storage.artifact_store` + `fdi.core.crossdoc`,
+  the same `pipeline → platform → core` shape `fdi.pipeline.intake`/`fdi.pipeline.eval_service`
+  already established — not a new pattern. `backend/src/fdi/pipeline/stages/__init__.py` is
+  unchanged.
+- **Explicitly deferred, each a clean follow-on reusing `fdi.core.crossdoc` unchanged:** Milvus-ANN
+  clustering for scale (exact pairwise cosine is O(n²·dim) — fine at dev/test scale, the real-scale
+  path once the corpus is large); a materialized/persisted entity index (`GET /entities` +
+  refresh/staleness — the unchosen delivery alternative to on-demand); content-name / fuzzy entity
+  resolution (extracting and matching company names — the unchosen resolution strategy, a possible
+  future tie-breaker); cross-document Neo4j graph merge (SP-9b flagged that its per-document node ids
+  collide across documents and deferred the fix here — projecting entity records into Neo4j as
+  entity-linking edges is a separate graph-load follow-on, not required for the resolve API itself);
+  numeric roll-ups across versions (blocked on real numeric-value extraction, deferred since SP-11
+  §6 / SP-15 §6 — `concept_presence` gives which concepts recur across versions, not their values).
+- **Spec:** `docs/superpowers/specs/2026-07-18-sp16-crossdoc-entity-resolution-design.md`. **Plan:**
+  `docs/superpowers/plans/2026-07-18-sp16-crossdoc-entity-resolution.md`.
 
 ### What SP-15 shipped that SP-16 must know
 
@@ -345,7 +396,7 @@ Each row is one spec → plan → implement cycle.
 | **SP-13b** | Embeddings backend swap: Azure OpenAI → BGE-small (local, fastembed) | 10 | light | ✅ done |
 | **SP-14** | Retrieval Indexes | 11 | **heavy** | ✅ done (vector index + search only; metadata/entity/section/clause/table indexes deferred) |
 | **SP-15** | Knowledge Store consolidation | 12 | light | ✅ done (thin: semantic+ontology+quality only; graph/provenance/embedding, numeric roll-ups, and external persistence deferred) |
-| **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ⬜ |
+| **SP-16** | Cross-document layer — entity resolution, version linking, cross-doc refs | enterprise | **heavy** | ✅ done (thin: embedding-similarity clustering, on-demand API; Milvus-ANN scale, materialized persistence, content-name resolution, cross-doc Neo4j merge, numeric roll-ups deferred) |
 | **SP-17** | Quality validation framework | enterprise | medium | ✅ done (thin) |
 | **SP-17b** | Structure-aware quality (SP-17 follow-on) | enterprise | light | ✅ done |
 | **SP-18** | Next.js frontend | — | light | ✅ done (thin) |
