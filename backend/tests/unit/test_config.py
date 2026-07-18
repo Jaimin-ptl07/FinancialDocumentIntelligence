@@ -94,3 +94,10 @@ def test_milvus_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
     s = Settings()
     assert s.milvus_uri is None
     assert s.milvus_collection == "fdi_sections"
+
+
+def test_entity_resolution_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.entity_sim_threshold == 0.85

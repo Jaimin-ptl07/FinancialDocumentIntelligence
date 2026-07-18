@@ -97,6 +97,14 @@ class Settings(BaseSettings):
     milvus_uri: str | None = None
     milvus_collection: str = "fdi_sections"
 
+    # Cross-document entity resolution (SP-16). Cosine-similarity threshold for
+    # single-linkage clustering of whole-document embedding vectors: two documents
+    # join the same entity when their vectors are cosine-similar at or above this.
+    # 0.85 balances recall (a company's filings across years cluster together)
+    # against precision (distinct companies stay apart); tune against real data via
+    # this var without a redeploy, or per-request via POST /entities/resolve's body.
+    entity_sim_threshold: float = 0.85
+
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":
         """Fail loudly on a typo'd FDI_ variable.
