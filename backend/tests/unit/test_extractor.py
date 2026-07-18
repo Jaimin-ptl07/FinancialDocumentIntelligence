@@ -156,6 +156,19 @@ def test_build_extraction_messages_system_states_json_contract() -> None:
     assert "value" in system and "source" in system and "confidence" in system
 
 
+def test_build_extraction_messages_system_states_extraction_guidance() -> None:
+    """Hardened system prompt (field-agnostic): current-year column over
+    prior-year comparative, primary statement over notes/schedules, label
+    synonyms, and unit fidelity (no rescaling)."""
+    system, _ = build_extraction_messages(_field(), [])
+    system_cf = system.lower()
+    assert "current reporting-year value" in system_cf
+    assert "prior-year comparative" in system_cf
+    assert "primary financial statement" in system_cf
+    assert "label synonyms" in system_cf
+    assert "do not" in system_cf and "rescale" in system_cf
+
+
 def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
     cands = [_cand("d1:s0", "Total assets were 100.", 0.9)]
     _, user = build_extraction_messages(_field(), cands)

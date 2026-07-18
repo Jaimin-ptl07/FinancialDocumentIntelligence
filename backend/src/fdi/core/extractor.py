@@ -161,13 +161,32 @@ def rerank_candidates(
 
 def build_extraction_messages(field: FieldSpec, candidates: Sequence[Candidate]) -> tuple[str, str]:
     """(system, user) messages for ExtractorClient.extract. system states
-    the JSON output_contract and the "only the given context" constraint;
-    user carries field.extraction_prompt plus every candidate labeled with
-    its evidence_id/page/text, so the LLM can cite one back."""
+    the JSON output_contract and the "only the given context" constraint,
+    plus four field-agnostic extraction rules learned from real-document
+    extraction misses (multi-year columns, statement-vs-notes duplication,
+    label wording drift, unit fidelity -- see module docstring's design
+    spec); user carries field.extraction_prompt plus every candidate
+    labeled with its evidence_id/page/text, so the LLM can cite one back."""
     system = (
         "You extract ONE field's value from financial-document context. Use "
         "ONLY the context given below -- never prior knowledge of a specific "
-        "company or filing. Respond with a single JSON object, nothing else, "
+        "company or filing. "
+        "When a context row/line shows more than one period column (financial "
+        "statements commonly print the current year then the prior year side "
+        "by side), return the CURRENT reporting-year value -- the FIRST / "
+        "most-recent period column -- never a prior-year comparative. "
+        "When the same figure appears in more than one place, prefer the "
+        "value from the PRIMARY financial statement (Balance Sheet, "
+        "Statement of Profit and Loss, or Cash Flow Statement) over a note, "
+        "schedule, or other disclosure that restates it. "
+        "The field may be labeled differently than its name in the "
+        "document -- recognize LABEL SYNONYMS and extract a value whose "
+        "MEANING matches even when the wording differs (e.g. \"closing cash "
+        "balance\" = \"Cash and cash equivalents\" at year-end; \"revenue\" "
+        "= \"Revenue from operations\"). "
+        "Return the number exactly as printed in the context -- do not "
+        "rescale, convert, or reinterpret units. "
+        "Respond with a single JSON object, nothing else, "
         "shaped exactly like this: "
         '{"value": <the extracted value, or null if not present in the '
         'context>, "source": {"page": <int or null>, "snippet": <verbatim '
