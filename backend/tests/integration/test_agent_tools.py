@@ -113,7 +113,8 @@ async def test_get_tables_no_structure_artifact_yet_returns_structured_error(
     session_factory, store
 ) -> None:
     doc = await intake_document(
-        pdf=b"%PDF-1.7\n%fake\n", filename="a.pdf", doc_key=str(uuid.uuid4()),
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(), filename="a.pdf",
+        doc_key=str(uuid.uuid4()),
         content_type="application/pdf", session_factory=session_factory, store=store,
     )
     async with session_factory() as s:
