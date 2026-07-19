@@ -92,9 +92,9 @@ async def indexed_doc(session_factory, store) -> tuple[str, str, int]:
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="semantic", run_id=str(uuid.uuid4()),
                      services={"semantic": fake_semantic}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:

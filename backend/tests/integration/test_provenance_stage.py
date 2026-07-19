@@ -20,6 +20,7 @@ from fdi.pipeline.stages.graph import GraphStage
 from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
 from fdi.pipeline.stages.provenance import ProvenanceStage
+from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -77,6 +78,7 @@ async def test_provenance_chains_off_graph_and_ocr(session_factory, store) -> No
     reg.register(OcrStage())
     reg.register(NormalizeStage())
     reg.register(AstStage())
+    reg.register(StructureStage())
     reg.register(GraphStage())
     reg.register(ProvenanceStage())
     resolver = DagResolver(reg.all())
@@ -95,6 +97,7 @@ async def test_provenance_chains_off_graph_and_ocr(session_factory, store) -> No
     await run_stage(stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake}, **common)
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
 

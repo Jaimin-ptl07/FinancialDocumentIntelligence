@@ -1,6 +1,8 @@
-"""AstStage auto-chains off NormalizeStage: `ast` is a DERIVED stage
-(`deps=("normalize",)`) that builds the naive title/sections/paragraphs AST from
-the unified document, against real Postgres + MinIO with a FAKE OCR client."""
+"""AstStage auto-chains off NormalizeStage AND OcrStage: `ast` is a DERIVED
+stage (`deps=("normalize", "ocr")`) that builds the naive title/sections/
+paragraphs AST from the unified document, then additively attaches
+`table_refs`/`figure_refs` (Phase 3b) from the `ocr` artifact's `sections[]`
+hierarchy, against real Postgres + MinIO with a FAKE OCR client."""
 
 import uuid
 
@@ -55,7 +57,20 @@ async def test_ast_chains_off_normalize(session_factory, store) -> None:  # fixt
                 {"role": "sectionHeading", "content": "Directors' Report"},
                 {"content": "The board is pleased."},
             ],
-            "tables": [],
+            "tables": [
+                {
+                    "rowCount": 1, "columnCount": 1, "boundingRegions": [], "cells": [],
+                    "spans": [], "caption": {"content": "T0", "boundingRegions": []},
+                    "footnotes": [],
+                },
+            ],
+            "figures": [
+                {"caption": {"content": "Org chart"}, "boundingRegions": []},
+            ],
+            "sections": [
+                {"elements": ["/paragraphs/0", "/paragraphs/1", "/tables/0",
+                              "/paragraphs/2", "/figures/0"]},
+            ],
         }
     )
 
@@ -66,6 +81,7 @@ async def test_ast_chains_off_normalize(session_factory, store) -> None:  # fixt
     resolver = DagResolver(reg.all())
 
     assert "ast" in resolver.successors("normalize")  # the chain is automatic
+    assert "ast" in resolver.successors("ocr")  # ... off BOTH deps
 
     common = {
         "doc_id": doc.id,
@@ -83,7 +99,8 @@ async def test_ast_chains_off_normalize(session_factory, store) -> None:  # fixt
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     ast_key = artifact_key(
-        doc.id, "ast", 3, derived_input_hash([facts["normalize"].output_hash])
+        doc.id, "ast", 4,
+        derived_input_hash([facts["normalize"].output_hash, facts["ocr"].output_hash]),
     )
     body = await store.get_json(ast_key)
     assert body["schema_version"] == 2
@@ -95,5 +112,7 @@ async def test_ast_chains_off_normalize(session_factory, store) -> None:  # fixt
             "heading_source_index": 1,
             "paragraphs": ["The board is pleased."],
             "paragraph_source_indices": [2],
+            "table_refs": [0],
+            "figure_refs": [{"index": 0, "caption": "Org chart"}],
         }
     ]

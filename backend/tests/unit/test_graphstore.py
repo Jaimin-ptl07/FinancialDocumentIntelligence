@@ -87,3 +87,55 @@ def test_fake_document_structure_scopes_by_doc_id_across_two_documents() -> None
     _load_two_section_doc(fake, "d2")
     out1 = fake.document_structure("d1")
     assert [s["id"] for s in out1["sections"]] == ["d1:s0", "d1:s1"]
+
+
+def _load_doc_with_table_and_figure(fake: FakeGraphStore, doc_id: str) -> None:
+    nodes = [
+        {"id": f"{doc_id}:doc", "type": "document", "label": "ACME", "doc_id": doc_id},
+        {"id": f"{doc_id}:s0", "type": "section", "label": "Balance Sheet", "doc_id": doc_id},
+        {"id": f"{doc_id}:t3", "type": "table", "label": "Table 3", "doc_id": doc_id},
+        {"id": f"{doc_id}:f1", "type": "figure", "label": "Figure 1", "doc_id": doc_id},
+    ]
+    edges = [
+        {"source": f"{doc_id}:doc", "target": f"{doc_id}:s0", "type": "CONTAINS"},
+        {"source": f"{doc_id}:s0", "target": f"{doc_id}:t3", "type": "CONTAINS"},
+        {"source": f"{doc_id}:s0", "target": f"{doc_id}:f1", "type": "CONTAINS"},
+    ]
+    fake.load(nodes, edges)
+
+
+def test_fake_document_structure_surfaces_tables_and_figures_per_section() -> None:
+    fake = FakeGraphStore()
+    _load_doc_with_table_and_figure(fake, "d1")
+    out = fake.document_structure("d1")
+    section = out["sections"][0]
+    assert [t["id"] for t in section["tables"]] == ["d1:t3"]
+    assert section["tables"][0]["type"] == "table"
+    assert section["tables"][0]["label"] == "Table 3"
+    assert [f["id"] for f in section["figures"]] == ["d1:f1"]
+    assert section["figures"][0]["type"] == "figure"
+
+
+def test_fake_document_structure_sorts_tables_numerically_not_lexicographically() -> None:
+    fake = FakeGraphStore()
+    nodes = [
+        {"id": "d1:doc", "type": "document", "label": "ACME", "doc_id": "d1"},
+        {"id": "d1:s0", "type": "section", "label": "S", "doc_id": "d1"},
+        {"id": "d1:t10", "type": "table", "label": "Table 10", "doc_id": "d1"},
+        {"id": "d1:t2", "type": "table", "label": "Table 2", "doc_id": "d1"},
+    ]
+    edges = [
+        {"source": "d1:doc", "target": "d1:s0", "type": "CONTAINS"},
+        {"source": "d1:s0", "target": "d1:t10", "type": "CONTAINS"},
+        {"source": "d1:s0", "target": "d1:t2", "type": "CONTAINS"},
+    ]
+    fake.load(nodes, edges)
+    out = fake.document_structure("d1")
+    assert [t["id"] for t in out["sections"][0]["tables"]] == ["d1:t2", "d1:t10"]
+
+
+def test_fake_reading_order_excludes_paragraphs_tables_and_figures() -> None:
+    fake = FakeGraphStore()
+    _load_doc_with_table_and_figure(fake, "d1")
+    out = fake.reading_order("d1")
+    assert all("paragraphs" not in s and "tables" not in s and "figures" not in s for s in out)

@@ -24,6 +24,7 @@ from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
 from fdi.pipeline.stages.provenance import ProvenanceStage
 from fdi.pipeline.stages.semantic import SemanticStage
+from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -86,6 +87,7 @@ async def processed_doc(session_factory, store, graph_store: FakeGraphStore) -> 
     reg.register(NormalizeStage())
     reg.register(AstStage())
     reg.register(SemanticStage())
+    reg.register(StructureStage())
     reg.register(GraphStage())
     reg.register(ProvenanceStage())
     reg.register(GraphLoadStage())
@@ -104,6 +106,7 @@ async def processed_doc(session_factory, store, graph_store: FakeGraphStore) -> 
         stage_name="semantic", run_id=str(uuid.uuid4()),
         services={"semantic": fake_semantic}, **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(

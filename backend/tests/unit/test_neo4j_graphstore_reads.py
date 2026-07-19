@@ -93,6 +93,8 @@ def test_document_structure_orders_sections_via_reading_order(
             ],
             "CONTAINS]->(p:Paragraph": [{"id": "d1:s0p0", "label": "P0", "section_id": "d1:s0"}],
             "READING_ORDER]->(b:Paragraph": [],
+            "CONTAINS]->(n:Table": [],
+            "CONTAINS]->(n:Figure": [],
         },
     )
     out = store.document_structure("d1")
@@ -100,6 +102,8 @@ def test_document_structure_orders_sections_via_reading_order(
     assert [s["id"] for s in out["sections"]] == ["d1:s0", "d1:s1"]
     assert [p["id"] for p in out["sections"][0]["paragraphs"]] == ["d1:s0p0"]
     assert out["sections"][1]["paragraphs"] == []
+    assert out["sections"][0]["tables"] == []
+    assert out["sections"][0]["figures"] == []
 
 
 def test_document_structure_unknown_doc_returns_none_document(
@@ -113,10 +117,40 @@ def test_document_structure_unknown_doc_returns_none_document(
             "READING_ORDER]->(b:Section": [],
             "CONTAINS]->(p:Paragraph": [],
             "READING_ORDER]->(b:Paragraph": [],
+            "CONTAINS]->(n:Table": [],
+            "CONTAINS]->(n:Figure": [],
         },
     )
     out = store.document_structure("no-such-doc")
     assert out == {"document": None, "sections": []}
+
+
+def test_document_structure_groups_and_numeric_sorts_tables_and_figures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _make_store(
+        monkeypatch,
+        {
+            "MATCH (d:Document": [{"id": "d1:doc", "label": "ACME"}],
+            "READING_ORDER]->(b:Section": [],
+            "MATCH (s:Section {doc_id: $doc_id}) RETURN": [{"id": "d1:s0", "label": "First"}],
+            "CONTAINS]->(p:Paragraph": [],
+            "READING_ORDER]->(b:Paragraph": [],
+            "CONTAINS]->(n:Table": [
+                {"id": "d1:t10", "label": "Table 10", "section_id": "d1:s0"},
+                {"id": "d1:t2", "label": "Table 2", "section_id": "d1:s0"},
+            ],
+            "CONTAINS]->(n:Figure": [
+                {"id": "d1:f1", "label": "Figure 1", "section_id": "d1:s0"},
+            ],
+        },
+    )
+    out = store.document_structure("d1")
+    section = out["sections"][0]
+    assert [t["id"] for t in section["tables"]] == ["d1:t2", "d1:t10"]  # numeric, not lexicographic
+    assert section["tables"][0]["type"] == "table"
+    assert [f["id"] for f in section["figures"]] == ["d1:f1"]
+    assert section["figures"][0]["type"] == "figure"
 
 
 def test_reading_order_returns_sections_without_paragraphs(

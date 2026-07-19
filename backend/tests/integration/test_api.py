@@ -756,9 +756,9 @@ async def rt3_indexed_doc(session_factory, store) -> tuple[str, str]:
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="semantic", run_id=str(uuid.uuid4()),
                      services={"semantic": fake_semantic}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     return doc.id, doc_key
 
@@ -1001,9 +1001,9 @@ async def _seed_processed_doc(session_factory, store) -> dict[str, object]:
         stage_name="semantic", run_id=str(uuid.uuid4()),
         services={"semantic": fake_semantic}, **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     return {"doc_id": doc.id, "doc_key": doc_key}
 
@@ -1158,9 +1158,9 @@ async def _seed_hybrid_doc(session_factory, store, *, marker: str) -> dict[str, 
         stage_name="semantic", run_id=str(uuid.uuid4()),
         services={"semantic": fake_semantic}, **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
@@ -1913,9 +1913,9 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
         stage_name="semantic", run_id=str(uuid.uuid4()),
         services={"semantic": FakeSemanticClient({"Balance Sheet": "BALANCE_SHEET"})}, **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     async with session_factory() as s:
         await index_chunks_fts(session=s, store=store, doc_id=doc.id)
@@ -2018,9 +2018,9 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
         stage_name="semantic", run_id=str(uuid.uuid4()),
         services={"semantic": FakeSemanticClient({"Overview": "MDNA"})}, **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     async with session_factory() as s:
         await index_chunks_fts(session=s, store=store, doc_id=doc.id)

@@ -145,9 +145,9 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
         services={"semantic": fake_semantic},
         **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:

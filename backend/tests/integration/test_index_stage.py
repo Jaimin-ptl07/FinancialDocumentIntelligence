@@ -109,9 +109,9 @@ async def test_index_stage_chains_off_embedding_and_chunks_and_caches(
         services={"semantic": fake_semantic},
         **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(
         stage_name="embedding",
