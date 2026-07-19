@@ -3,7 +3,13 @@ paragraphs and stitches cross-page tables. Auto-chains off OcrStage via
 `deps=("ocr",)`.
 
 # version=3: Phase 2 -- each table's `grid` additively carries `cell_regions`/
-# `cell_pages` (per-cell bounding geometry, from `canonicalize_table`)."""
+# `cell_pages` (per-cell bounding geometry, from `canonicalize_table`).
+# version=4: Phase 5 -- the previously-unreachable stitching gap threshold is
+# fixed (real cross-page merges now fire), a column-header structural guard
+# blocks the Note-2-Fixed-Assets false-merge shape, merged tables carry
+# forward `caption`/`footnotes`, and every output table additively carries
+# `source_indices`. `structure`'s `schema_version` stays 3 (behavior change,
+# not a shape change)."""
 
 from collections.abc import Mapping
 from typing import cast
@@ -19,7 +25,7 @@ _DROP = {Role.HEADER, Role.FOOTER, Role.PAGE_NUMBER}
 
 class StructureStage:
     name = "structure"
-    version = 3
+    version = 4
     deps: tuple[str, ...] = ("ocr",)
 
     async def run(self, ctx: StageContext) -> object:

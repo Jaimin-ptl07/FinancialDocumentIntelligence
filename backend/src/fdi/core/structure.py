@@ -2,7 +2,15 @@
 from collections.abc import Mapping
 from typing import cast
 
+from fdi.core.table_grid import canonicalize_table
+
 _FURNITURE = {"pageHeader", "pageFooter", "pageNumber"}
+# Sanity backstop, not the primary discriminator -- _only_furniture_between's
+# per-paragraph role scan is the real gate. The one directly measured real
+# furniture instance (a running header + page number) is ~28-29 chars; 300 is
+# roughly 10x that to also cover multi-line furniture without plausibly
+# spanning real, unrelated body content between two unrelated tables.
+_MAX_FURNITURE_GAP_CHARS = 300
 
 
 def _span_start(t: Mapping[str, object]) -> int:
@@ -40,6 +48,22 @@ def _only_furniture_between(a: Mapping[str, object], b: Mapping[str, object],
     return True
 
 
+def _headers_compatible(a: Mapping[str, object], b: Mapping[str, object]) -> bool:
+    """True iff merging a<-b would not splice together two tables whose OWN
+    resolved column headers disagree. A genuine continuation's second slice
+    normally has no header cells of its own (Azure does not restate the
+    header across a table split) -- that degenerate all-blank case is
+    compatible by default. A table that DOES carry its own header (e.g. a
+    same-shaped-by-column-count but semantically different schedule, such as
+    a prior-year comparative table) must match `a`'s resolved header exactly."""
+    b_grid = canonicalize_table(b)
+    b_headers = cast(list[str], b_grid["column_headers"])
+    if b_grid["header_row_count"] == 0 or not any(h.strip() for h in b_headers):
+        return True
+    a_grid = canonicalize_table(a)
+    return cast(list[str], a_grid["column_headers"]) == b_headers
+
+
 def _can_merge(a: Mapping[str, object], b: Mapping[str, object],
                paragraphs: list[Mapping[str, object]]) -> bool:
     la, fb = _last_page(a), _first_page(b)
@@ -47,10 +71,12 @@ def _can_merge(a: Mapping[str, object], b: Mapping[str, object],
         return False
     if a.get("column_count") != b.get("column_count"):    # equal columns
         return False
-    gap = _span_start(b) - _span_end(a)                   # reading-order gap <= 2
-    if not 0 <= gap <= 2:
+    gap = _span_start(b) - _span_end(a)                   # reading-order gap
+    if not 0 <= gap <= _MAX_FURNITURE_GAP_CHARS:
         return False
-    return _only_furniture_between(a, b, paragraphs)
+    if not _only_furniture_between(a, b, paragraphs):
+        return False
+    return _headers_compatible(a, b)
 
 
 def _merge_two(a: Mapping[str, object], b: Mapping[str, object]) -> dict[str, object]:
@@ -68,20 +94,31 @@ def _merge_two(a: Mapping[str, object], b: Mapping[str, object]) -> dict[str, ob
                             + list(cast(list[object], b.get("bounding_regions", []))),
         "cells": a_cells + b_cells,
         "stitched": True,
+        "caption": a.get("caption"),
+        "footnotes": a.get("footnotes", []),
     }
 
 
 def merge_cross_page_tables(tables: list[Mapping[str, object]],
                             paragraphs: list[Mapping[str, object]]) -> list[dict[str, object]]:
-    ordered = sorted(tables, key=_span_start)
+    # `source_indices` bridges raw ocr["tables"] positions to structure["tables"]
+    # positions: a passthrough table keeps its own raw index; a merged table
+    # lists every raw index that fed it, in reading order. Captured via
+    # enumerate() *before* the reading-order sort below.
+    indexed = sorted(enumerate(tables), key=lambda kv: _span_start(kv[1]))
     out: list[dict[str, object]] = []
     i = 0
-    while i < len(ordered):
-        cur: dict[str, object] = {**ordered[i]}
+    while i < len(indexed):
+        idx0, first = indexed[i]
+        cur: dict[str, object] = {**first}
+        source_indices = [idx0]
         j = i + 1
-        while j < len(ordered) and _can_merge(cur, ordered[j], paragraphs):
-            cur = _merge_two(cur, ordered[j])
+        while j < len(indexed) and _can_merge(cur, indexed[j][1], paragraphs):
+            idx_j, tbl_j = indexed[j]
+            cur = _merge_two(cur, tbl_j)
+            source_indices.append(idx_j)
             j += 1
+        cur["source_indices"] = source_indices
         out.append(cur)
         i = j
     return out
