@@ -1,10 +1,11 @@
 # backend/tests/integration/test_quality_stage.py
-"""QualityStage auto-chains off AstStage AND StructureStage: `quality` is a
-DERIVED stage (`deps=("ast","structure")`) that validates the naive AST for
-internal defects AND the structure artifact's tables for shape defects,
-merging both into ONE report via `validate_all`. Against real Postgres +
-MinIO with a FAKE OCR client. (SP-17b: the pipeline's first
-two-dependency stage.)"""
+"""QualityStage auto-chains off AstStage, StructureStage, AND OntologyStage:
+`quality` is a DERIVED stage (`deps=("ast","structure","ontology")`, Phase 4)
+that validates the naive AST for internal defects, the structure artifact's
+tables for shape defects, AND the ontology artifact's concept_values for
+reconciliation defects, merging all three into ONE report via `validate_all`.
+Against real Postgres + MinIO with a FAKE OCR client. (Phase 4: the
+pipeline's first three-dependency stage before KnowledgeStage.)"""
 
 import uuid
 
@@ -21,6 +22,7 @@ from fdi.pipeline.run import run_stage
 from fdi.pipeline.stages.ast import AstStage
 from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
+from fdi.pipeline.stages.ontology import OntologyStage
 from fdi.pipeline.stages.quality import QualityStage
 from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
@@ -70,11 +72,13 @@ async def test_quality_chains_off_ast_and_structure(session_factory, store) -> N
     reg.register(NormalizeStage())
     reg.register(AstStage())
     reg.register(StructureStage())
+    reg.register(OntologyStage())
     reg.register(QualityStage())
     resolver = DagResolver(reg.all())
 
     assert "quality" in resolver.successors("ast")  # the chain is automatic
-    assert "quality" in resolver.successors("structure")  # NEW: second dep also schedules quality
+    assert "quality" in resolver.successors("structure")  # second dep also schedules quality
+    assert "quality" in resolver.successors("ontology")  # NEW: third dep also schedules quality
 
     common = {
         "doc_id": doc.id,
@@ -88,14 +92,18 @@ async def test_quality_chains_off_ast_and_structure(session_factory, store) -> N
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ontology", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     quality_key = artifact_key(
-        doc.id, "quality", 2,
-        derived_input_hash([facts["ast"].output_hash, facts["structure"].output_hash]),
+        doc.id, "quality", 3,
+        derived_input_hash([
+            facts["ast"].output_hash, facts["structure"].output_hash,
+            facts["ontology"].output_hash,
+        ]),
     )
     body = await store.get_json(quality_key)
     assert body == {
@@ -144,6 +152,7 @@ async def test_quality_merges_ast_and_structure_defects_into_one_report(
     reg.register(NormalizeStage())
     reg.register(AstStage())
     reg.register(StructureStage())
+    reg.register(OntologyStage())
     reg.register(QualityStage())
     resolver = DagResolver(reg.all())
 
@@ -159,14 +168,18 @@ async def test_quality_merges_ast_and_structure_defects_into_one_report(
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ontology", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     quality_key = artifact_key(
-        doc.id, "quality", 2,
-        derived_input_hash([facts["ast"].output_hash, facts["structure"].output_hash]),
+        doc.id, "quality", 3,
+        derived_input_hash([
+            facts["ast"].output_hash, facts["structure"].output_hash,
+            facts["ontology"].output_hash,
+        ]),
     )
     body = await store.get_json(quality_key)
 
@@ -175,3 +188,98 @@ async def test_quality_merges_ast_and_structure_defects_into_one_report(
     assert body["error_count"] == 1  # only ast.no_sections is an error
     assert body["warning_count"] == 2  # ast.missing_title + structure.torn_table
     assert body["ok"] is False
+
+
+async def test_quality_emits_reconciliation_warning_without_flipping_ok(
+    session_factory, store
+) -> None:
+    """A structure whose BS grid genuinely does not balance -> the merged
+    quality report gains quality.balance_sheet_imbalance, warning_count
+    increments, but error_count/ok are UNAFFECTED (Phase 4 design spec §2
+    decision 9: reconciliation issues are always "warning" severity)."""
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+        filename="c.pdf",
+        doc_key=str(uuid.uuid4()),
+        content_type="application/pdf",
+        session_factory=session_factory,
+        store=store,
+    )
+
+    fake = FakeOcrClient(
+        {
+            "content": "ACME",
+            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [
+                {"role": "title", "content": "ACME LTD"},
+                {"role": "sectionHeading", "content": "Balance Sheet"},
+                {"content": "Numbers below."},
+            ],
+            "tables": [
+                {
+                    "rowCount": 3,
+                    "columnCount": 2,
+                    "spans": [{"offset": 20, "length": 60}],
+                    "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                    "cells": [
+                        {
+                            "rowIndex": 0, "columnIndex": 0,
+                            "kind": "columnHeader", "content": "Particulars",
+                        },
+                        {
+                            "rowIndex": 0, "columnIndex": 1,
+                            "kind": "columnHeader", "content": "FY24",
+                        },
+                        {"rowIndex": 1, "columnIndex": 0, "content": "Total Assets"},
+                        {"rowIndex": 1, "columnIndex": 1, "content": "300"},
+                        {
+                            "rowIndex": 2, "columnIndex": 0,
+                            "content": "Total Equity and Liabilities",
+                        },
+                        {"rowIndex": 2, "columnIndex": 1, "content": "100"},
+                    ],
+                },
+            ],
+        }
+    )
+
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    reg.register(NormalizeStage())
+    reg.register(AstStage())
+    reg.register(StructureStage())
+    reg.register(OntologyStage())
+    reg.register(QualityStage())
+    resolver = DagResolver(reg.all())
+
+    common = {
+        "doc_id": doc.id,
+        "correlation_id": "c3",
+        "session_factory": session_factory,
+        "store": store,
+        "registry": reg,
+        "resolver": resolver,
+    }
+    await run_stage(stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake}, **common)
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ontology", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="quality", run_id=str(uuid.uuid4()), services={}, **common)
+
+    async with session_factory() as s:
+        facts = await RegistryRepository(s).runs_for_document(doc.id)
+
+    quality_key = artifact_key(
+        doc.id, "quality", 3,
+        derived_input_hash([
+            facts["ast"].output_hash, facts["structure"].output_hash,
+            facts["ontology"].output_hash,
+        ]),
+    )
+    body = await store.get_json(quality_key)
+    codes = [issue["code"] for issue in body["issues"]]
+    assert "quality.balance_sheet_imbalance" in codes
+    assert body["warning_count"] >= 1
+    assert body["error_count"] == 0
+    assert body["ok"] is True

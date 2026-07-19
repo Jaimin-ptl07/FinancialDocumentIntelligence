@@ -2,8 +2,12 @@ import pytest
 
 from fdi.core.quality import (
     AST_VALIDATORS,
+    RECONCILIATION_VALIDATORS,
     STRUCTURE_VALIDATORS,
     ast_has_sections,
+    balance_sheet_balances,
+    cash_flow_ties,
+    profit_and_loss_foots,
     sections_have_content,
     tables_are_rectangular,
     title_present,
@@ -201,3 +205,234 @@ def test_validate_all_empty_pairs_is_ok_with_no_issues() -> None:
         "warning_count": 0,
         "ok": True,
     }
+
+
+# --- reconciliation validators ---
+
+
+def _cv(
+    concept: str,
+    value: float,
+    *,
+    column_header: str = "FY24",
+    column_index: int = 0,
+    table_index: int = 0,
+    row_label: str | None = None,
+    page: int | None = 1,
+    raw: str | None = None,
+) -> dict[str, object]:
+    return {
+        "concept": concept,
+        "row_label": row_label if row_label is not None else concept.lower(),
+        "value": value,
+        "raw": raw if raw is not None else str(value),
+        "column_header": column_header,
+        "column_index": column_index,
+        "page": page,
+        "table_index": table_index,
+    }
+
+
+def _ontology(concept_values: list[dict[str, object]]) -> dict[str, object]:
+    return {"schema_version": 2, "mappings": [], "concept_values": concept_values}
+
+
+# --- balance_sheet_balances ---
+
+
+def test_balance_sheet_balances_clean_on_equal_values_same_period() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 16427.37, row_label="Total Assets", table_index=0),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 16427.37,
+            row_label="Total Equity and Liabilities", table_index=1,
+        ),
+    ])
+    assert balance_sheet_balances(ontology) == []
+
+
+def test_balance_sheet_balances_warns_on_genuine_mismatch() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 16427.37, row_label="Total Assets", table_index=0),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 16327.37,
+            row_label="Total Equity and Liabilities", table_index=1,
+        ),
+    ])
+    issues = balance_sheet_balances(ontology)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["severity"] == "warning"
+    assert issue["code"] == "quality.balance_sheet_imbalance"
+    message = issue["message"]
+    assert isinstance(message, str)
+    assert "16427.37" in message
+    assert "16327.37" in message
+    assert "100.00" in message
+    assert "Total Assets" in message
+    assert "Total Equity and Liabilities" in message
+
+
+def test_balance_sheet_balances_within_absolute_tolerance_is_clean() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 100.00, row_label="Total Assets"),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 100.02,
+            row_label="Total Equity and Liabilities",
+        ),
+    ])
+    assert balance_sheet_balances(ontology) == []
+
+
+def test_balance_sheet_balances_relative_tolerance_wider_than_absolute_floor() -> None:
+    # diff=50 on ~100,000 figures: 0.1% of 100,000 = 100 > 0.05 absolute floor,
+    # and 50 <= 100 -- reconciles under the relative bound, not the absolute one.
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 100000.0, row_label="Total Assets"),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 100050.0,
+            row_label="Total Equity and Liabilities",
+        ),
+    ])
+    assert balance_sheet_balances(ontology) == []
+
+
+def test_balance_sheet_balances_fallback_equity_plus_liabilities_reconciles() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 300.0, row_label="Total Assets"),
+        _cv("EQUITY", 200.0, row_label="Equity"),
+        _cv("TOTAL_LIABILITIES", 100.0, row_label="Total Liabilities"),
+    ])
+    assert balance_sheet_balances(ontology) == []
+
+
+def test_balance_sheet_balances_fallback_equity_plus_liabilities_warns() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 300.0, row_label="Total Assets"),
+        _cv("EQUITY", 150.0, row_label="Equity"),
+        _cv("TOTAL_LIABILITIES", 100.0, row_label="Total Liabilities"),
+    ])
+    issues = balance_sheet_balances(ontology)
+    assert len(issues) == 1
+    message = issues[0]["message"]
+    assert isinstance(message, str)
+    assert "equity + total liabilities" in message.lower()
+
+
+def test_balance_sheet_balances_disambiguates_via_closest_pairing() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 16427.37, row_label="Total Assets", table_index=0),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 16427.37,
+            row_label="Total Equity and Liabilities", table_index=1,
+        ),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 999.00,
+            row_label="Some spurious duplicate row", table_index=2,
+        ),
+    ])
+    assert balance_sheet_balances(ontology) == []
+
+
+def test_balance_sheet_balances_no_data_returns_empty() -> None:
+    assert balance_sheet_balances(_ontology([])) == []
+    assert balance_sheet_balances({}) == []
+
+
+# --- profit_and_loss_foots ---
+
+
+def test_profit_and_loss_foots_clean_on_ground_truth_shaped_numbers() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_INCOME", 20925.03, row_label="Total Income"),
+        _cv("OPERATING_EXPENSE", 18795.89, row_label="Total Expenses"),
+        _cv("PROFIT_BEFORE_TAX", 2129.14, row_label="Profit Before Tax"),
+    ])
+    assert profit_and_loss_foots(ontology) == []
+
+
+def test_profit_and_loss_foots_warns_on_genuine_mismatch() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_INCOME", 20925.03, row_label="Total Income"),
+        _cv("OPERATING_EXPENSE", 18795.89, row_label="Total Expenses"),
+        _cv("PROFIT_BEFORE_TAX", 1000.00, row_label="Profit Before Tax"),
+    ])
+    issues = profit_and_loss_foots(ontology)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["severity"] == "warning"
+    assert issue["code"] == "quality.profit_and_loss_does_not_foot"
+    message = issue["message"]
+    assert isinstance(message, str)
+    assert "1129.14" in message  # diff = 2129.14 - 1000.00
+    assert "1000.0" in message
+
+
+def test_profit_and_loss_foots_no_data_returns_empty() -> None:
+    assert profit_and_loss_foots(_ontology([])) == []
+    assert profit_and_loss_foots({}) == []
+
+
+def test_profit_and_loss_foots_missing_one_concept_emits_nothing() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_INCOME", 20925.03, row_label="Total Income"),
+        _cv("OPERATING_EXPENSE", 18795.89, row_label="Total Expenses"),
+    ])
+    assert profit_and_loss_foots(ontology) == []
+
+
+# --- cash_flow_ties ---
+
+
+def test_cash_flow_ties_within_tolerance_of_real_rounding_slack_is_clean() -> None:
+    # Ground truth's own real-doc numbers: opening + net_change = 227.89 vs
+    # closing 227.90 -- a 0.01 compounding-rounding artifact, within _ABS_TOL.
+    ontology = _ontology([
+        _cv("OPENING_CASH_BALANCE", 871.50, row_label="Opening Cash"),
+        _cv("NET_CHANGE_IN_CASH", -643.61, row_label="Net Change in Cash"),
+        _cv("CLOSING_CASH_BALANCE", 227.90, row_label="Closing Cash"),
+    ])
+    assert cash_flow_ties(ontology) == []
+
+
+def test_cash_flow_ties_warns_on_genuine_mismatch() -> None:
+    ontology = _ontology([
+        _cv("OPENING_CASH_BALANCE", 871.50, row_label="Opening Cash"),
+        _cv("NET_CHANGE_IN_CASH", -643.61, row_label="Net Change in Cash"),
+        _cv("CLOSING_CASH_BALANCE", 500.00, row_label="Closing Cash"),
+    ])
+    issues = cash_flow_ties(ontology)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["severity"] == "warning"
+    assert issue["code"] == "quality.cash_flow_does_not_tie"
+    message = issue["message"]
+    assert isinstance(message, str)
+    assert "500.0" in message
+
+
+def test_cash_flow_ties_no_data_returns_empty() -> None:
+    assert cash_flow_ties(_ontology([])) == []
+    assert cash_flow_ties({}) == []
+
+
+def test_reconciliation_validators_is_a_three_tuple() -> None:
+    assert (
+        balance_sheet_balances, profit_and_loss_foots, cash_flow_ties,
+    ) == RECONCILIATION_VALIDATORS
+
+
+def test_validate_all_composes_reconciliation_validators() -> None:
+    ontology = _ontology([
+        _cv("TOTAL_ASSETS", 100.0, row_label="Total Assets"),
+        _cv(
+            "TOTAL_EQUITY_AND_LIABILITIES", 50.0,
+            row_label="Total Equity and Liabilities",
+        ),
+    ])
+    report = validate_all([(ontology, RECONCILIATION_VALIDATORS)])
+    codes = [issue["code"] for issue in report["issues"]]
+    assert codes == ["quality.balance_sheet_imbalance"]
+    assert report["warning_count"] == 1
+    assert report["error_count"] == 0
+    assert report["ok"] is True  # warnings never gate ok False

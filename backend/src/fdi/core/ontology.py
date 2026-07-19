@@ -13,6 +13,12 @@ class CanonicalConcept(StrEnum):
     TOTAL_LIABILITIES = "TOTAL_LIABILITIES"
     EQUITY = "EQUITY"
     CASH = "CASH"
+    TOTAL_EQUITY_AND_LIABILITIES = "TOTAL_EQUITY_AND_LIABILITIES"
+    TOTAL_INCOME = "TOTAL_INCOME"
+    PROFIT_BEFORE_TAX = "PROFIT_BEFORE_TAX"
+    OPENING_CASH_BALANCE = "OPENING_CASH_BALANCE"
+    CLOSING_CASH_BALANCE = "CLOSING_CASH_BALANCE"
+    NET_CHANGE_IN_CASH = "NET_CHANGE_IN_CASH"
     UNKNOWN = "UNKNOWN"
 
 
@@ -46,6 +52,18 @@ _SYNONYMS: dict[str, CanonicalConcept] = {
     "cash": CanonicalConcept.CASH,
     "cash and cash equivalents": CanonicalConcept.CASH,
     "cash and bank balances": CanonicalConcept.CASH,
+    "total equity and liabilities": CanonicalConcept.TOTAL_EQUITY_AND_LIABILITIES,
+    "total equities and liabilities": CanonicalConcept.TOTAL_EQUITY_AND_LIABILITIES,
+    "total income": CanonicalConcept.TOTAL_INCOME,
+    "profit before tax": CanonicalConcept.PROFIT_BEFORE_TAX,
+    "pbt": CanonicalConcept.PROFIT_BEFORE_TAX,
+    "profit before tax and exceptional items": CanonicalConcept.PROFIT_BEFORE_TAX,
+    "opening cash and cash equivalents": CanonicalConcept.OPENING_CASH_BALANCE,
+    "cash and cash equivalents at the beginning of the year": CanonicalConcept.OPENING_CASH_BALANCE,
+    "closing cash and cash equivalents": CanonicalConcept.CLOSING_CASH_BALANCE,
+    "cash and cash equivalents at the end of the year": CanonicalConcept.CLOSING_CASH_BALANCE,
+    "net change in cash and cash equivalents": CanonicalConcept.NET_CHANGE_IN_CASH,
+    "net increase in cash and cash equivalents": CanonicalConcept.NET_CHANGE_IN_CASH,
 }
 
 
