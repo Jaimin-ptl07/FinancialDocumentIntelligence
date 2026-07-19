@@ -1,8 +1,16 @@
 # Ingestion Pipeline — Deep Audit Findings & Improvement Plan
 
-- **Date:** 2026-07-19. **Status:** Findings final; plan agreed. **Progress: Phase 0 ✅, Phase 1 ✅,
-  Phase 2 ✅, Phase 3a ✅ (all merged to `feature/sp-1-project-setup`).** Remaining: Phase 3b (graph
-  table/figure nodes), Phase 4 (values + reconciliation), Phase 5 (robustness).
+- **Date:** 2026-07-19. **Status:** ✅ **PROGRAM COMPLETE — all 6 phases merged to
+  `feature/sp-1-project-setup`.** Integrated suite green: **713 passed / 12 skipped**, four gates clean.
+  - **Phase 3b** (`403a707`): table/figure graph nodes + section membership. Real doc: **257 table
+    nodes + 33 figure nodes** with CONTAINS edges (was 0).
+  - **Phase 4** (`4327bdf`): concept→value extraction + BS/P&L/CF reconciliation validators. Real doc:
+    **408 concept→value records across 6 concepts** (was labels-only, 0 values), e.g. REVENUE=20676.58
+    (p30); all three reconciliation validators **OK reconciles** on STTL.
+  - **Phase 5** (`86598d5`): cross-page stitching fix. Real doc: **261 raw → 257 tables (4 genuine
+    cross-page merges)** (was 0/261), Fixed-Assets false-merge blocked by the header guard.
+
+  Earlier progress (Phases 0-3a):
   - **Phase 0** (`fd11ee3`): OCR schema 4→5 — retains `cells[].elements`/`bounding_regions`, table
     caption/footnotes, page spans/marks, low-confidence words.
   - **Phase 1** (`942256f`): table-cell paragraphs filtered by `cells[].elements` + dropped-titles
