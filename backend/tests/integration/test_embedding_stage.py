@@ -1,10 +1,15 @@
-"""EmbeddingStage auto-chains off ChunksStage (Phase 3a: `deps=("chunks",)`,
-`version=2`) -- it embeds `chunks["chunks"][i]["text"]` in order, so table-derived
-row/whole-table chunks are embedded "for free" alongside section chunks, with
-zero code change to IndexStage/resolve_chunks (both are already generic over
-`chunk_id`)."""
+"""EmbeddingStage auto-chains off ChunksStage (Phase 3a: `deps=("chunks",)`).
+Phase 7 (`version=3`): it embeds ONLY non-row `chunks["chunks"]` records --
+section (`s{i}`) and whole-table (`t{i}`) chunks -- and SKIPS fine-grained
+table-row chunks (`t{i}r{j}`) via `fdi.core.retrieval.is_row_chunk_id`. Row
+chunks stay in the `chunks` artifact untouched (keyword/FTS + resolve_chunks
+unaffected); they simply leave the vector channel to de-dilute it. Everything
+else about EmbeddingStage is unchanged: zero code change to IndexStage/
+resolve_chunks (both are already generic over `chunk_id`)."""
 
 import uuid
+from collections.abc import Mapping
+from typing import cast
 
 import pytest
 from minio import Minio
@@ -19,6 +24,7 @@ from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
+from fdi.pipeline.stage import StageContext
 from fdi.pipeline.stages.ast import AstStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.embedding import EmbeddingStage
@@ -33,6 +39,45 @@ from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 pytestmark = pytest.mark.integration
+
+
+async def test_embedding_stage_skips_row_chunks_keeps_section_and_whole_table() -> None:
+    """A `chunks` artifact with s0, t0, t0r0, t0r1 -> embedding.chunks has
+    s0+t0 only (row chunks skipped); the embedder is called with 2 texts, not
+    4; version == 3. Exercises EmbeddingStage.run directly against a StageContext
+    reading a hand-built `chunks` artifact -- no DB/MinIO required."""
+    chunks_artifact = {
+        "schema_version": 1,
+        "chunks": [
+            {"chunk_id": "s0", "heading": "Balance Sheet", "text": "section text",
+             "section_type": "BALANCE_SHEET", "page": 1, "para_count": 1},
+            {"chunk_id": "t0", "heading": "Table 0", "text": "whole table text",
+             "section_type": None, "page": 1, "para_count": None},
+            {"chunk_id": "t0r0", "heading": "Table 0", "text": "row 0 text",
+             "section_type": None, "page": 1, "para_count": None},
+            {"chunk_id": "t0r1", "heading": "Table 0", "text": "row 1 text",
+             "section_type": None, "page": 1, "para_count": None},
+        ],
+    }
+
+    async def read_artifact(doc_id: str, stage_name: str) -> object:
+        assert stage_name == "chunks"
+        return chunks_artifact
+
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    ctx = StageContext(
+        doc_id="doc-1", read_artifact=read_artifact,
+        services={"embedder": fake_embedder},
+    )
+    stage = EmbeddingStage()
+    assert stage.version == 3
+
+    result = cast(Mapping[str, object], await stage.run(ctx))
+
+    assert fake_embedder.calls == 1
+    assert fake_embedder.seen == ["section text", "whole table text"]
+    result_chunks = cast(list[Mapping[str, object]], result["chunks"])
+    assert [c["chunk_id"] for c in result_chunks] == ["s0", "t0"]
 
 
 @pytest.fixture
@@ -140,10 +185,10 @@ async def test_embedding_stage_runs_and_caches(  # fixtures from conftest
         stage_name="embedding", run_id=str(uuid.uuid4()), services=embed_services, **common
     )
     assert fake_embedder.calls == 1
-    # embeds chunks["chunks"][].text VERBATIM, in order -- not re-derived from ast.
+    # embeds chunks["chunks"][].text VERBATIM, in order -- not re-derived from ast --
+    # but SKIPS the row chunk (t0r1, Phase 7): only s0 + t0 are embedded.
     assert fake_embedder.seen == [
         "Balance Sheet\nAssets 100",
-        "Balance Sheet | Cash: Value=100",
         "Balance Sheet\nValue\nCash: Value=100",
     ]
 
@@ -151,14 +196,16 @@ async def test_embedding_stage_runs_and_caches(  # fixtures from conftest
         facts = await RegistryRepository(s).runs_for_document(doc.id)
 
     embedding_key = artifact_key(
-        doc.id, "embedding", 2, derived_input_hash([facts["chunks"].output_hash])
+        doc.id, "embedding", 3, derived_input_hash([facts["chunks"].output_hash])
     )
     body = await store.get_json(embedding_key)
     assert body["model"] == "fake-embedding"
     assert body["dim"] == 8
-    # s0 (section), t0r1 (table row), t0 (whole-table) -- chunk_id/heading/order
-    # sourced from the `chunks` artifact, byte-for-byte, not re-derived from `ast`.
-    assert [c["chunk_id"] for c in body["chunks"]] == ["s0", "t0r1", "t0"]
+    # s0 (section), t0 (whole-table) -- chunk_id/heading/order sourced from the
+    # `chunks` artifact, byte-for-byte, not re-derived from `ast`; t0r1 (table
+    # row) is skipped (Phase 7 de-dilution) though it remains in the `chunks`
+    # artifact itself for keyword/FTS + resolve_chunks.
+    assert [c["chunk_id"] for c in body["chunks"]] == ["s0", "t0"]
     assert body["chunks"][0]["heading"] == "Balance Sheet"
     assert body["chunks"][1]["heading"] == "Balance Sheet"
     assert len(body["chunks"][0]["vector"]) == 8

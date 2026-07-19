@@ -140,23 +140,71 @@ def keyword_overlap(text: str, keywords: Sequence[str]) -> float:
     return hits / len(keywords)
 
 
+def _source_key(candidate: Candidate) -> str:
+    """The diversity-cap grouping key for a candidate's `evidence_id`:
+    `table:{doc}:{i}` -> `t{i}` (a get_tables-sourced numeric-field
+    candidate); `{doc}:t{i}r{j}` or `{doc}:t{i}` -> `t{i}` (a hybrid-search
+    hit on a table row or whole-table chunk); `{doc}:s{i}` -> `s{i}` (a
+    section chunk); anything else -> the whole id, unchanged."""
+    evidence_id = candidate.evidence_id
+    if evidence_id.startswith("table:"):
+        parts = evidence_id.split(":", 2)
+        if len(parts) == 3:
+            return f"t{parts[2]}"
+        return evidence_id
+
+    if ":" in evidence_id:
+        _doc, _, local = evidence_id.rpartition(":")
+        if local.startswith("t"):
+            rest = local[1:]
+            i = rest.split("r", 1)[0]
+            if i.isdigit():
+                return f"t{i}"
+        elif local.startswith("s") and local[1:].isdigit():
+            return local
+
+    return evidence_id
+
+
 def rerank_candidates(
     candidates: Sequence[Candidate],
     keywords: Sequence[str],
     *,
     top_k: int = 8,
     keyword_weight: float = 1.0,
+    max_per_source: int | None = None,
 ) -> list[Candidate]:
     """Stable-sort `candidates` descending by (score + keyword_weight *
     keyword_overlap(text, keywords)), take the first `top_k`. Python's sort
     is stable even under reverse=True (equal-key elements keep their
     original relative order, per the stdlib docs), so ties need no
-    secondary tiebreak key."""
+    secondary tiebreak key.
+
+    `max_per_source`, when set, caps how many of the top-scoring candidates
+    may share a `_source_key` (Phase 7 diversity cap): after sorting, greedily
+    take up to `top_k` candidates in score order, skipping any candidate whose
+    source has already reached the cap, so a single table can't consume the
+    whole context window. `None` (the default) is byte-identical to the prior,
+    uncapped behavior."""
 
     def blended(c: Candidate) -> float:
         return c.score + keyword_weight * keyword_overlap(c.text, keywords)
 
-    return sorted(candidates, key=blended, reverse=True)[:top_k]
+    ranked = sorted(candidates, key=blended, reverse=True)
+    if max_per_source is None:
+        return ranked[:top_k]
+
+    out: list[Candidate] = []
+    per_source: dict[str, int] = {}
+    for c in ranked:
+        key = _source_key(c)
+        if per_source.get(key, 0) >= max_per_source:
+            continue
+        out.append(c)
+        per_source[key] = per_source.get(key, 0) + 1
+        if len(out) >= top_k:
+            break
+    return out
 
 
 def build_extraction_messages(field: FieldSpec, candidates: Sequence[Candidate]) -> tuple[str, str]:
