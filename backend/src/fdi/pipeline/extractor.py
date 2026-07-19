@@ -85,6 +85,7 @@ class ExtractContext:
 
 _POOL_K = 12
 _TABLE_BASE_SCORE = 0.5
+_EXTRACT_TOP_K = 20
 
 
 def _render_table(table: Mapping[str, object]) -> str:
@@ -146,7 +147,7 @@ async def extract_field(
                     text=text, page=None, score=_TABLE_BASE_SCORE, source_tool="table",
                 ))
 
-    ranked = rerank_candidates(candidates, field.keywords)
+    ranked = rerank_candidates(candidates, field.keywords, top_k=_EXTRACT_TOP_K)
     if not ranked:
         return assemble_result(field, {}, ranked)
 
