@@ -12,7 +12,7 @@ NOT reading order -- "s10" < "s2" lexicographically)."""
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
-from fdi.core.graph import order_reading_chain
+from fdi.core.graph import numeric_id_sort_key, order_reading_chain
 
 
 @runtime_checkable
@@ -58,6 +58,26 @@ class FakeGraphStore:
                     out.append({"node": m, "relationship": e.get("type"), "direction": "in"})
         return out
 
+    def _members(
+        self,
+        scoped: list[Mapping[str, object]],
+        contains: list[Mapping[str, object]],
+        section_id: object,
+        node_type: str,
+        doc_id: str,
+    ) -> list[dict[str, object]]:
+        members = [
+            dict(n)
+            for n in scoped
+            if n.get("type") == node_type
+            and any(
+                e.get("source") == section_id and e.get("target") == n.get("id")
+                for e in contains
+            )
+        ]
+        members.sort(key=lambda n: numeric_id_sort_key(doc_id, n.get("id")))
+        return members
+
     def document_structure(self, doc_id: str) -> dict[str, object]:
         scoped = [n for n in self.loaded_nodes if n.get("doc_id") == doc_id]
         ids = {n.get("id") for n in scoped}
@@ -82,10 +102,18 @@ class FakeGraphStore:
                     for e in contains
                 )
             ]
-            section_views.append({**s, "paragraphs": order_reading_chain(paras, para_ro)})
+            section_views.append({
+                **s,
+                "paragraphs": order_reading_chain(paras, para_ro),
+                "tables": self._members(scoped, contains, s["id"], "table", doc_id),
+                "figures": self._members(scoped, contains, s["id"], "figure", doc_id),
+            })
         return {"document": document, "sections": section_views}
 
     def reading_order(self, doc_id: str) -> list[dict[str, object]]:
         sections = self.document_structure(doc_id)["sections"]
         assert isinstance(sections, list)
-        return [{k: v for k, v in s.items() if k != "paragraphs"} for s in sections]
+        return [
+            {k: v for k, v in s.items() if k not in {"paragraphs", "tables", "figures"}}
+            for s in sections
+        ]

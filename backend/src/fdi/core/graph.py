@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Mapping, Sequence
 
 
@@ -8,7 +9,61 @@ def _as_source_index(value: object) -> int | None:
     return None
 
 
-def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
+def _int_list(value: object) -> list[int]:
+    """`value` filtered to real (non-bool) ints, or `[]` for anything else."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, int) and not isinstance(v, bool)]
+
+
+def _figure_ref_list(value: object) -> list[Mapping[str, object]]:
+    """`value` filtered to Mapping entries, or `[]` for anything else."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, Mapping)]
+
+
+def _raw_to_structure_index(tables: Sequence[object]) -> dict[int, int]:
+    """{raw_ocr_table_index: structure_position}; `structure_position` is the
+    table's own `enumerate(structure["tables"])` position -- the SAME index
+    space `core.retrieval._table_chunks` already uses for its shipped `t{i}`
+    chunk ids (positions are counted, not re-packed, past a malformed
+    non-Mapping entry, so a later real table's position never shifts).
+
+    Reads an OPTIONAL `source_indices` list per table (only present on a
+    Mapping entry); a table with no such key (or a non-Mapping entry)
+    defaults to `[i]` (identity) -- true for 100% of tables today (audited
+    0/261 merges). Malformed entries skipped; a raw index appearing in two
+    tables' `source_indices` is last-write-wins (defensive;
+    `merge_cross_page_tables` partitions its input so this should not occur).
+    """
+    out: dict[int, int] = {}
+    for pos, t in enumerate(tables):
+        if not isinstance(t, Mapping):
+            out[pos] = pos
+            continue
+        raw = t.get("source_indices")
+        if not isinstance(raw, list):
+            out[pos] = pos
+            continue
+        for entry in raw:
+            if isinstance(entry, int) and not isinstance(entry, bool):
+                out[entry] = pos
+    return out
+
+
+def _table_label(table: Mapping[str, object], i: int) -> str:
+    """table["caption"]["content"] if non-blank, else f"Table {i}" -- SAME
+    fallback `retrieval.py`'s `_table_context` already uses for table chunks."""
+    caption = table.get("caption")
+    if isinstance(caption, Mapping):
+        content = caption.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return f"Table {i}"
+
+
+def build_graph(ast: Mapping[str, object], structure: Mapping[str, object]) -> dict[str, object]:
     """Build a typed CONTAINS/READING_ORDER node/edge graph over an AST.
 
     Walks the AST's title/sections/paragraphs tree and emits one `document`
@@ -26,9 +81,26 @@ def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
     non-`int`/missing value degrades to `None`, never raises. Paragraph node
     labels are the full paragraph text (no truncation).
 
+    A second, separate pass (appended after the document/section/paragraph
+    logic above, which stays byte-for-byte unchanged) additively emits one
+    `table` node (id `t{structureIndex}`, matching the already-shipped
+    `chunks` artifact's `t{i}` convention exactly) per raw table index in a
+    section's `table_refs` (Phase 3b's `fdi.core.ast.attach_table_refs`),
+    resolved through an optional-key raw->structure bridge that defaults to
+    identity, and one `figure` node (id `f{rawIndex}`, figures are never
+    reordered/merged) per entry in `figure_refs` -- each with a `CONTAINS`
+    edge from its owning section. No `READING_ORDER` edge ever touches a
+    `t*`/`f*` node. `source_index` is always `None` for these two node types
+    (they have no position in `ocr["paragraphs"]`). First-section-wins dedup
+    if the same raw/structure index is (in principle) referenced from more
+    than one section.
+
     Args:
         ast: AST dict with optional title and sections (as produced by
-            `fdi.core.ast.build_ast`).
+            `fdi.core.ast.build_ast`/`attach_table_refs`).
+        structure: `structure` artifact dict (as produced by
+            `fdi.core.structure.merge_cross_page_tables` plus grid
+            canonicalization) -- read only for `structure["tables"]`.
 
     Returns:
         Graph dict with schema_version, nodes ({id, type, label,
@@ -94,7 +166,43 @@ def build_graph(ast: Mapping[str, object]) -> dict[str, object]:
                 edges.append({"source": prev_para_id, "target": pid, "type": "READING_ORDER"})
             prev_para_id = pid
 
-    return {"schema_version": 2, "nodes": nodes, "edges": edges}
+    structure_tables_raw = structure.get("tables")
+    structure_tables: list[object] = (
+        structure_tables_raw if isinstance(structure_tables_raw, list) else []
+    )
+    bridge = _raw_to_structure_index(structure_tables)
+    emitted_tables: set[int] = set()
+    emitted_figures: set[int] = set()
+
+    for i, section in enumerate(sections):
+        sid = f"s{i}"
+        for raw_idx in _int_list(section.get("table_refs")):
+            t_idx = bridge.get(raw_idx)
+            if t_idx is None or t_idx >= len(structure_tables) or t_idx in emitted_tables:
+                continue
+            table_entry = structure_tables[t_idx]
+            if not isinstance(table_entry, Mapping):
+                continue
+            emitted_tables.add(t_idx)
+            tid = f"t{t_idx}"
+            nodes.append({
+                "id": tid, "type": "table",
+                "label": _table_label(table_entry, t_idx), "source_index": None,
+            })
+            edges.append({"source": sid, "target": tid, "type": "CONTAINS"})
+
+        for fig in _figure_ref_list(section.get("figure_refs")):
+            k = fig.get("index")
+            if not isinstance(k, int) or isinstance(k, bool) or k in emitted_figures:
+                continue
+            emitted_figures.add(k)
+            caption = fig.get("caption")
+            label = caption if isinstance(caption, str) and caption.strip() else f"Figure {k}"
+            fid = f"f{k}"
+            nodes.append({"id": fid, "type": "figure", "label": label, "source_index": None})
+            edges.append({"source": sid, "target": fid, "type": "CONTAINS"})
+
+    return {"schema_version": 3, "nodes": nodes, "edges": edges}
 
 
 def order_reading_chain(
@@ -148,3 +256,25 @@ def order_reading_chain(
             visited.add(nid)
 
     return ordered
+
+
+def numeric_id_sort_key(doc_id: str, node_id: object) -> tuple[int, str]:
+    """Sort key for a table/figure node id BY ITS INTEGER SUFFIX -- NOT a
+    lexicographic string sort (`"t10" < "t2"` lexicographically, the exact
+    bug class `order_reading_chain`'s own docstring already warns about for
+    section ids, here applied to tables/figures). Strips a leading
+    `"{doc_id}:"` namespace prefix (if present -- both a namespaced,
+    post-`GraphLoadStage` id like `"d1:t10"` and a bare pre-namespace id like
+    `"t10"` are accepted) and the node's own one-letter type prefix, then
+    parses the remaining digits. Anything that doesn't parse this way sorts
+    after every real int (stable, deterministic), tie-broken by the original
+    id string. Never raises."""
+    id_str = node_id if isinstance(node_id, str) else ""
+    prefix = f"{doc_id}:"
+    bare = id_str[len(prefix):] if id_str.startswith(prefix) else id_str
+    suffix = bare[1:] if bare else ""
+    try:
+        n = int(suffix)
+    except ValueError:
+        n = sys.maxsize
+    return (n, id_str)

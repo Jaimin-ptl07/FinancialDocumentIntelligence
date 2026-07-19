@@ -20,6 +20,7 @@ from fdi.pipeline.stages.graph import GraphStage
 from fdi.pipeline.stages.graphload import GraphLoadStage
 from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
+from fdi.pipeline.stages.structure import StructureStage
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -63,6 +64,7 @@ async def test_graph_load_chains_off_graph_and_caches(session_factory, store) ->
     reg.register(OcrStage())
     reg.register(NormalizeStage())
     reg.register(AstStage())
+    reg.register(StructureStage())
     reg.register(GraphStage())
     reg.register(GraphLoadStage())
     resolver = DagResolver(reg.all())
@@ -78,6 +80,7 @@ async def test_graph_load_chains_off_graph_and_caches(session_factory, store) ->
     )
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     gl_services = {"graph_store": fake_store}
     await run_stage(
@@ -127,6 +130,7 @@ async def test_graph_load_namespaces_ids_no_collision_across_documents(
     reg.register(OcrStage())
     reg.register(NormalizeStage())
     reg.register(AstStage())
+    reg.register(StructureStage())
     reg.register(GraphStage())
     reg.register(GraphLoadStage())
     resolver = DagResolver(reg.all())
@@ -148,6 +152,7 @@ async def test_graph_load_namespaces_ids_no_collision_across_documents(
         )
         await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
         await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+        await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
         await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
         await run_stage(
             stage_name="graph_load", run_id=str(uuid.uuid4()),

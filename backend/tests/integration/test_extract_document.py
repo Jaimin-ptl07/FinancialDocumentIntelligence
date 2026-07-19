@@ -143,9 +143,9 @@ async def processed_doc(session_factory, store):
         stage_name="semantic", run_id=str(uuid.uuid4()),
         services={"semantic": FakeSemanticClient({"Overview": "MDNA"})}, **common,
     )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     async with session_factory() as s:
         await index_chunks_fts(session=s, store=store, doc_id=doc.id)

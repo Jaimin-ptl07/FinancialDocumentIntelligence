@@ -101,6 +101,48 @@ def test_neo4j_store_uses_section_and_paragraph_labels_and_reading_order_rel(
     assert any("MERGE (a)-[r:READING_ORDER]" in q for q in runs)
 
 
+def test_neo4j_store_uses_table_and_figure_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fdi.platform import graphstore as gs
+
+    runs: list[str] = []
+
+    class _FakeTx:
+        def run(self, query: str, **kwargs: object) -> None:
+            runs.append(query)
+
+    class _FakeSession:
+        def __enter__(self) -> "_FakeSession":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def execute_write(self, fn, *args: object) -> object:  # type: ignore[no-untyped-def]
+            return fn(_FakeTx(), *args)
+
+    class _FakeDriver:
+        def session(self) -> _FakeSession:
+            return _FakeSession()
+
+    class _FakeGraphDatabase:
+        @staticmethod
+        def driver(uri: str, auth: tuple[str, str]) -> _FakeDriver:
+            return _FakeDriver()
+
+    monkeypatch.setattr(gs, "GraphDatabase", _FakeGraphDatabase)
+    store = gs.Neo4jGraphStore(uri="bolt://h:7687", user="neo4j", password="pw")
+
+    nodes = [
+        {"id": "d1:t0", "type": "table", "label": "Table 0", "doc_id": "d1"},
+        {"id": "d1:f0", "type": "figure", "label": "Figure 0", "doc_id": "d1"},
+    ]
+    edges = [{"source": "d1:s0", "target": "d1:t0", "type": "CONTAINS"}]
+    store.load(nodes, edges)
+
+    assert any("MERGE (n:Table" in q for q in runs)
+    assert any("MERGE (n:Figure" in q for q in runs)
+
+
 def test_neo4j_store_unknown_node_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from fdi.platform import graphstore as gs
 

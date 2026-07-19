@@ -12,12 +12,13 @@ no live Neo4j call in the suite."""
 
 from collections.abc import Mapping
 
-from fdi.core.graph import order_reading_chain
+from fdi.core.graph import numeric_id_sort_key, order_reading_chain
 from fdi.platform.config import Settings
 from neo4j import Driver, GraphDatabase, ManagedTransaction
 
 _NODE_LABELS: Mapping[str, str] = {
     "document": "Document", "section": "Section", "paragraph": "Paragraph",
+    "table": "Table", "figure": "Figure",
 }
 _EDGE_REL_TYPES: Mapping[str, str] = {"CONTAINS": "CONTAINS", "READING_ORDER": "READING_ORDER"}
 
@@ -170,11 +171,46 @@ class Neo4jGraphStore:
             by_section.setdefault(str(p["section_id"]), []).append(
                 {"id": p["id"], "type": p["type"], "label": p["label"], "doc_id": doc_id}
             )
+
+        tables_by_section = Neo4jGraphStore._grouped_members(tx, doc_id, "Table", "table")
+        figures_by_section = Neo4jGraphStore._grouped_members(tx, doc_id, "Figure", "figure")
+
         sections = [
-            {**s, "paragraphs": order_reading_chain(by_section.get(str(s["id"]), []), para_edges)}
+            {
+                **s,
+                "paragraphs": order_reading_chain(by_section.get(str(s["id"]), []), para_edges),
+                "tables": tables_by_section.get(str(s["id"]), []),
+                "figures": figures_by_section.get(str(s["id"]), []),
+            }
             for s in ordered_sections
         ]
         return {"document": document, "sections": sections}
+
+    @staticmethod
+    def _grouped_members(
+        tx: ManagedTransaction, doc_id: str, label: str, node_type: str
+    ) -> dict[str, list[dict[str, object]]]:
+        """Every `label`-typed node CONTAINS-linked to a Section, grouped by
+        owning section id, each list numeric-suffix-sorted (NOT lexicographic
+        -- see `numeric_id_sort_key`). Same query shape as the existing
+        `paragraphs` one; no READING_ORDER chain exists for these types."""
+        rows = [
+            {"id": r["id"], "label": r["label"], "section_id": r["section_id"]}
+            for r in tx.run(
+                f"MATCH (s:Section {{doc_id: $doc_id}})-[:CONTAINS]->"
+                f"(n:{label} {{doc_id: $doc_id}}) "
+                "RETURN n.id AS id, n.label AS label, s.id AS section_id",
+                doc_id=doc_id,
+            )
+        ]
+        by_section: dict[str, list[dict[str, object]]] = {}
+        for r in rows:
+            by_section.setdefault(str(r["section_id"]), []).append(
+                {"id": r["id"], "type": node_type, "label": r["label"], "doc_id": doc_id}
+            )
+        for members in by_section.values():
+            members.sort(key=lambda n: numeric_id_sort_key(doc_id, n.get("id")))
+        return by_section
 
     def reading_order(self, doc_id: str) -> list[dict[str, object]]:
         with self._driver.session() as session:

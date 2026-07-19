@@ -1,4 +1,4 @@
-from fdi.core.graph import order_reading_chain
+from fdi.core.graph import numeric_id_sort_key, order_reading_chain
 
 
 def _n(i: str) -> dict[str, object]:
@@ -49,3 +49,18 @@ def test_non_reading_order_edge_type_is_ignored() -> None:
     edges = [{"source": "s0", "target": "s1", "type": "CONTAINS"}]
     # no READING_ORDER edge between them -> both are heads, sorted by id
     assert [n["id"] for n in order_reading_chain(nodes, edges)] == ["s0", "s1"]
+
+
+def test_numeric_id_sort_key_sorts_t2_before_t10_not_lexicographically() -> None:
+    ids = ["d1:t10", "d1:t2"]
+    assert sorted(ids, key=lambda i: numeric_id_sort_key("d1", i)) == ["d1:t2", "d1:t10"]
+
+
+def test_numeric_id_sort_key_handles_bare_unnamespaced_ids() -> None:
+    ids = ["f10", "f2"]
+    assert sorted(ids, key=lambda i: numeric_id_sort_key("d1", i)) == ["f2", "f10"]
+
+
+def test_numeric_id_sort_key_non_parsing_id_sorts_after_real_ints() -> None:
+    ids = ["d1:t2", "d1:ghost"]
+    assert sorted(ids, key=lambda i: numeric_id_sort_key("d1", i)) == ["d1:t2", "d1:ghost"]
