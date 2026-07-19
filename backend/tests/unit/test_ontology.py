@@ -10,8 +10,40 @@ def test_canonical_concept_values() -> None:
         CanonicalConcept.GROSS_PROFIT, CanonicalConcept.OPERATING_EXPENSE,
         CanonicalConcept.NET_PROFIT, CanonicalConcept.TOTAL_ASSETS,
         CanonicalConcept.TOTAL_LIABILITIES, CanonicalConcept.EQUITY, CanonicalConcept.CASH,
+        CanonicalConcept.TOTAL_EQUITY_AND_LIABILITIES, CanonicalConcept.TOTAL_INCOME,
+        CanonicalConcept.PROFIT_BEFORE_TAX, CanonicalConcept.OPENING_CASH_BALANCE,
+        CanonicalConcept.CLOSING_CASH_BALANCE, CanonicalConcept.NET_CHANGE_IN_CASH,
         CanonicalConcept.UNKNOWN,
     }
+
+
+@pytest.mark.parametrize(("label", "expected"), [
+    ("Total Equity and Liabilities", CanonicalConcept.TOTAL_EQUITY_AND_LIABILITIES),
+    ("Total Equities and Liabilities", CanonicalConcept.TOTAL_EQUITY_AND_LIABILITIES),
+    ("Total Income", CanonicalConcept.TOTAL_INCOME),
+    ("Profit Before Tax", CanonicalConcept.PROFIT_BEFORE_TAX),
+    ("PBT", CanonicalConcept.PROFIT_BEFORE_TAX),
+    ("Profit Before Tax and Exceptional Items", CanonicalConcept.PROFIT_BEFORE_TAX),
+    ("Opening Cash and Cash Equivalents", CanonicalConcept.OPENING_CASH_BALANCE),
+    (
+        "Cash and Cash Equivalents at the Beginning of the Year",
+        CanonicalConcept.OPENING_CASH_BALANCE,
+    ),
+    ("Closing Cash and Cash Equivalents", CanonicalConcept.CLOSING_CASH_BALANCE),
+    (
+        "Cash and Cash Equivalents at the End of the Year",
+        CanonicalConcept.CLOSING_CASH_BALANCE,
+    ),
+    ("Net Change in Cash and Cash Equivalents", CanonicalConcept.NET_CHANGE_IN_CASH),
+    (
+        "Net Increase in Cash and Cash Equivalents",
+        CanonicalConcept.NET_CHANGE_IN_CASH,
+    ),
+])
+def test_map_label_new_reconciliation_concepts(
+    label: str, expected: CanonicalConcept
+) -> None:
+    assert map_label(label) == expected
 
 
 @pytest.mark.parametrize(("label", "expected"), [

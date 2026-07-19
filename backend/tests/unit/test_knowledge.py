@@ -55,6 +55,8 @@ def test_consolidate_empty_inputs_yield_zeros_and_empties() -> None:
         "section_types": {},
         "concepts": [],
         "concept_count": 0,
+        "concept_values_count": 0,
+        "reconciles": True,
         "quality": {"ok": False, "error_count": 0, "warning_count": 0},
     }
 
@@ -68,6 +70,8 @@ def test_consolidate_present_but_keyless_artifacts_degrade_like_empty() -> None:
         "section_types": {},
         "concepts": [],
         "concept_count": 0,
+        "concept_values_count": 0,
+        "reconciles": True,
         "quality": {"ok": False, "error_count": 0, "warning_count": 0},
     }
 
@@ -103,3 +107,63 @@ def test_consolidate_malformed_quality_summary_degrades_without_raising() -> Non
     quality = {"ok": "yes", "error_count": "1", "warning_count": None}
     out = consolidate({}, {}, quality)
     assert out["quality"] == {"ok": False, "error_count": 0, "warning_count": 0}
+
+
+# --- concept_values_count / reconciles (Phase 4) ---
+
+_ONTOLOGY_WITH_VALUES = {
+    "schema_version": 2,
+    "mappings": [],
+    "concept_values": [
+        {"concept": "TOTAL_ASSETS", "value": 100.0},
+        {"concept": "TOTAL_EQUITY_AND_LIABILITIES", "value": 100.0},
+        {"concept": "REVENUE", "value": 50.0},
+        {"concept": "REVENUE", "value": 40.0},
+    ],
+}
+
+_QUALITY_WITH_RECON_ISSUE = {
+    "schema_version": 1,
+    "issues": [
+        {
+            "severity": "warning",
+            "code": "quality.balance_sheet_imbalance",
+            "message": "does not balance",
+        },
+    ],
+    "error_count": 0,
+    "warning_count": 1,
+    "ok": True,
+}
+
+_QUALITY_WITH_ONLY_NON_RECON_ISSUES = {
+    "schema_version": 1,
+    "issues": [
+        {"severity": "warning", "code": "structure.torn_table", "message": "torn"},
+        {"severity": "error", "code": "ast.no_sections", "message": "empty"},
+    ],
+    "error_count": 1,
+    "warning_count": 1,
+    "ok": False,
+}
+
+
+def test_consolidate_concept_values_count() -> None:
+    out = consolidate(_SEMANTIC, _ONTOLOGY_WITH_VALUES, _QUALITY)
+    assert out["concept_values_count"] == 4
+
+
+def test_consolidate_reconciles_false_when_reconciliation_issue_present() -> None:
+    out = consolidate(_SEMANTIC, _ONTOLOGY_WITH_VALUES, _QUALITY_WITH_RECON_ISSUE)
+    assert out["reconciles"] is False
+
+
+def test_consolidate_reconciles_true_when_no_reconciliation_issue_present() -> None:
+    out = consolidate(_SEMANTIC, _ONTOLOGY_WITH_VALUES, _QUALITY_WITH_ONLY_NON_RECON_ISSUES)
+    assert out["reconciles"] is True
+
+
+def test_consolidate_empty_inputs_yield_zero_concept_values_count_and_reconciles_true() -> None:
+    out = consolidate({}, {}, {})
+    assert out["concept_values_count"] == 0
+    assert out["reconciles"] is True

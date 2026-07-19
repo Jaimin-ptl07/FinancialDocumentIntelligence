@@ -124,7 +124,7 @@ async def test_knowledge_chains_off_semantic_ontology_and_quality(
     knowledge_key = artifact_key(
         doc.id,
         "knowledge",
-        1,
+        2,
         derived_input_hash(
             [
                 facts["semantic"].output_hash,
@@ -140,5 +140,7 @@ async def test_knowledge_chains_off_semantic_ontology_and_quality(
         "section_types": {"BALANCE_SHEET": 1, "DIRECTORS_REPORT": 1},
         "concepts": ["TOTAL_ASSETS"],
         "concept_count": 1,
+        "concept_values_count": 0,
+        "reconciles": True,
         "quality": {"ok": True, "error_count": 0, "warning_count": 0},
     }
