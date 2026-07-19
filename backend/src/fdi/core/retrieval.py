@@ -14,20 +14,9 @@ Never raises: malformed/partial input degrades per-field (section_type/page ->
 None).
 """
 
-import re
 from collections.abc import Mapping, Sequence
 
 _WHOLE_TABLE_MAX_CHARS = 4000
-
-_ROW_CHUNK_RE = re.compile(r"^t\d+r\d+$")
-
-
-def is_row_chunk_id(chunk_id: str) -> bool:
-    """True for a fine-grained table-ROW chunk id (`t{i}r{j}`); False for
-    section (`s{i}`) and whole-table (`t{i}`) chunk ids, and for malformed/
-    empty input. Used to keep row chunks out of the vector channel (Phase 7)
-    while leaving them in the `chunks` artifact for keyword/FTS + resolution."""
-    return bool(_ROW_CHUNK_RE.match(chunk_id))
 
 
 def _int_or_none(value: object) -> int | None:

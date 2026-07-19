@@ -1,4 +1,4 @@
-from fdi.core.retrieval import build_chunks, is_row_chunk_id
+from fdi.core.retrieval import build_chunks
 
 
 def _ast(sections: list[object]) -> dict[str, object]:
@@ -229,23 +229,3 @@ def test_dedup_collapses_section_and_table_chunk_with_identical_text() -> None:
     out = build_chunks(ast, {}, {}, structure)
     ids = [c["chunk_id"] for c in out["chunks"]]
     assert ids == ["s0", "t0r1"]
-
-
-def test_is_row_chunk_id_true_for_fine_grained_row_chunk() -> None:
-    assert is_row_chunk_id("t3r5") is True
-    assert is_row_chunk_id("t0r0") is True
-    assert is_row_chunk_id("t12r34") is True
-
-
-def test_is_row_chunk_id_false_for_section_and_whole_table_and_empty() -> None:
-    assert is_row_chunk_id("t3") is False
-    assert is_row_chunk_id("s0") is False
-    assert is_row_chunk_id("") is False
-
-
-def test_is_row_chunk_id_false_for_malformed_ids() -> None:
-    assert is_row_chunk_id("t3r") is False
-    assert is_row_chunk_id("tr5") is False
-    assert is_row_chunk_id("t3r5x") is False
-    assert is_row_chunk_id("xt3r5") is False
-    assert is_row_chunk_id("s0r1") is False
