@@ -1,12 +1,20 @@
 """Provenance: trace every SP-9 graph node back to its source OCR paragraph's
-page and bounding geometry. Pure, deterministic; no I/O.
+page and bounding geometry, and resolve a retrieval chunk id to the geometry
+behind it. Pure, deterministic; no I/O.
 
-Resolution is a DIRECT INDEX LOOKUP: a `section`/`paragraph` node carries its
-origin OCR paragraph's position (`source_index`, threaded from `unified` ->
+Node resolution is a DIRECT INDEX LOOKUP: a `section`/`paragraph` node carries
+its origin OCR paragraph's position (`source_index`, threaded from `unified` ->
 `ast` -> `graph` by Phase 2), so `ocr["paragraphs"][source_index]` is the
-node's own paragraph -- never a text/label match, never ambiguous."""
+node's own paragraph -- never a text/label match, never ambiguous.
 
-from collections.abc import Mapping
+Chunk resolution (`resolve_chunk_regions`, `resolve_evidence_regions`) is the
+read side an answer-highlighting UI needs. It reads `provenance` and
+`structure` as plain Mappings -- no import of fdi.core.retrieval/graph/
+table_grid, no import of fdi.pipeline.*/fdi.platform.* -- and is explicit
+about where the join is lossy; see `resolve_chunk_regions`'s docstring."""
+
+import re
+from collections.abc import Mapping, Sequence
 
 
 def _paragraph_regions(
@@ -104,3 +112,173 @@ def build_provenance(graph: Mapping[str, object], ocr: Mapping[str, object]) -> 
         node_provenance.append({"node_id": node_id, "page": page, "bounding_regions": regions})
 
     return {"schema_version": 1, "node_provenance": node_provenance}
+
+
+_SECTION_RE = re.compile(r"^s(\d+)$")
+_TABLE_RE = re.compile(r"^t(\d+)$")
+_TABLE_ROW_RE = re.compile(r"^t(\d+)r(\d+)$")
+
+
+def _region_key(region: Mapping[str, object]) -> tuple[object, ...]:
+    """A hashable identity for a bounding region: its page plus its polygon
+    coordinates. Used only to deduplicate; never persisted."""
+    polygon = region.get("polygon")
+    coords = tuple(polygon) if isinstance(polygon, list) else ()
+    return (region.get("page_number"), coords)
+
+
+def _dedup_regions(regions: list[dict[str, object]]) -> list[dict[str, object]]:
+    seen: set[tuple[object, ...]] = set()
+    out: list[dict[str, object]] = []
+    for r in regions:
+        key = _region_key(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def _regions_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(r) for r in value if isinstance(r, Mapping)]
+
+
+def _node_regions(provenance: Mapping[str, object], node_id: str) -> list[dict[str, object]]:
+    entries = provenance.get("node_provenance")
+    if not isinstance(entries, list):
+        return []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("node_id") != node_id:
+            continue
+        return _regions_list(entry.get("bounding_regions"))
+    return []
+
+
+def _table_at(structure: Mapping[str, object], index: int) -> Mapping[str, object] | None:
+    tables = structure.get("tables")
+    if not isinstance(tables, list) or index < 0 or index >= len(tables):
+        return None
+    table = tables[index]
+    return table if isinstance(table, Mapping) else None
+
+
+def _table_row_regions(
+    table: Mapping[str, object], row: int
+) -> list[dict[str, object]] | None:
+    """Every cell region on grid row `row`, flattened and deduplicated. A
+    spanning cell repeats its regions into each cell it covers (see
+    core.table_grid.canonicalize_table), so dedup is required, not tidy.
+
+    `None` and `[]` are DIFFERENT answers and the caller depends on it:
+    `None` means the row does not exist (no grid, or an out-of-range index --
+    a malformed id, which must resolve to nothing at all), while `[]` means
+    the row exists but carries no per-cell geometry, which is the case that
+    earns the whole-table fallback.
+    """
+    grid = table.get("grid")
+    if not isinstance(grid, Mapping):
+        return None
+    cell_regions = grid.get("cell_regions")
+    if not isinstance(cell_regions, list) or row < 0 or row >= len(cell_regions):
+        return None
+    row_cells = cell_regions[row]
+    if not isinstance(row_cells, list):
+        return None
+    flat: list[dict[str, object]] = []
+    for cell in row_cells:
+        flat.extend(_regions_list(cell))
+    return _dedup_regions(flat)
+
+
+def resolve_chunk_regions(
+    chunk_id: str,
+    provenance: Mapping[str, object],
+    structure: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """The bounding geometry behind ONE `chunks` record, by its chunk_id.
+
+    Three id shapes exist (core.retrieval.build_chunks) and each resolves
+    through a different artifact, because the graph does not carry table
+    geometry at all:
+
+    * `s{i}` -> the `provenance` artifact's node_provenance entry with the
+      SAME id. LOSSY BY CONSTRUCTION: core.graph.build_graph sets the `s{i}`
+      node's source_index from the section's `heading_source_index`, so this
+      is the HEADING paragraph's box -- while the chunk's text is the heading
+      plus every body paragraph. The body paragraphs have their own `s{i}p{j}`
+      nodes with their own boxes, but no chunk maps to a paragraph, so there
+      is no non-invented way to say which one a value came from. The heading
+      box names the right section and the right page and under-covers the
+      region; unioning the paragraph nodes to fake a fuller box would claim a
+      precision the extraction does not have. A section whose heading has no
+      usable geometry is OMITTED from node_provenance entirely (this module's
+      conservative policy, unchanged) and therefore resolves to [].
+
+    * `t{i}r{j}` -> `structure["tables"][i]["grid"]["cell_regions"][j]`,
+      flattened across the row's cells. Falls back to the whole-table regions
+      when the row EXISTS but carries no per-cell geometry (older OCR): a
+      page-level answer beats none, and the table box is a true superset of
+      the row. An out-of-range row index is a malformed id, not a
+      geometryless row, and resolves to [] -- the fallback would otherwise
+      paint the whole table for a row that was never there.
+
+    * `t{i}` -> `structure["tables"][i]["bounding_regions"]` (one region per
+      source page after a cross-page merge).
+
+    Anything else -- `s{i}p{j}`, `f{k}`, a malformed or hallucinated id --
+    resolves to []. Pure and total: no I/O, never raises, whatever the two
+    artifacts contain (including being entirely absent).
+    """
+    row_match = _TABLE_ROW_RE.match(chunk_id)
+    if row_match is not None:
+        table = _table_at(structure, int(row_match.group(1)))
+        if table is None:
+            return []
+        regions = _table_row_regions(table, int(row_match.group(2)))
+        if regions is None:
+            return []
+        return regions or _dedup_regions(_regions_list(table.get("bounding_regions")))
+
+    table_match = _TABLE_RE.match(chunk_id)
+    if table_match is not None:
+        table = _table_at(structure, int(table_match.group(1)))
+        if table is None:
+            return []
+        return _dedup_regions(_regions_list(table.get("bounding_regions")))
+
+    if _SECTION_RE.match(chunk_id) is not None:
+        return _dedup_regions(_node_regions(provenance, chunk_id))
+
+    return []
+
+
+def resolve_evidence_regions(
+    doc_id: str,
+    evidence_ids: Sequence[object],
+    provenance: Mapping[str, object],
+    structure: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Union of `resolve_chunk_regions` over an extracted field's
+    evidence_ids, in citation order, deduplicated on (page_number, polygon).
+
+    An evidence_id is `f"{doc_id}:{chunk_id}"` (fdi.pipeline.extractor). A
+    bare chunk id with no prefix is accepted too; an id prefixed with a
+    DIFFERENT document's id is not this document's geometry and contributes
+    nothing. Non-str entries are skipped. Pure, total, never raises."""
+    prefix = f"{doc_id}:"
+    out: list[dict[str, object]] = []
+    for raw in evidence_ids:
+        if not isinstance(raw, str) or not raw:
+            continue
+        if raw.startswith(prefix):
+            chunk_id = raw[len(prefix):]
+        elif ":" in raw:
+            continue
+        else:
+            chunk_id = raw
+        out.extend(resolve_chunk_regions(chunk_id, provenance, structure))
+    return _dedup_regions(out)

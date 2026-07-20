@@ -452,10 +452,23 @@ class ExtractRequest(BaseModel):
     module: str | None = None
 
 
+class BoundingRegionView(BaseModel):
+    """One page-scoped bounding region, in the shape `ocr`/`provenance`
+    already store: `page_number` plus Azure's flat coordinate list."""
+
+    page_number: int | None = None
+    polygon: list[object] = []
+
+
 class ExtractSourceView(BaseModel):
     page: int | None
     snippet: str | None
     evidence_ids: list[str]
+    # ALWAYS a list, [] when the chunk does not map or the provenance/
+    # structure artifact is absent -- fdi.core.provenance.resolve_chunk_
+    # regions is explicit about which chunk kinds are lossy. Defaulted so an
+    # older stored extraction record still validates.
+    bounding_regions: list[BoundingRegionView] = []
 
 
 class ExtractFieldView(BaseModel):

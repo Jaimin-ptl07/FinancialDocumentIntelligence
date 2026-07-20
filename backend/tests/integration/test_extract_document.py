@@ -142,8 +142,14 @@ async def processed_doc(session_factory, store):
         "content": "ACME LTD",
         "pages": [{"pageNumber": 1, "lines": [], "words": []}],
         "paragraphs": [
-            {"role": "sectionHeading", "content": "Overview"},
-            {"content": f"ACME Ltd is a manufacturing company {marker}."},
+            {
+                "role": "sectionHeading", "content": "Overview",
+                "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}],
+            },
+            {
+                "content": f"ACME Ltd is a manufacturing company {marker}.",
+                "boundingRegions": [{"pageNumber": 1, "polygon": [0, 2, 1, 2, 1, 3, 0, 3]}],
+            },
         ],
         "tables": [
             {
@@ -228,7 +234,18 @@ async def test_extract_document_pools_keyword_candidates_only(
     assert f2["field_name"] == "Unmatchable field"
     assert f2["value"] is None
     assert f2["confidence"] == 0.0
-    assert f2["source"] == {"page": None, "snippet": None, "evidence_ids": []}
+    assert f2["source"] == {
+        "page": None, "snippet": None, "evidence_ids": [], "bounding_regions": [],
+    }
+
+    # B4: geometry rides along on `source`, joined from the provenance
+    # (s{i} -> graph node -> OCR paragraph) and structure (t{i}r{j} ->
+    # per-cell regions, falling back to the whole table) artifacts.
+    assert isinstance(f0["source"]["bounding_regions"], list)
+    assert f1["source"]["bounding_regions"] == [{"page_number": 1, "polygon": []}]
+    # The unmatchable field cited nothing, so there is nothing to highlight --
+    # [] rather than null, and never an exception (decision 10).
+    assert f2["source"]["bounding_regions"] == []
 
     # Exactly 2 real LLM calls (the third field never reaches the client);
     # the numeric field's prompt carries the table row chunk's text --
@@ -264,6 +281,8 @@ async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
             doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
         )
         out = await extract_field(ctx=ctx, field=blank, client=FakeExtractorClient([]))
+    # extract_field is the pre-enrichment half: bounding_regions is attached
+    # by extract_document, which is what reads the two artifacts.
     assert out == {
         "field_name": "Blank query field", "value": None,
         "source": {"page": None, "snippet": None, "evidence_ids": []}, "confidence": 0.0,

@@ -1432,7 +1432,7 @@ An `evidence_id` is `f"{doc_id}:{chunk_id}"` (`fdi/pipeline/extractor.py:113`). 
   ```
   Every extracted record's `source` gains `"bounding_regions": list[dict[str, object]]`.
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Create `backend/tests/unit/test_chunk_regions.py`:
 
@@ -1558,12 +1558,12 @@ def test_resolve_evidence_regions_tolerates_junk_ids() -> None:
     assert resolve_evidence_regions("d1", ["d2:s0"], _provenance(), _structure()) == []
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/unit/test_chunk_regions.py -q`
 Expected: FAIL at collection with `ImportError: cannot import name 'resolve_chunk_regions' from 'fdi.core.provenance'`.
 
-- [ ] **Step 3: Write the pure join**
+- [x] **Step 3: Write the pure join**
 
 Append to `backend/src/fdi/core/provenance.py`:
 
@@ -1746,12 +1746,12 @@ import re
 from collections.abc import Mapping, Sequence
 ```
 
-- [ ] **Step 4: Run the unit test to verify it passes**
+- [x] **Step 4: Run the unit test to verify it passes**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/unit/test_chunk_regions.py -q`
 Expected: PASS, 11 passed.
 
-- [ ] **Step 5: Wire it into `extract_document`**
+- [x] **Step 5: Wire it into `extract_document`**
 
 Replace `backend/src/fdi/pipeline/extractor.py:131-143` (`extract_document`) with:
 
@@ -1838,7 +1838,7 @@ from fdi.platform.db.repository import RegistryRepository
 ```
 (placed after the `fdi.platform.storage.artifact_store` import).
 
-- [ ] **Step 6: Extend the view model**
+- [x] **Step 6: Extend the view model**
 
 Replace `backend/src/fdi/api/schemas.py:434-437` (`ExtractSourceView`) with:
 
@@ -1862,7 +1862,7 @@ class ExtractSourceView(BaseModel):
     bounding_regions: list[BoundingRegionView] = []
 ```
 
-- [ ] **Step 7: Extend the integration test**
+- [x] **Step 7: Extend the integration test**
 
 In `backend/tests/integration/test_extract_document.py`, give the OCR fixture's paragraphs real geometry — replace the `"paragraphs"` entry of the `FakeOcrClient` payload with:
 
@@ -1899,7 +1899,7 @@ Also extend the blank-query assertion at the end of `test_extract_field_blank_qu
     # by extract_document, which is what reads the two artifacts.
 ```
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run:
 ```bash
@@ -1908,7 +1908,7 @@ PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_extract_do
 ```
 Expected: 11 passed; 2 passed.
 
-- [ ] **Step 9: Run the full gate set**
+- [x] **Step 9: Run the full gate set**
 
 Run:
 ```bash
@@ -1919,7 +1919,7 @@ PYTHONUTF8=1 uv run --directory backend pytest -m "not integration and not e2e" 
 ```
 Expected: all green. In particular lint-imports must still report `Contracts: 1 kept, 0 broken.` — the new pure function is in `core` and imports nothing from `pipeline`/`platform`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add backend/src/fdi/core/provenance.py backend/src/fdi/pipeline/extractor.py backend/src/fdi/api/schemas.py backend/tests/unit/test_chunk_regions.py backend/tests/integration/test_extract_document.py

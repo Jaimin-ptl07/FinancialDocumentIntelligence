@@ -42,9 +42,11 @@ from fdi.core.extractor import (
     build_extraction_messages,
     rerank_candidates,
 )
+from fdi.core.provenance import resolve_evidence_regions
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.retrieval import hybrid_search
 from fdi.pipeline.vectorstore import VectorStore
+from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 
@@ -128,6 +130,46 @@ async def extract_field(
     return assemble_result(field, raw, ranked)
 
 
+async def _read_latest_artifact(
+    ctx: ExtractContext, stage: str
+) -> Mapping[str, object]:
+    """The document's latest `stage` artifact body, or `{}` if there is no
+    completed run, no artifact key, or the read fails. Never raises
+    (decision 10): geometry is an enrichment, and a dead MinIO must degrade
+    the highlight, not the document's whole extraction batch."""
+    body: Mapping[str, object] = {}
+    with contextlib.suppress(Exception):
+        run = await RegistryRepository(ctx.session).latest_run(ctx.doc_id, stage)
+        if run is not None and run.artifact_key is not None:
+            raw = await ctx.store.get_json(run.artifact_key)
+            if isinstance(raw, Mapping):
+                body = raw
+    return body
+
+
+def _attach_regions(
+    record: dict[str, object],
+    *,
+    doc_id: str,
+    provenance: Mapping[str, object],
+    structure: Mapping[str, object],
+) -> dict[str, object]:
+    """Add `source.bounding_regions` to one assemble_result record.
+
+    Always a list -- [] when unresolvable -- so the UI branches on one shape,
+    matching assemble_result's own habit of returning `evidence_ids: []`
+    rather than None. Never raises."""
+    source = record.get("source")
+    if not isinstance(source, dict):
+        return record
+    evidence_ids = source.get("evidence_ids")
+    ids: Sequence[object] = evidence_ids if isinstance(evidence_ids, list) else []
+    source["bounding_regions"] = resolve_evidence_regions(
+        doc_id, ids, provenance, structure
+    )
+    return record
+
+
 async def extract_document(
     *, ctx: ExtractContext, fields: Sequence[FieldSpec], client: ExtractorClient
 ) -> dict[str, object]:
@@ -135,8 +177,23 @@ async def extract_document(
     record per field, never raises (decision 10). Empty `fields` ->
     field_count 0, fields []. `doc_key`/`module` are NOT part of this
     return -- the route (which already holds both from the request body)
-    attaches them; see fdi.api.routes.extract_document_route (Task 5)."""
-    results = [await extract_field(ctx=ctx, field=field, client=client) for field in fields]
+    attaches them; see fdi.api.routes.extract_document_route (Task 5).
+
+    Each record's `source` additionally carries `bounding_regions`: the
+    geometry behind its cited chunks, joined by the pure
+    fdi.core.provenance.resolve_evidence_regions. The two artifacts it needs
+    are read ONCE here, not per field -- the committed schema has 198 fields,
+    so a per-field read would be 396 MinIO round trips for one request."""
+    provenance = await _read_latest_artifact(ctx, "provenance")
+    structure = await _read_latest_artifact(ctx, "structure")
+
+    results = [
+        _attach_regions(
+            await extract_field(ctx=ctx, field=field, client=client),
+            doc_id=ctx.doc_id, provenance=provenance, structure=structure,
+        )
+        for field in fields
+    ]
     return {
         "schema_version": 1, "doc_id": ctx.doc_id,
         "field_count": len(results), "fields": results,
