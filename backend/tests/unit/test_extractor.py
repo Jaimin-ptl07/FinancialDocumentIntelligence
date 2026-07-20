@@ -11,50 +11,73 @@ from fdi.core.extractor import (
 
 
 def _schema() -> dict[str, object]:
+    """A v3.1.0-shaped schema: modules -> retrieval_units -> fields, with
+    `aliases` per field and `locator_keywords`/`retrieval_query` per unit.
+    Mirrors docs/architecture/field-extraction-schema.json exactly (no
+    rag_extractable, no source_type, no per-field retrieval_query)."""
     return {
+        "version": "3.1.0",
         "modules": [
             {
-                "id": 0, "name": "PREPROCESS", "folder": "0-preprocess",
-                "fields": [
-                    {  # metadata, not rag_extractable -- EXCLUDED
-                        "field_name": "Company name", "source_type": "metadata",
-                        "rag_extractable": False, "data_type": "string",
-                        "retrieval_query": None, "extraction_prompt": "x", "keywords": [],
-                    },
-                    {  # rag_extractable + document_content -- KEPT
-                        "field_name": "Total page count", "source_type": "document_content",
-                        "rag_extractable": True, "data_type": "integer",
-                        "retrieval_query": "Number of pages", "extraction_prompt": "Extract it.",
-                        "keywords": ["pages", "total"],
-                    },
-                    {  # rag_extractable + document_content, but MALFORMED
-                       # (retrieval_query null) -- EXCLUDED, never raises
-                        "field_name": "Broken field", "source_type": "document_content",
-                        "rag_extractable": True, "data_type": "string",
-                        "retrieval_query": None, "extraction_prompt": "x", "keywords": [],
+                "id": 2,
+                "key": "module_2_company_info",
+                "name": "Company Information",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_COMPANY",
+                        "title": "Corporate Information",
+                        "scope": "front_matter",
+                        "locator_keywords": ["corporate information", "CIN"],
+                        "retrieval_query": "Corporate Information panel: name, CIN, address",
+                        "fields": [
+                            {
+                                "field_name": "Company name",
+                                "canonical_label": "Company name",
+                                "aliases": ["Company name", "Name of the company"],
+                                "data_type": "string",
+                                "extraction_prompt": "Extract the Company name.",
+                            },
+                            {
+                                # MALFORMED: no extraction_prompt -- SKIPPED, never raises
+                                "field_name": "Broken field",
+                                "aliases": [],
+                                "data_type": "string",
+                            },
+                        ],
                     },
                 ],
             },
             {
-                "id": 1, "name": "BALANCE_SHEET", "folder": "1-balance-sheet",
-                "fields": [
+                "id": 3,
+                "key": "module_3_balance_sheet",
+                "name": "Balance Sheet",
+                "retrieval_units": [
                     {
-                        "field_name": "Total assets", "source_type": "document_content",
-                        "rag_extractable": True, "data_type": "decimal",
-                        "retrieval_query": "Total assets value",
-                        "extraction_prompt": "Extract the total assets value.",
-                        "keywords": ["total assets"], "enum_values": None,
+                        "unit_id": "RU_BS",
+                        "title": "Balance Sheet",
+                        "scope": "primary_statement",
+                        "statement_type": "BS",
+                        "locator_keywords": ["balance sheet", "total assets"],
+                        "retrieval_query": "Standalone Balance Sheet as at the reporting date",
+                        "fields": [
+                            {
+                                "field_name": "Total assets",
+                                "canonical_label": "Total assets",
+                                "aliases": ["Total assets", "TOTAL ASSETS"],
+                                "data_type": "decimal",
+                                "extraction_prompt": "Extract the total assets value.",
+                            },
+                        ],
                     },
                 ],
             },
-        ]
+        ],
     }
 
 
-def test_parse_field_specs_filters_rag_extractable_and_document_content() -> None:
+def test_parse_field_specs_flattens_modules_units_fields() -> None:
     specs = parse_field_specs(_schema())
-    names = [s.field_name for s in specs]
-    assert names == ["Total page count", "Total assets"]
+    assert [s.field_name for s in specs] == ["Company name", "Total assets"]
 
 
 def test_parse_field_specs_skips_malformed_field() -> None:
@@ -62,15 +85,17 @@ def test_parse_field_specs_skips_malformed_field() -> None:
     assert "Broken field" not in [s.field_name for s in specs]
 
 
-def test_parse_field_specs_module_filter_by_name() -> None:
-    specs = parse_field_specs(_schema(), module="BALANCE_SHEET")
+def test_parse_field_specs_module_filter_by_key() -> None:
+    specs = parse_field_specs(_schema(), module="module_3_balance_sheet")
     assert [s.field_name for s in specs] == ["Total assets"]
-    assert specs[0].module_id == 1 and specs[0].module_name == "BALANCE_SHEET"
+    assert specs[0].module_id == 3
+    assert specs[0].module_key == "module_3_balance_sheet"
+    assert specs[0].module_name == "Balance Sheet"
 
 
-def test_parse_field_specs_module_filter_by_folder() -> None:
-    specs = parse_field_specs(_schema(), module="0-preprocess")
-    assert [s.field_name for s in specs] == ["Total page count"]
+def test_parse_field_specs_module_filter_by_name() -> None:
+    specs = parse_field_specs(_schema(), module="Company Information")
+    assert [s.field_name for s in specs] == ["Company name"]
 
 
 def test_parse_field_specs_module_filter_no_match_is_empty() -> None:
@@ -80,18 +105,137 @@ def test_parse_field_specs_module_filter_no_match_is_empty() -> None:
 def test_parse_field_specs_empty_or_malformed_schema_never_raises() -> None:
     assert parse_field_specs({}) == []
     assert parse_field_specs({"modules": "not-a-list"}) == []
-    assert parse_field_specs({"modules": [{"fields": "not-a-list"}]}) == []
-    assert parse_field_specs({"modules": [{"fields": [1, "x", None]}]}) == []
+    assert parse_field_specs({"modules": [{"retrieval_units": "nope"}]}) == []
+    assert parse_field_specs({"modules": [{"retrieval_units": [1, "x", None]}]}) == []
+    assert parse_field_specs({"modules": [{"retrieval_units": [{"fields": "nope"}]}]}) == []
+    assert parse_field_specs({"modules": [{"retrieval_units": [{"fields": [1, None]}]}]}) == []
+
+
+def test_parse_field_specs_retrieval_query_comes_from_the_unit() -> None:
+    spec = parse_field_specs(_schema(), module="module_3_balance_sheet")[0]
+    assert spec.retrieval_query == "Standalone Balance Sheet as at the reporting date"
+    assert spec.unit_id == "RU_BS"
+    assert spec.unit_title == "Balance Sheet"
+    assert spec.scope == "primary_statement"
+    assert spec.statement_type == "BS"
+
+
+def test_parse_field_specs_per_field_retrieval_query_is_the_fallback() -> None:
+    """A unit with no usable retrieval_query falls back to the field's own,
+    so a future schema revision that pushes the query back down still parses."""
+    schema = {
+        "modules": [
+            {
+                "id": 9, "key": "m9", "name": "M9",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_9", "title": "Nine", "retrieval_query": "   ",
+                        "locator_keywords": ["nine"],
+                        "fields": [
+                            {
+                                "field_name": "F", "data_type": "string",
+                                "extraction_prompt": "p", "aliases": ["f"],
+                                "retrieval_query": "field level query",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    assert parse_field_specs(schema)[0].retrieval_query == "field level query"
+
+
+def test_parse_field_specs_field_with_no_query_anywhere_is_skipped() -> None:
+    schema = {
+        "modules": [
+            {
+                "id": 9, "key": "m9", "name": "M9",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_9", "title": "Nine",
+                        "fields": [
+                            {
+                                "field_name": "F", "data_type": "string",
+                                "extraction_prompt": "p", "aliases": [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    assert parse_field_specs(schema) == []
+
+
+def test_parse_field_specs_keywords_are_aliases_then_locator_keywords() -> None:
+    spec = parse_field_specs(_schema(), module="module_3_balance_sheet")[0]
+    assert spec.keywords == ("Total assets", "TOTAL ASSETS", "balance sheet", "total assets")
+
+
+def test_parse_field_specs_keywords_are_deduplicated_in_order() -> None:
+    """keyword_overlap divides by len(keywords), so a duplicate silently
+    dilutes the rerank boost -- dedup is a scoring correctness rule, not tidying."""
+    schema = {
+        "modules": [
+            {
+                "id": 9, "key": "m9", "name": "M9",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_9", "title": "Nine", "retrieval_query": "q",
+                        "locator_keywords": ["total assets", "balance sheet"],
+                        "fields": [
+                            {
+                                "field_name": "F", "data_type": "string",
+                                "extraction_prompt": "p",
+                                "aliases": ["total assets", "assets"],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    assert parse_field_specs(schema)[0].keywords == (
+        "total assets", "assets", "balance sheet",
+    )
 
 
 def test_parse_field_specs_field_shape() -> None:
     spec = parse_field_specs(_schema())[0]
     assert spec == FieldSpec(
-        field_name="Total page count", data_type="integer",
-        retrieval_query="Number of pages", keywords=("pages", "total"),
-        extraction_prompt="Extract it.", enum_values=None,
-        module_id=0, module_name="PREPROCESS",
+        field_name="Company name",
+        data_type="string",
+        retrieval_query="Corporate Information panel: name, CIN, address",
+        keywords=("Company name", "Name of the company", "corporate information", "CIN"),
+        extraction_prompt="Extract the Company name.",
+        enum_values=None,
+        module_id=2,
+        module_name="Company Information",
+        module_key="module_2_company_info",
+        unit_id="RU_COMPANY",
+        unit_title="Corporate Information",
+        scope="front_matter",
+        statement_type=None,
     )
+
+
+def test_parse_field_specs_against_the_committed_schema_file() -> None:
+    """The regression that motivated this task: the shipped v2.0 parser
+    returned [] against the committed v3.1.0 file, so POST /extract/document
+    extracted nothing at all. Reads the real file, not a fixture."""
+    import json
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    path = repo_root / "docs" / "architecture" / "field-extraction-schema.json"
+    with open(path, encoding="utf-8") as f:
+        schema = json.load(f)
+    specs = parse_field_specs(schema)
+    assert len(specs) == 198
+    assert parse_field_specs(schema, module="module_3_balance_sheet")
+    assert all(s.retrieval_query.strip() for s in specs)
+    assert all(s.unit_id for s in specs)
 
 
 def test_is_numeric() -> None:
@@ -143,9 +287,12 @@ def test_rerank_candidates_empty_input() -> None:
 
 def _field() -> FieldSpec:
     return FieldSpec(
-        field_name="Total assets", data_type="decimal", retrieval_query="Total assets value",
+        field_name="Total assets", data_type="decimal",
+        retrieval_query="Standalone Balance Sheet as at the reporting date",
         keywords=("total", "assets"), extraction_prompt="Extract the total assets value.",
-        enum_values=None, module_id=1, module_name="BALANCE_SHEET",
+        enum_values=None, module_id=3, module_name="Balance Sheet",
+        module_key="module_3_balance_sheet", unit_id="RU_BS", unit_title="Balance Sheet",
+        scope="primary_statement", statement_type="BS",
     )
 
 

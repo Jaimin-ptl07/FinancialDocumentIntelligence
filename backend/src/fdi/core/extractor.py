@@ -6,11 +6,22 @@ plain Mappings/dataclasses this module owns, the same "reads inputs as
 plain Mappings" posture fdi.core.retrieval.build_chunks and fdi.core.agent's
 extract_citations already establish.
 
-parse_field_specs flattens the schema's modules into FieldSpecs, keeping
-ONLY rag_extractable=true AND source_type="document_content" fields (design
-spec sec 2 decision 2) -- every other field (metadata/computed/constant/
-external_lookup/not_extracted) is pipeline-sourced and never reaches this
-extractor. rerank_candidates is the model-free blend reranker (decision 3):
+parse_field_specs flattens the schema's THREE-level v3.1 nesting --
+modules -> retrieval_units -> fields -- into FieldSpecs. v3.1 replaced
+v2.0's flat modules[*].fields, and with it dropped rag_extractable,
+source_type, keywords, enum_values, and the per-field retrieval_query. So
+the old "keep only rag_extractable=true AND source_type=document_content"
+filter is GONE, not reimplemented: in v3.1 a field exists only inside a
+retrieval unit, and a retrieval unit IS document context by construction
+(the schema's own retrieval_model: "Retrieve-once, extract-many. Retrieval
+is per Retrieval Unit, not per field"). Pipeline-sourced metadata fields
+are simply absent from the file. retrieval_query is read off the UNIT
+(falling back to a per-field one if a later revision adds it back), and
+keywords are the field's `aliases` followed by the unit's
+`locator_keywords`, order-preserving deduplicated -- keyword_overlap
+divides by len(keywords), so a duplicate would silently dilute the boost.
+
+rerank_candidates is the model-free blend reranker (decision 3):
 score = retrieval_score + keyword_weight * keyword_overlap(text, keywords),
 stable-sorted descending, truncated to top_k. build_extraction_messages/
 assemble_result are the two halves of the ExtractorClient contract: the
@@ -28,6 +39,13 @@ _NUMERIC_DATA_TYPES = frozenset({"decimal", "integer"})
 
 @dataclass(frozen=True)
 class FieldSpec:
+    """One extractable field, flattened out of its module and retrieval unit.
+
+    The five unit/module members after `module_name` carry defaults so a
+    hand-built FieldSpec (tests, and any future caller that synthesizes one
+    outside the parser) still constructs with the v2.0-era argument set.
+    """
+
     field_name: str
     data_type: str
     retrieval_query: str
@@ -36,6 +54,11 @@ class FieldSpec:
     enum_values: tuple[str, ...] | None
     module_id: int
     module_name: str
+    module_key: str = ""
+    unit_id: str = ""
+    unit_title: str = ""
+    scope: str | None = None
+    statement_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,33 +71,66 @@ class Candidate:
 
 
 def _module_matches(module: Mapping[str, object], selector: str) -> bool:
-    return module.get("name") == selector or module.get("folder") == selector
+    """v3.1 modules carry `key` (stable id, e.g. "module_3_balance_sheet")
+    and `name` (human label, e.g. "Balance Sheet") -- and no `folder`, which
+    v2.0's selector also accepted. Either one matches, exactly: `key` is what
+    a stored UI selection should send, `name` is what a person types."""
+    return module.get("key") == selector or module.get("name") == selector
+
+
+def _str_tuple(value: object) -> tuple[str, ...]:
+    """`value` filtered to non-empty `str`s, or `()` for anything else."""
+    if not isinstance(value, list):
+        return ()
+    return tuple(v for v in value if isinstance(v, str) and v)
+
+
+def _dedup(values: Sequence[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in values:
+        if v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+    return tuple(out)
+
+
+def _non_blank_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _field_spec_from(
-    field: Mapping[str, object], *, module_id: int, module_name: str
+    field: Mapping[str, object],
+    *,
+    unit: Mapping[str, object],
+    module_id: int,
+    module_name: str,
+    module_key: str,
 ) -> FieldSpec | None:
-    """One schema field dict -> FieldSpec, or None if malformed (missing/
-    wrong-typed field_name, data_type, retrieval_query, or
-    extraction_prompt) -- parse_field_specs skips a None, never raises."""
+    """One v3.1 schema field dict (plus its owning retrieval unit) ->
+    FieldSpec, or None if malformed (missing/wrong-typed field_name,
+    data_type, or extraction_prompt, or no non-blank retrieval_query on
+    either the unit or the field) -- parse_field_specs skips a None, never
+    raises."""
     field_name = field.get("field_name")
     data_type = field.get("data_type")
-    retrieval_query = field.get("retrieval_query")
     extraction_prompt = field.get("extraction_prompt")
     if not isinstance(field_name, str) or not field_name:
         return None
     if not isinstance(data_type, str) or not data_type:
         return None
-    if not isinstance(retrieval_query, str) or not retrieval_query.strip():
-        return None
     if not isinstance(extraction_prompt, str) or not extraction_prompt:
         return None
 
-    keywords_raw = field.get("keywords")
-    keywords = (
-        tuple(k for k in keywords_raw if isinstance(k, str))
-        if isinstance(keywords_raw, list)
-        else ()
+    retrieval_query = _non_blank_str(unit.get("retrieval_query")) or _non_blank_str(
+        field.get("retrieval_query")
+    )
+    if retrieval_query is None:
+        return None
+
+    keywords = _dedup(
+        _str_tuple(field.get("aliases")) + _str_tuple(unit.get("locator_keywords"))
     )
 
     enum_values_raw = field.get("enum_values")
@@ -84,19 +140,28 @@ def _field_spec_from(
         else None
     )
 
+    unit_id = unit.get("unit_id")
+    unit_title = unit.get("title")
+
     return FieldSpec(
         field_name=field_name, data_type=data_type, retrieval_query=retrieval_query,
         keywords=keywords, extraction_prompt=extraction_prompt, enum_values=enum_values,
-        module_id=module_id, module_name=module_name,
+        module_id=module_id, module_name=module_name, module_key=module_key,
+        unit_id=unit_id if isinstance(unit_id, str) else "",
+        unit_title=unit_title if isinstance(unit_title, str) else "",
+        scope=_non_blank_str(unit.get("scope")),
+        statement_type=_non_blank_str(unit.get("statement_type")),
     )
 
 
 def parse_field_specs(schema: Mapping[str, object], module: str | None = None) -> list[FieldSpec]:
-    """Flatten schema["modules"][*]["fields"] into FieldSpecs, keeping only
-    rag_extractable=true AND source_type="document_content" fields (decision
-    2). `module`, if given, keeps only the module whose "name" or "folder"
-    equals it (exact match). Malformed field/module entries are skipped,
-    never raise; a malformed/missing "modules" list returns []."""
+    """Flatten schema["modules"][*]["retrieval_units"][*]["fields"] into
+    FieldSpecs (v3.1 nesting; v2.0's flat modules[*]["fields"] is gone, and
+    so are its rag_extractable/source_type filters -- see the module
+    docstring). `module`, if given, keeps only the module whose "key" or
+    "name" equals it (exact match). Malformed module/unit/field entries are
+    skipped, never raise; a malformed/missing "modules", "retrieval_units",
+    or "fields" list contributes nothing."""
     modules_raw = schema.get("modules")
     modules = modules_raw if isinstance(modules_raw, list) else []
 
@@ -110,19 +175,25 @@ def parse_field_specs(schema: Mapping[str, object], module: str | None = None) -
         module_id = module_id_raw if isinstance(module_id_raw, int) else -1
         module_name_raw = m.get("name")
         module_name = module_name_raw if isinstance(module_name_raw, str) else ""
+        module_key_raw = m.get("key")
+        module_key = module_key_raw if isinstance(module_key_raw, str) else ""
 
-        fields_raw = m.get("fields")
-        fields = fields_raw if isinstance(fields_raw, list) else []
-        for f in fields:
-            if not isinstance(f, Mapping):
+        units_raw = m.get("retrieval_units")
+        units = units_raw if isinstance(units_raw, list) else []
+        for u in units:
+            if not isinstance(u, Mapping):
                 continue
-            if f.get("rag_extractable") is not True:
-                continue
-            if f.get("source_type") != "document_content":
-                continue
-            spec = _field_spec_from(f, module_id=module_id, module_name=module_name)
-            if spec is not None:
-                specs.append(spec)
+            fields_raw = u.get("fields")
+            fields = fields_raw if isinstance(fields_raw, list) else []
+            for f in fields:
+                if not isinstance(f, Mapping):
+                    continue
+                spec = _field_spec_from(
+                    f, unit=u, module_id=module_id, module_name=module_name,
+                    module_key=module_key,
+                )
+                if spec is not None:
+                    specs.append(spec)
     return specs
 
 

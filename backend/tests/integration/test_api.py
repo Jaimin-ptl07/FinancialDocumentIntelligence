@@ -2027,13 +2027,19 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
         await s.commit()
 
     schema = {
+        "version": "3.1.0",
         "modules": [{
-            "id": 1, "name": "OVERVIEW", "folder": "1-overview",
-            "fields": [{
-                "field_name": "Company overview text",
-                "source_type": "document_content", "rag_extractable": True,
-                "data_type": "text", "retrieval_query": f"manufacturer {marker}",
-                "extraction_prompt": "Extract the overview.", "keywords": ["manufacturer"],
+            "id": 1, "key": "module_1_overview", "name": "Overview",
+            "retrieval_units": [{
+                "unit_id": "RU_OVERVIEW", "title": "Company Overview",
+                "scope": "front_matter", "locator_keywords": ["manufacturer"],
+                "retrieval_query": f"manufacturer {marker}",
+                "fields": [{
+                    "field_name": "Company overview text",
+                    "aliases": ["overview"],
+                    "data_type": "text",
+                    "extraction_prompt": "Extract the overview.",
+                }],
             }],
         }],
     }

@@ -59,37 +59,65 @@ async def store(minio_client: Minio) -> ArtifactStore:
 
 
 def _schema(marker: str) -> dict[str, object]:
+    """v3.1.0-shaped: modules -> retrieval_units -> fields. `retrieval_query`
+    is per UNIT, so the three fields need three units (the unmatchable one
+    gets its own unit with a deliberately unmatchable query)."""
     return {
+        "version": "3.1.0",
         "modules": [
             {
-                "id": 1, "name": "OVERVIEW", "folder": "1-overview",
-                "fields": [
+                "id": 1, "key": "module_1_overview", "name": "Overview",
+                "retrieval_units": [
                     {
-                        "field_name": "Company overview text",
-                        "source_type": "document_content", "rag_extractable": True,
-                        "data_type": "text",
+                        "unit_id": "RU_OVERVIEW",
+                        "title": "Company Overview",
+                        "scope": "front_matter",
+                        "locator_keywords": ["manufacturing"],
                         "retrieval_query": f"manufacturing company {marker}",
-                        "extraction_prompt": "Extract the company overview.",
-                        "keywords": ["manufacturing"],
+                        "fields": [
+                            {
+                                "field_name": "Company overview text",
+                                "aliases": ["overview"],
+                                "data_type": "text",
+                                "extraction_prompt": "Extract the company overview.",
+                            },
+                        ],
                     },
                 ],
             },
             {
-                "id": 2, "name": "BALANCE_SHEET", "folder": "2-balance-sheet",
-                "fields": [
+                "id": 2, "key": "module_2_balance_sheet", "name": "Balance Sheet",
+                "retrieval_units": [
                     {
-                        "field_name": "Total assets",
-                        "source_type": "document_content", "rag_extractable": True,
-                        "data_type": "decimal", "retrieval_query": "Total assets",
-                        "extraction_prompt": "Extract the total assets value.",
-                        "keywords": ["total", "assets"],
+                        "unit_id": "RU_BS",
+                        "title": "Balance Sheet",
+                        "scope": "primary_statement",
+                        "statement_type": "BS",
+                        "locator_keywords": ["total", "assets"],
+                        "retrieval_query": "Total assets",
+                        "fields": [
+                            {
+                                "field_name": "Total assets",
+                                "aliases": ["Total assets"],
+                                "data_type": "decimal",
+                                "extraction_prompt": "Extract the total assets value.",
+                            },
+                        ],
                     },
                     {
-                        "field_name": "Unmatchable field",
-                        "source_type": "document_content", "rag_extractable": True,
-                        "data_type": "string",
+                        "unit_id": "RU_NOWHERE",
+                        "title": "Nowhere",
+                        "scope": "note",
+                        "locator_keywords": [],
                         "retrieval_query": "zzzznonexistenttoken9999 impossible query",
-                        "extraction_prompt": "Extract nothing findable.", "keywords": [],
+                        "fields": [
+                            {
+                                "field_name": "Unmatchable field",
+                                "aliases": [],
+                                "data_type": "string",
+                                "extraction_prompt": "Extract nothing findable.",
+                            },
+                        ],
                     },
                 ],
             },
@@ -226,7 +254,9 @@ async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
     doc, _ = processed_doc
     blank = FieldSpec(
         field_name="Blank query field", data_type="string", retrieval_query="   ",
-        keywords=(), extraction_prompt="x", enum_values=None, module_id=9, module_name="X",
+        keywords=(), extraction_prompt="x", enum_values=None, module_id=9,
+        module_name="X", module_key="m9", unit_id="RU_X", unit_title="X",
+        scope=None, statement_type=None,
     )
     async with session_factory() as s:
         ctx = ExtractContext(
