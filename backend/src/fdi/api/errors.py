@@ -122,7 +122,22 @@ def problem(
 
 async def _http_exc(_: Request, exc: Exception) -> Response:
     assert isinstance(exc, StarletteHTTPException)
-    return problem(exc.status_code, str(exc.detail), headers=exc.headers)
+    detail = exc.detail
+    if isinstance(detail, Mapping) and isinstance(detail.get("message"), str):
+        # A structured detail: `message` becomes RFC 9457's string `detail` and
+        # everything else is spread as extension members (s3.2), exactly the
+        # shape `_validation_exc` already emits for its `errors` list. Without
+        # this, `str(dict)` would ship a Python repr as the detail string --
+        # unparseable by the caller that raised the dict precisely so the
+        # caller COULD parse it (PUT /schema's per-path error list).
+        extra = {k: v for k, v in detail.items() if k != "message"}
+        return problem(
+            exc.status_code,
+            detail["message"],
+            headers=exc.headers,
+            **jsonable_encoder(extra),
+        )
+    return problem(exc.status_code, str(detail), headers=exc.headers)
 
 
 async def _validation_exc(_: Request, exc: Exception) -> Response:

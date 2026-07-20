@@ -1,8 +1,6 @@
 """HTTP surface."""
 
-import asyncio
 import contextlib
-import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import cast
@@ -65,6 +63,10 @@ from fdi.api.schemas import (
     ReadingOrderView,
     ReadyView,
     ReprocessView,
+    SchemaValidateRequest,
+    SchemaValidationView,
+    SchemaView,
+    SchemaWriteRequest,
     SearchRequest,
     SearchResultsView,
     SearchResultView,
@@ -79,6 +81,7 @@ from fdi.api.schemas import (
 )
 from fdi.core.extractor import parse_field_specs
 from fdi.core.ontology import CanonicalConcept
+from fdi.core.schema import bump_patch_version, validate_extraction_schema
 from fdi.pipeline.agent_tools import AgentContext
 from fdi.pipeline.ask import answer_question
 from fdi.pipeline.crossdoc import resolve_entities
@@ -102,6 +105,7 @@ from fdi.pipeline.retrieval import (
     keyword_search,
     vector_search,
 )
+from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import get_settings
@@ -908,13 +912,6 @@ async def ask(
 # --------------------------------------------------------------------------
 
 
-def _read_schema_file(schema_path: str) -> object:
-    """Blocking file read, run off the event loop via asyncio.to_thread by
-    the caller -- same posture as ArtifactStore's sync-minio-SDK calls."""
-    with open(schema_path, encoding="utf-8") as f:
-        return json.load(f)
-
-
 @router.post("/extract/document", response_model=ExtractDocumentView)
 async def extract_document_route(
     body: ExtractRequest,
@@ -947,8 +944,7 @@ async def extract_document_route(
             status_code=500, detail=f"document {doc.id} has no version"
         )
 
-    schema_raw = await asyncio.to_thread(_read_schema_file, schema_path)
-    schema = schema_raw if isinstance(schema_raw, dict) else {}
+    schema, _source = await load_schema(store=store, seed_path=schema_path)
     fields = parse_field_specs(schema, body.module)
 
     ctx = ExtractContext(
@@ -958,4 +954,129 @@ async def extract_document_route(
     result = await extract_document(ctx=ctx, fields=fields, client=extractor_client)
     return ExtractDocumentView.model_validate(
         {"doc_key": body.doc_key, "module": body.module, **result}
+    )
+
+
+# --------------------------------------------------------------------------
+# SP-19 (B5): the extraction schema is EDITABLE over HTTP.
+#
+# Writes persist to an object in the artifact bucket, never back to
+# docs/architecture/field-extraction-schema.json: backend/Dockerfile COPYs
+# that file into the image at build time, so an in-container write vanishes
+# on the next `up` -- or succeeds and leaves each replica with a private
+# schema. See fdi.pipeline.schema_store's module docstring. The on-disk file
+# stays the immutable v3.1.0 seed. POST /extract/document reads through the
+# same load_schema, so a PUT takes effect on the very next extraction.
+# --------------------------------------------------------------------------
+
+
+def _schema_counts(schema: Mapping[str, object]) -> tuple[int, int, int]:
+    """(module_count, unit_count, field_count). field_count is what
+    parse_field_specs ACTUALLY yields, not the schema's own `field_count`
+    hints -- the number that matters is how many fields extraction will
+    attempt, which is the number that silently went to zero when the schema
+    moved to v3.1."""
+    modules_raw = schema.get("modules")
+    modules = [m for m in modules_raw if isinstance(m, Mapping)] if isinstance(
+        modules_raw, list
+    ) else []
+    unit_count = 0
+    for m in modules:
+        units = m.get("retrieval_units")
+        if isinstance(units, list):
+            unit_count += sum(1 for u in units if isinstance(u, Mapping))
+    return len(modules), unit_count, len(parse_field_specs(schema))
+
+
+def _schema_view(schema: Mapping[str, object], source: str) -> SchemaView:
+    version = schema.get("version")
+    module_count, unit_count, field_count = _schema_counts(schema)
+    return SchemaView(
+        version=version if isinstance(version, str) else "",
+        source=source,
+        module_count=module_count,
+        unit_count=unit_count,
+        field_count=field_count,
+        schema_document=dict(schema),
+    )
+
+
+@router.get("/schema", response_model=SchemaView)
+async def get_schema(store: StoreDep, schema_path: ExtractionSchemaPathDep) -> SchemaView:
+    """The current field-extraction schema document, whole.
+
+    Read-through: the artifact bucket's copy if one has been saved, else the
+    on-disk seed. This route never writes -- a GET that seeded the bucket
+    would make the first read of a fresh environment a mutation, and two
+    concurrent cold reads a race.
+    """
+    schema, source = await load_schema(store=store, seed_path=schema_path)
+    return _schema_view(schema, source)
+
+
+@router.put("/schema", response_model=SchemaView)
+async def put_schema(
+    body: SchemaWriteRequest, store: StoreDep, schema_path: ExtractionSchemaPathDep
+) -> SchemaView:
+    """Replace the schema. Validated, version-stamped, and concurrency-checked.
+
+    `base_version` must equal the CURRENT document's version or the write is
+    refused 409 with both versions named -- two people editing the same
+    schema in two browser tabs must not silently clobber each other, and the
+    loser needs to know what it should have been based on.
+
+    The new version is stamped SERVER-side by bumping the patch component
+    (3.1.0 -> 3.1.1); any `version` inside the submitted document is
+    overwritten. A client-chosen version is a second thing to validate and to
+    disagree about, and a monotonic patch bump is exactly what an edit-in-a-UI
+    produces.
+
+    A document that fails structural validation is refused 422 with one
+    JSON-path-prefixed error per problem, and NOTHING is written: a saved
+    schema that parses to zero fields would turn POST /extract/document into
+    a silent no-op with a 200 response, which is the precise failure this
+    endpoint's own program exists to have fixed once already.
+    """
+    current, _source = await load_schema(store=store, seed_path=schema_path)
+    current_version = current.get("version")
+    current_version_str = current_version if isinstance(current_version, str) else ""
+    if body.base_version != current_version_str:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"schema was modified: base_version {body.base_version!r} is not the "
+                f"current version {current_version_str!r} -- re-read GET /schema and reapply"
+            ),
+        )
+
+    errors = validate_extraction_schema(body.schema_document)
+    if errors:
+        raise HTTPException(
+            status_code=422, detail={"message": "schema is invalid", "errors": errors}
+        )
+
+    new_doc = dict(body.schema_document)
+    new_doc["version"] = bump_patch_version(current_version_str)
+    await save_schema(store=store, doc=new_doc)
+    log.info(
+        "schema.updated",
+        base_version=body.base_version,
+        version=new_doc["version"],
+        field_count=len(parse_field_specs(new_doc)),
+    )
+    return _schema_view(new_doc, "store")
+
+
+@router.post("/schema/validate", response_model=SchemaValidationView)
+async def validate_schema_route(body: SchemaValidateRequest) -> SchemaValidationView:
+    """Dry-run the PUT gate. Touches no storage, so a UI can validate on every
+    keystroke without a write path anywhere near it."""
+    errors = validate_extraction_schema(body.schema_document)
+    module_count, unit_count, field_count = _schema_counts(body.schema_document)
+    return SchemaValidationView(
+        valid=not errors,
+        errors=errors,
+        module_count=module_count,
+        unit_count=unit_count,
+        field_count=field_count,
     )

@@ -1979,7 +1979,7 @@ Writing back to `docs/architecture/field-extraction-schema.json` is wrong for a 
   async def save_schema(*, store: ArtifactStore, doc: Mapping[str, object]) -> None: ...
   ```
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Create `backend/tests/unit/test_schema_validation.py`:
 
@@ -2117,12 +2117,12 @@ def test_bump_patch_version_leaves_an_unparseable_version_alone() -> None:
     assert bump_patch_version("") == ""
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/unit/test_schema_validation.py -q`
 Expected: FAIL at collection with `ImportError: cannot import name 'bump_patch_version' from 'fdi.core.schema'`.
 
-- [ ] **Step 3: Write the pure validation**
+- [x] **Step 3: Write the pure validation**
 
 Append to `backend/src/fdi/core/schema.py`:
 
@@ -2257,12 +2257,12 @@ class NonFiniteFloatError(ValueError):
 _PRIMITIVES: Final = (str, bool, int, type(None))
 ```
 
-- [ ] **Step 4: Run the unit test to verify it passes**
+- [x] **Step 4: Run the unit test to verify it passes**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/unit/test_schema_validation.py -q`
 Expected: PASS, 13 passed.
 
-- [ ] **Step 5: Write the failing integration test**
+- [x] **Step 5: Write the failing integration test**
 
 Create `backend/tests/integration/test_schema_endpoints.py`:
 
@@ -2421,12 +2421,12 @@ async def test_extract_document_reads_the_stored_schema(make_client) -> None:
     assert r.status_code in (404, 503)
 ```
 
-- [ ] **Step 6: Run the integration test to verify it fails**
+- [x] **Step 6: Run the integration test to verify it fails**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_schema_endpoints.py -q`
 Expected: FAIL, 6 failed with `assert 404 == 200` — `/schema` is not a route yet.
 
-- [ ] **Step 7: Write the schema store**
+- [x] **Step 7: Write the schema store**
 
 Create `backend/src/fdi/pipeline/schema_store.py`:
 
@@ -2498,7 +2498,7 @@ async def save_schema(*, store: ArtifactStore, doc: Mapping[str, object]) -> Non
     await store.put_json(SCHEMA_KEY, dict(doc))
 ```
 
-- [ ] **Step 8: Add the view models**
+- [x] **Step 8: Add the view models**
 
 Append to `backend/src/fdi/api/schemas.py`:
 
@@ -2535,7 +2535,7 @@ class SchemaValidationView(BaseModel):
     field_count: int
 ```
 
-- [ ] **Step 9: Write the routes**
+- [x] **Step 9: Write the routes**
 
 In `backend/src/fdi/api/routes.py`, delete `_read_schema_file` (lines 812-816) and replace the schema read inside `extract_document_route` (lines 851-853) with:
 
@@ -2678,7 +2678,7 @@ Add the new imports to `backend/src/fdi/api/routes.py`:
 - `from fdi.pipeline.schema_store import load_schema, save_schema` (after `fdi.pipeline.retrieval`)
 - `json` may now be unused at module level — if ruff `F401` flags it, remove `import json` from line 5.
 
-- [ ] **Step 10: Run the tests to verify they pass**
+- [x] **Step 10: Run the tests to verify they pass**
 
 Run:
 ```bash
@@ -2687,7 +2687,7 @@ PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_schema_end
 ```
 Expected: 13 passed; 6 passed.
 
-- [ ] **Step 11: Run the full gate set**
+- [x] **Step 11: Run the full gate set**
 
 Run:
 ```bash
@@ -2698,7 +2698,7 @@ PYTHONUTF8=1 uv run --directory backend pytest -m "not integration and not e2e" 
 ```
 Expected: all green; lint-imports `Contracts: 1 kept, 0 broken.` (`fdi.pipeline.schema_store` imports only `fdi.platform`, which is the layer below it).
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add backend/src/fdi/core/schema.py backend/src/fdi/pipeline/schema_store.py backend/src/fdi/api/schemas.py backend/src/fdi/api/routes.py backend/tests/unit/test_schema_validation.py backend/tests/integration/test_schema_endpoints.py

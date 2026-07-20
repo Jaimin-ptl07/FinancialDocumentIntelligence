@@ -484,3 +484,35 @@ class ExtractDocumentView(BaseModel):
     module: str | None
     field_count: int
     fields: list[ExtractFieldView]
+
+
+class SchemaView(BaseModel):
+    """The current field-extraction schema plus the counts a UI header
+    shows. `source` is "store" (an edited copy in the artifact bucket) or
+    "seed" (the immutable on-disk file, when nothing has been saved yet).
+    The document field is named `schema_document`, not `schema`, because
+    `schema` shadows a BaseModel attribute."""
+
+    version: str
+    source: str
+    module_count: int
+    unit_count: int
+    field_count: int
+    schema_document: dict[str, object]
+
+
+class SchemaWriteRequest(BaseModel):
+    base_version: str
+    schema_document: dict[str, object]
+
+
+class SchemaValidateRequest(BaseModel):
+    schema_document: dict[str, object]
+
+
+class SchemaValidationView(BaseModel):
+    valid: bool
+    errors: list[str]
+    module_count: int
+    unit_count: int
+    field_count: int
