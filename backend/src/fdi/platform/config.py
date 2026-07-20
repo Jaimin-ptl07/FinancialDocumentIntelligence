@@ -117,6 +117,24 @@ class Settings(BaseSettings):
     # this var without a redeploy, or per-request via POST /entities/resolve's body.
     entity_sim_threshold: float = 0.85
 
+    # Browser origins allowed to read this API's responses cross-origin. The
+    # default is the Next.js dev server (SP-1/SP-18) -- the exact value that
+    # was hardcoded in fdi.api.app until SP-19 -- so an unset environment
+    # behaves identically to before.
+    #
+    # This is a REPLACEMENT, not an extension: setting it drops localhost:3000
+    # unless it is listed again. An allowlist that only ever grows is not an
+    # allowlist, and a production deployment must be able to say "only this
+    # origin".
+    #
+    # pydantic-settings parses a complex-typed field from the environment as
+    # JSON, so the variable is a JSON array -- `FDI_CORS_ORIGINS=["https://
+    # fdi.example"]`, not a comma-separated string. Never default this to
+    # ["*"]: a wildcard passes every happy-path CORS test while granting every
+    # site on the internet read access to this API from a victim's browser
+    # (see tests/unit/test_cors.py's unlisted-origin test).
+    cors_origins: list[str] = ["http://localhost:3000"]
+
     # Extractor pipeline (schema-driven RAG field extraction, POST
     # /extract/document). Always has a working default -- the schema ships
     # in the repo -- so, like azure_di_model/embed_model, this is inert

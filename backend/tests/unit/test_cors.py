@@ -18,6 +18,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from fdi.api.app import create_app
+from fdi.platform.config import get_settings
 
 DEV_ORIGIN = "http://localhost:3000"
 
@@ -70,3 +71,45 @@ async def test_an_unlisted_origin_gets_no_grant(client: AsyncClient) -> None:
     r = await client.get("/health", headers={"Origin": "http://evil.example"})
     assert r.status_code == 200
     assert "access-control-allow-origin" not in r.headers
+
+
+async def test_a_configured_origin_is_granted_and_the_default_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FDI_CORS_ORIGINS REPLACES the allowlist, it does not extend it.
+
+    A deployment that serves the UI from https://fdi.example must not keep
+    granting localhost:3000 -- an allowlist that only ever grows is not an
+    allowlist. Built through create_app() with the env set, which is the only
+    way the middleware's origins are decided.
+    """
+    for key, value in {
+        "FDI_DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/db",
+        "FDI_BROKER_URL": "amqp://guest:guest@h:5672/%2F",
+        "FDI_RESULT_BACKEND": "redis://h:6379/0",
+        "FDI_S3_ENDPOINT": "h:9000",
+        "FDI_S3_ACCESS_KEY": "ak",
+        "FDI_S3_SECRET_KEY": "sk",
+        "FDI_CORS_ORIGINS": '["https://fdi.example"]',
+    }.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        granted = await c.get("/health", headers={"Origin": "https://fdi.example"})
+        revoked = await c.get("/health", headers={"Origin": DEV_ORIGIN})
+
+    assert granted.headers["access-control-allow-origin"] == "https://fdi.example"
+    assert "access-control-allow-origin" not in revoked.headers
+
+
+async def test_an_unconfigured_environment_still_grants_the_dev_origin() -> None:
+    """create_app() runs at IMPORT time (`app = create_app()` at the bottom of
+    fdi/api/app.py) and in every test whose fixtures clear FDI_* -- so an
+    unbuildable Settings must fall back to the historical dev default, not
+    raise and fail collection of the whole suite."""
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/health", headers={"Origin": DEV_ORIGIN})
+    assert r.headers["access-control-allow-origin"] == DEV_ORIGIN

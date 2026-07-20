@@ -122,3 +122,20 @@ def test_extraction_schema_path_default(
     assert p.is_absolute()
     assert p.as_posix().endswith("docs/architecture/field-extraction-schema.json")
     assert p.exists()
+
+
+def test_cors_origins_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    assert Settings().cors_origins == ["http://localhost:3000"]
+
+
+def test_cors_origins_from_environment_is_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pydantic-settings parses a complex-typed field from the environment as
+    JSON, so the var is a JSON array -- not a comma-separated string."""
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv(
+        "FDI_CORS_ORIGINS", '["http://localhost:3000", "https://fdi.example"]'
+    )
+    assert Settings().cors_origins == ["http://localhost:3000", "https://fdi.example"]

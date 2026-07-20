@@ -2738,7 +2738,7 @@ concurrency on base_version, with the new version stamped server-side."
 - Consumes: nothing from earlier tasks.
 - Produces: `Settings.cors_origins: list[str]` (default `["http://localhost:3000"]`); `create_app()` signature unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/tests/unit/test_config.py`:
 
@@ -2811,12 +2811,12 @@ Add the imports `test_cors.py` now needs, right after `from fdi.api.app import c
 from fdi.platform.config import get_settings
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/unit/test_cors.py tests/unit/test_config.py -q`
 Expected: FAIL. `test_cors_origins_default` fails with `AttributeError: 'Settings' object has no attribute 'cors_origins'`; `test_cors_origins_from_environment_is_json` fails with `ValidationError: Unknown FDI_ environment variable(s): ['FDI_CORS_ORIGINS']`; `test_a_configured_origin_is_granted_and_the_default_is_replaced` fails the same way.
 
-- [ ] **Step 3: Add the setting**
+- [x] **Step 3: Add the setting**
 
 Insert into `backend/src/fdi/platform/config.py` immediately after `entity_sim_threshold` (line 118):
 
@@ -2840,7 +2840,7 @@ Insert into `backend/src/fdi/platform/config.py` immediately after `entity_sim_t
     cors_origins: list[str] = ["http://localhost:3000"]
 ```
 
-- [ ] **Step 4: Read the setting in the app factory**
+- [x] **Step 4: Read the setting in the app factory**
 
 Replace `backend/src/fdi/api/app.py:152-184` with:
 
@@ -2907,12 +2907,12 @@ Add the import to `backend/src/fdi/api/app.py` (after `from minio import Minio`,
 from pydantic import ValidationError
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/unit/test_cors.py tests/unit/test_config.py -q`
 Expected: PASS.
 
-- [ ] **Step 6: Complete the config trio**
+- [x] **Step 6: Complete the config trio**
 
 Insert into `.env.example` after line 108 (`FDI_ENTITY_SIM_THRESHOLD=0.85`):
 
@@ -2932,7 +2932,7 @@ Insert into `docker/compose.yml` after line 44 (`FDI_ENTITY_SIM_THRESHOLD: ${FDI
   FDI_CORS_ORIGINS: ${FDI_CORS_ORIGINS}
 ```
 
-- [ ] **Step 7: Run the full gate set**
+- [x] **Step 7: Run the full gate set**
 
 Run:
 ```bash
@@ -2943,7 +2943,7 @@ PYTHONUTF8=1 uv run --directory backend pytest -m "not integration and not e2e" 
 ```
 Expected: all green.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/src/fdi/platform/config.py backend/src/fdi/api/app.py .env.example docker/compose.yml backend/tests/unit/test_cors.py backend/tests/unit/test_config.py
