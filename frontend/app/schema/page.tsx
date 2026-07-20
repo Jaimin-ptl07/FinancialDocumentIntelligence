@@ -26,7 +26,9 @@ export default function SchemaScreen() {
     queryFn: getSchema,
   });
 
-  const schema = draft ?? data ?? null;
+  // `GET /schema` wraps the document alongside its counts and provenance, so
+  // the editable object is one level in.
+  const schema = draft ?? data?.schema_document ?? null;
   const dirty = draft !== null;
 
   const save = useMutation({
@@ -81,9 +83,13 @@ export default function SchemaScreen() {
         title="Extraction schema"
         lede="What the system looks for in a filing, and how it is told to read it."
       >
-        {schema ? (
-          <span className="data" style={{ fontSize: "var(--text-sm)" }}>
-            v{schema.version}
+        {data ? (
+          <span
+            className="data"
+            style={{ fontSize: "var(--text-sm)", color: "var(--ink-soft)" }}
+          >
+            v{data.version}
+            {data.source === "seed" ? " · as shipped" : " · edited"}
           </span>
         ) : null}
         <button

@@ -105,9 +105,23 @@ function renderScreen() {
   );
 }
 
+/** `GET|PUT /schema` return the document nested in an envelope carrying its
+ *  counts and provenance, not the bare document. */
+function view(doc: ExtractionSchema, source: "seed" | "store" = "seed") {
+  const units = doc.modules.flatMap((m) => m.retrieval_units);
+  return {
+    version: doc.version,
+    source,
+    module_count: doc.modules.length,
+    unit_count: units.length,
+    field_count: units.reduce((n, u) => n + u.fields.length, 0),
+    schema_document: doc,
+  };
+}
+
 describe("SchemaScreen", () => {
   it("lists the schema's modules and fields against the loaded version", async () => {
-    server.use(http.get(`${API}/schema`, () => HttpResponse.json(schema)));
+    server.use(http.get(`${API}/schema`, () => HttpResponse.json(view(schema))));
     renderScreen();
 
     expect(
@@ -119,12 +133,12 @@ describe("SchemaScreen", () => {
     expect(
       screen.getByRole("heading", { name: /Statement of Profit and Loss/ }),
     ).toBeInTheDocument();
-    expect(screen.getByText("v3.1.0")).toBeInTheDocument();
+    expect(screen.getByText(/v3\.1\.0/)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("4 of 4 fields");
   });
 
   it("finds a field by an alias it never shows, and says how much is hidden", async () => {
-    server.use(http.get(`${API}/schema`, () => HttpResponse.json(schema)));
+    server.use(http.get(`${API}/schema`, () => HttpResponse.json(view(schema))));
     renderScreen();
     await screen.findByRole("button", { name: "Total assets" });
 
@@ -143,12 +157,15 @@ describe("SchemaScreen", () => {
   });
 
   it("saves an edited prompt against the version it loaded", async () => {
-    let sent: { base_version: string; schema: ExtractionSchema } | null = null;
+    let sent: { base_version: string; schema_document: ExtractionSchema } | null =
+      null;
     server.use(
-      http.get(`${API}/schema`, () => HttpResponse.json(schema)),
+      http.get(`${API}/schema`, () => HttpResponse.json(view(schema))),
       http.put(`${API}/schema`, async ({ request }) => {
         sent = (await request.json()) as typeof sent;
-        return HttpResponse.json({ ...sent!.schema, version: "3.1.1" });
+        return HttpResponse.json(
+          view({ ...sent!.schema_document, version: "3.1.1" }, "store"),
+        );
       }),
     );
     renderScreen();
@@ -167,10 +184,10 @@ describe("SchemaScreen", () => {
     expect(save).toBeEnabled();
     await userEvent.click(save);
 
-    expect(await screen.findByText("v3.1.1")).toBeInTheDocument();
+    expect(await screen.findByText(/v3\.1\.1/)).toBeInTheDocument();
     expect(sent!.base_version).toBe("3.1.0");
     expect(
-      sent!.schema.modules[0].retrieval_units[0].fields[0].extraction_prompt,
+      sent!.schema_document.modules[0].retrieval_units[0].fields[0].extraction_prompt,
     ).toBe(
       "Extract the total assets from the Balance Sheet. Return null if absent.",
     );
@@ -179,7 +196,7 @@ describe("SchemaScreen", () => {
 
   it("surfaces a rejected save without discarding the edit", async () => {
     server.use(
-      http.get(`${API}/schema`, () => HttpResponse.json(schema)),
+      http.get(`${API}/schema`, () => HttpResponse.json(view(schema))),
       http.put(`${API}/schema`, () =>
         HttpResponse.json(
           { detail: "schema changed under you (base_version 3.1.0)" },

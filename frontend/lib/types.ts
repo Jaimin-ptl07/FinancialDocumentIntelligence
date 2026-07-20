@@ -14,19 +14,18 @@ export interface DocumentView {
   content_type: string | null;
 }
 
-/** `GET /documents` list-all. Each row carries its own stage summary so the
+/** `GET /documents` list-all: the latest version of each doc_key. `stage_counts`
+ *  is a {status: count} summary over the latest run per stage name, so the
  *  filings index does not have to fire one request per row. */
 export interface DocumentSummaryView extends DocumentView {
-  stages_done: number;
-  stages_total: number;
-  stages_failed: number;
-  failed_stage: string | null;
-  created_at: string | null;
+  stage_counts: Record<string, number>;
 }
 
 export interface DocumentListView {
   documents: DocumentSummaryView[];
   total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface DocumentVersionsView {
@@ -46,7 +45,7 @@ export interface StagesView {
 /** Azure Document Intelligence geometry: `polygon` is eight numbers — four
  *  (x, y) corners in INCHES, not pixels. */
 export interface BoundingRegion {
-  page_number: number;
+  page_number: number | null;
   polygon: number[];
 }
 
@@ -54,7 +53,9 @@ export interface ExtractSourceView {
   page: number | null;
   snippet: string | null;
   evidence_ids: string[];
-  bounding_regions: BoundingRegion[] | null;
+  /** Always a list — `[]` when the chunk does not map to geometry, or when the
+   *  provenance/structure artifact is absent. Never null. */
+  bounding_regions: BoundingRegion[];
 }
 
 export interface ExtractFieldView {
@@ -112,6 +113,26 @@ export interface ExtractionSchema {
   title: string;
   description: string;
   modules: SchemaModule[];
+}
+
+/** `GET|PUT /schema`. The document is nested under `schema_document` because
+ *  `schema` shadows a Pydantic BaseModel attribute. `source` is "store" once an
+ *  edit has been saved, "seed" while the on-disk file is still authoritative. */
+export interface SchemaView {
+  version: string;
+  source: "store" | "seed";
+  module_count: number;
+  unit_count: number;
+  field_count: number;
+  schema_document: ExtractionSchema;
+}
+
+export interface SchemaValidationView {
+  valid: boolean;
+  errors: string[];
+  module_count: number;
+  unit_count: number;
+  field_count: number;
 }
 
 /** `GET /analytics` — corpus and pipeline figures aggregated over stage_run.

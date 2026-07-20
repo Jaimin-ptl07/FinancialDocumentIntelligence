@@ -34,7 +34,7 @@ describe("Dashboard", () => {
     );
   });
 
-  it("names the stage that failed rather than just failing quietly", async () => {
+  it("says a stage failed rather than only showing a short count", async () => {
     server.use(
       http.get("http://localhost:8000/documents", () =>
         HttpResponse.json({
@@ -47,19 +47,18 @@ describe("Dashboard", () => {
               doc_key: "hdfc-2024.pdf",
               version: 2,
               content_type: "application/pdf",
-              stages_done: 11,
-              stages_total: 15,
-              stages_failed: 1,
-              failed_stage: "embedding",
-              created_at: null,
+              stage_counts: { done: 11, failed: 1 },
             },
           ],
           total: 1,
+          limit: 50,
+          offset: 0,
         }),
       ),
     );
     renderWithQuery(<Dashboard />);
-    expect(await screen.findByText("embedding failed")).toBeInTheDocument();
+    expect(await screen.findByText("✕ 1 failed")).toBeInTheDocument();
+    expect(screen.getByText("11/15")).toBeInTheDocument();
   });
 
   it("explains the failure when the filings cannot be loaded", async () => {

@@ -14,14 +14,12 @@ export const handlers = [
           doc_key: "annual-report-2025.pdf",
           version: 1,
           content_type: "application/pdf",
-          stages_done: 15,
-          stages_total: 15,
-          stages_failed: 0,
-          failed_stage: null,
-          created_at: "2026-07-18T09:12:00Z",
+          stage_counts: { done: 15 },
         },
       ],
       total: 1,
+      limit: 50,
+      offset: 0,
     }),
   ),
 
@@ -81,9 +79,15 @@ export const handlers = [
   http.get(`${API}/schema`, () =>
     HttpResponse.json({
       version: "3.1.0",
-      title: "Field extraction schema",
-      description: "Retrieve-once, extract-many.",
-      modules: [
+      source: "seed",
+      module_count: 1,
+      unit_count: 1,
+      field_count: 1,
+      schema_document: {
+        version: "3.1.0",
+        title: "Field extraction schema",
+        description: "Retrieve-once, extract-many.",
+        modules: [
         {
           id: 3,
           key: "module_3_balance_sheet",
@@ -112,8 +116,9 @@ export const handlers = [
               ],
             },
           ],
-        },
-      ],
+          },
+        ],
+      },
     }),
   ),
 ];

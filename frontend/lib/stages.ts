@@ -23,6 +23,23 @@ export const STAGES = [
  *  end to end, which is what the ingestion screen polls for. */
 export const TERMINAL_STAGE = "index";
 
+/** `GET /documents` reports each row's progress as a {status: count} map over
+ *  the latest run per stage. Reduce it to the three numbers the filings index
+ *  actually shows. `total` is the pipeline's own length, not the sum of the
+ *  map: a filing that has only run OCR has one entry, and "1/1" would read as
+ *  finished. */
+export function summarizeStageCounts(counts: Record<string, number>): {
+  done: number;
+  failed: number;
+  total: number;
+} {
+  return {
+    done: counts.done ?? 0,
+    failed: counts.failed ?? 0,
+    total: STAGES.length,
+  };
+}
+
 /** Longest-path layering: a stage sits one column right of its deepest
  *  dependency. Derived rather than hand-positioned, so adding a stage to
  *  STAGES cannot silently place it in a column that contradicts its deps. */

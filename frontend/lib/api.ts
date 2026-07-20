@@ -4,6 +4,8 @@ import type {
   DocumentView,
   ExtractDocumentView,
   ExtractionSchema,
+  SchemaValidationView,
+  SchemaView,
   StagesView,
 } from "./types";
 
@@ -55,13 +57,32 @@ export const extractDocument = (docKey: string, module?: string) =>
     body: JSON.stringify({ doc_key: docKey, module: module ?? null }),
   });
 
-export const getSchema = () => request<ExtractionSchema>("/schema");
+export const getSchema = () => request<SchemaView>("/schema");
 
-export const putSchema = (schema: ExtractionSchema, baseVersion: string) =>
-  request<ExtractionSchema>("/schema", {
+/** `base_version` must match the version currently stored or the write is
+ *  refused 409 — two tabs editing the same schema must not clobber each other.
+ *  The new version is stamped server-side by bumping the patch component, so
+ *  nothing here chooses one. */
+export const putSchema = (
+  schemaDocument: ExtractionSchema,
+  baseVersion: string,
+) =>
+  request<SchemaView>("/schema", {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ base_version: baseVersion, schema }),
+    body: JSON.stringify({
+      base_version: baseVersion,
+      schema_document: schemaDocument,
+    }),
+  });
+
+/** Dry-runs the PUT gate without touching storage, so the editor can validate
+ *  as the analyst types. */
+export const validateSchema = (schemaDocument: ExtractionSchema) =>
+  request<SchemaValidationView>("/schema/validate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ schema_document: schemaDocument }),
   });
 
 export const getAnalytics = () => request<AnalyticsView>("/analytics");

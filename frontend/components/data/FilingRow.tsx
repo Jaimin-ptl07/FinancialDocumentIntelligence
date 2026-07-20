@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { DocumentSummaryView } from "@/lib/types";
 import { formatBytes } from "@/lib/format";
+import { summarizeStageCounts } from "@/lib/stages";
 
 const cell = {
   padding: "var(--sp-3) var(--sp-4)",
@@ -10,9 +11,8 @@ const cell = {
 };
 
 export function FilingRow({ document }: { document: DocumentSummaryView }) {
-  const failed = document.stages_failed > 0;
-  const complete =
-    !failed && document.stages_done >= document.stages_total;
+  const { done, failed, total } = summarizeStageCounts(document.stage_counts);
+  const complete = failed === 0 && done >= total;
 
   return (
     <tr style={{ borderTop: "1px solid var(--rule-soft)" }}>
@@ -46,9 +46,9 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
             color: complete ? "var(--tick)" : "var(--ink)",
           }}
         >
-          {document.stages_done}/{document.stages_total}
+          {done}/{total}
         </span>
-        {failed ? (
+        {failed > 0 ? (
           <span
             className="data"
             style={{
@@ -60,7 +60,7 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
               fontSize: "var(--text-2xs)",
             }}
           >
-            {document.failed_stage ?? "a stage"} failed
+            ✕ {failed} failed
           </span>
         ) : null}
       </td>
