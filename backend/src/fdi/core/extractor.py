@@ -31,6 +31,7 @@ rather than raising (decisions 8, 10). Every function here is total: no
 raise, on any input shape, anywhere.
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -386,3 +387,76 @@ def assemble_result(
         "source": {"page": page, "snippet": snippet, "evidence_ids": evidence_ids},
         "confidence": _clamp_confidence(raw.get("confidence")),
     }
+
+
+# Markers are deliberately SPECIFIC. A bare "consolidated financial
+# statements" also occurs inside standalone-section narrative (policies,
+# related-party notes), and matching it would set the boundary too early and
+# silently drop standalone content -- the exact failure this filter exists to
+# prevent.
+_CONSOLIDATED_MARKERS = (
+    "independent auditor's report on consolidated financial statements",
+    "independent auditors' report on consolidated financial statements",
+    "consolidated balance sheet",
+    "consolidated statement of profit and loss",
+    "consolidated statement of cash flow",
+)
+
+_TABLE_CHUNK_RE = re.compile(r"^t\d+(r\d+)?$")
+
+
+def find_consolidated_start_page(chunks: Sequence[Mapping[str, object]]) -> int | None:
+    """First page of the document's Consolidated section, or None when it has
+    none (making the filter a no-op).
+
+    Schema v3.1 never requests consolidated data -- the string "consolidat"
+    appears ZERO times in it -- while a consolidated section restates every
+    primary statement with DIFFERENT values. Returning the minimum page across
+    all marker matches lets the caller drop that whole region.
+
+    Never raises: a malformed chunk, a non-str text/heading, or a non-int page
+    is skipped."""
+    pages: list[int] = []
+    for chunk in chunks:
+        if not isinstance(chunk, Mapping):
+            continue
+        page = chunk.get("page")
+        if not isinstance(page, int) or isinstance(page, bool):
+            continue
+        parts = [chunk.get("heading"), chunk.get("text")]
+        haystack = " ".join(p for p in parts if isinstance(p, str)).casefold()
+        if not haystack:
+            continue
+        if any(marker in haystack for marker in _CONSOLIDATED_MARKERS):
+            pages.append(page)
+    return min(pages) if pages else None
+
+
+def filter_candidates(
+    candidates: Sequence[Candidate],
+    *,
+    consolidated_start_page: int | None,
+    needs_tables: bool,
+) -> list[Candidate]:
+    """Scope a unit's pool before reranking.
+
+    Drops (a) candidates at or after `consolidated_start_page` -- skipped
+    entirely when it is None -- and (b) table chunks (`t{i}` / `t{i}r{j}`)
+    when the unit has no numeric/list field, so short narrative paragraphs are
+    not crowded out by unrelated numeric schedules sharing a keyword. A
+    candidate with `page is None` is always kept: absence of a page is not
+    evidence it is consolidated. Never raises."""
+    out: list[Candidate] = []
+    for c in candidates:
+        if (
+            consolidated_start_page is not None
+            and isinstance(c.page, int)
+            and c.page >= consolidated_start_page
+        ):
+            continue
+        if not needs_tables:
+            chunk_id = c.evidence_id.split(":", 1)[1] if ":" in c.evidence_id else c.evidence_id
+            if _TABLE_CHUNK_RE.match(chunk_id):
+                continue
+        out.append(c)
+    return out

@@ -4,6 +4,8 @@ from fdi.core.extractor import (
     UnitSpec,
     assemble_result,
     build_extraction_messages,
+    filter_candidates,
+    find_consolidated_start_page,
     group_fields_by_unit,
     is_numeric,
     keyword_overlap,
@@ -263,7 +265,10 @@ def test_keyword_overlap_empty_keywords_is_zero() -> None:
     assert keyword_overlap("anything", []) == 0.0
 
 
-def _cand(evidence_id: str, text: str, score: float) -> Candidate:
+def _scored_cand(evidence_id: str, text: str, score: float) -> Candidate:
+    """Fixed page=1, variable score -- for rerank/assemble tests that vary
+    score to test ordering/fallback behavior. Distinct from the Task 3
+    `_cand` helper below, which fixes score and varies page instead."""
     return Candidate(evidence_id=evidence_id, text=text, page=1, score=score, source_tool="hybrid")
 
 
@@ -278,8 +283,8 @@ def _fs(name: str, *, unit_id: str = "U1", data_type: str = "decimal",
 
 
 def test_rerank_candidates_keyword_boost_changes_order() -> None:
-    low_score_relevant = _cand("a", "Total Assets 100", 0.4)
-    high_score_irrelevant = _cand("b", "nothing relevant here", 0.5)
+    low_score_relevant = _scored_cand("a", "Total Assets 100", 0.4)
+    high_score_irrelevant = _scored_cand("b", "nothing relevant here", 0.5)
     ranked = rerank_candidates(
         [high_score_irrelevant, low_score_relevant], ["total", "assets"], keyword_weight=1.0
     )
@@ -287,13 +292,13 @@ def test_rerank_candidates_keyword_boost_changes_order() -> None:
 
 
 def test_rerank_candidates_stable_on_ties() -> None:
-    a, b, c = _cand("a", "x", 0.5), _cand("b", "x", 0.5), _cand("c", "x", 0.5)
+    a, b, c = _scored_cand("a", "x", 0.5), _scored_cand("b", "x", 0.5), _scored_cand("c", "x", 0.5)
     ranked = rerank_candidates([a, b, c], [])
     assert [x.evidence_id for x in ranked] == ["a", "b", "c"]  # original order preserved
 
 
 def test_rerank_candidates_top_k_truncation() -> None:
-    cands = [_cand(str(i), "x", float(i)) for i in range(5)]
+    cands = [_scored_cand(str(i), "x", float(i)) for i in range(5)]
     ranked = rerank_candidates(cands, [], top_k=2)
     assert [c.evidence_id for c in ranked] == ["4", "3"]
 
@@ -334,7 +339,7 @@ def test_build_extraction_messages_system_states_extraction_guidance() -> None:
 
 
 def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
-    cands = [_cand("d1:s0", "Total assets were 100.", 0.9)]
+    cands = [_scored_cand("d1:s0", "Total assets were 100.", 0.9)]
     _, user = build_extraction_messages(_field(), cands)
     assert _field().extraction_prompt in user
     assert "d1:s0" in user
@@ -347,7 +352,7 @@ def test_assemble_result_full_llm_dict_passthrough() -> None:
         "value": 145, "confidence": 0.8,
         "source": {"page": 3, "snippet": "Total assets 145", "evidence_ids": ["d1:s0"]},
     }
-    out = assemble_result(_field(), raw, [_cand("d1:s0", "Total assets 145", 0.9)])
+    out = assemble_result(_field(), raw, [_scored_cand("d1:s0", "Total assets 145", 0.9)])
     assert out == {
         "field_name": "Total assets", "value": 145,
         "source": {"page": 3, "snippet": "Total assets 145", "evidence_ids": ["d1:s0"]},
@@ -356,7 +361,7 @@ def test_assemble_result_full_llm_dict_passthrough() -> None:
 
 
 def test_assemble_result_missing_keys_fall_back_to_candidates() -> None:
-    ranked = [_cand("d1:s0", "Total assets were 100.", 0.9)]
+    ranked = [_scored_cand("d1:s0", "Total assets were 100.", 0.9)]
     out = assemble_result(_field(), {}, ranked)
     assert out["value"] is None
     assert out["confidence"] == 0.0
@@ -381,13 +386,13 @@ def test_assemble_result_confidence_clamp() -> None:
 
 
 def test_assemble_result_malformed_source_falls_back() -> None:
-    ranked = [_cand("d1:s0", "candidate text", 0.9)]
+    ranked = [_scored_cand("d1:s0", "candidate text", 0.9)]
     out = assemble_result(_field(), {"source": "not-a-dict"}, ranked)
     assert out["source"] == {"page": 1, "snippet": "candidate text", "evidence_ids": ["d1:s0"]}
 
 
 def test_assemble_result_malformed_evidence_ids_falls_back() -> None:
-    ranked = [_cand("d1:s0", "candidate text", 0.9), _cand("d1:s1", "more text", 0.8)]
+    ranked = [_scored_cand("d1:s0", "candidate text", 0.9), _scored_cand("d1:s1", "more text", 0.8)]
     out = assemble_result(_field(), {"source": {"evidence_ids": "not-a-list"}}, ranked)
     assert out["source"]["evidence_ids"] == ["d1:s0", "d1:s1"]
 
@@ -530,3 +535,107 @@ def test_unit_needs_tables_true_if_any_field_is_numeric() -> None:
     fields = [_fs("a", data_type="string"), _fs("b", data_type="decimal")]
     [unit] = group_fields_by_unit(fields)
     assert unit_needs_tables(unit) is True
+
+
+def _chunk(
+    chunk_id: str, text: str, page: int | None, heading: str | None = None
+) -> dict[str, object]:
+    return {"chunk_id": chunk_id, "text": text, "page": page, "heading": heading}
+
+
+def test_find_consolidated_start_page_finds_auditor_report_marker() -> None:
+    chunks = [
+        _chunk("s1", "INDEPENDENT AUDITOR'S REPORT", 20),
+        _chunk("s2", "Balance Sheet as at 31-03-2024", 60),
+        _chunk("s3", "INDEPENDENT AUDITOR'S REPORT ON CONSOLIDATED FINANCIAL STATEMENTS", 133),
+        _chunk("s4", "Consolidated Balance Sheet", 140),
+    ]
+    assert find_consolidated_start_page(chunks) == 133
+
+
+def test_find_consolidated_start_page_takes_the_minimum_page() -> None:
+    chunks = [
+        _chunk("s1", "Consolidated Balance Sheet", 140),
+        _chunk("s2", "Consolidated Statement of Profit and Loss", 133),
+    ]
+    assert find_consolidated_start_page(chunks) == 133
+
+
+def test_find_consolidated_start_page_matches_on_heading_too() -> None:
+    chunks = [_chunk("s1", "body text", 133, heading="Consolidated Balance Sheet")]
+    assert find_consolidated_start_page(chunks) == 133
+
+
+def test_find_consolidated_start_page_none_when_no_consolidated_section() -> None:
+    chunks = [
+        _chunk("s1", "Balance Sheet as at 31-03-2024", 60),
+        _chunk("s2", "Statement of Profit and Loss", 62),
+    ]
+    assert find_consolidated_start_page(chunks) is None
+
+
+def test_find_consolidated_start_page_ignores_marker_with_no_page() -> None:
+    chunks = [_chunk("s1", "Consolidated Balance Sheet", None)]
+    assert find_consolidated_start_page(chunks) is None
+
+
+def test_find_consolidated_start_page_malformed_input_never_raises() -> None:
+    assert find_consolidated_start_page([]) is None
+    assert find_consolidated_start_page([{}]) is None
+    assert find_consolidated_start_page([{"text": 123, "page": "x"}]) is None  # type: ignore[list-item]
+
+
+def _cand(evidence_id: str, text: str, page: int | None) -> Candidate:
+    return Candidate(evidence_id=evidence_id, text=text, page=page, score=1.0, source_tool="hybrid")
+
+
+def test_filter_candidates_drops_at_or_after_consolidated_boundary() -> None:
+    cands = [
+        _cand("d:s1", "standalone", 60),
+        _cand("d:s2", "consolidated", 133),
+        _cand("d:s3", "consolidated later", 150),
+    ]
+    out = filter_candidates(cands, consolidated_start_page=133, needs_tables=True)
+    assert [c.evidence_id for c in out] == ["d:s1"]
+
+
+def test_filter_candidates_boundary_none_is_a_no_op() -> None:
+    cands = [_cand("d:s1", "a", 60), _cand("d:s2", "b", 400)]
+    out = filter_candidates(cands, consolidated_start_page=None, needs_tables=True)
+    assert len(out) == 2
+
+
+def test_filter_candidates_keeps_candidates_with_no_page() -> None:
+    cands = [_cand("d:s1", "no page", None)]
+    out = filter_candidates(cands, consolidated_start_page=133, needs_tables=True)
+    assert len(out) == 1
+
+
+def test_filter_candidates_drops_table_chunks_for_narrative_units() -> None:
+    cands = [
+        _cand("d:s1", "narrative", 10),
+        _cand("d:t3", "whole table", 11),
+        _cand("d:t3r7", "table row", 11),
+    ]
+    out = filter_candidates(cands, consolidated_start_page=None, needs_tables=False)
+    assert [c.evidence_id for c in out] == ["d:s1"]
+
+
+def test_filter_candidates_keeps_table_chunks_when_needs_tables() -> None:
+    cands = [_cand("d:s1", "narrative", 10), _cand("d:t3r7", "table row", 11)]
+    out = filter_candidates(cands, consolidated_start_page=None, needs_tables=True)
+    assert len(out) == 2
+
+
+def test_filter_candidates_applies_both_filters() -> None:
+    cands = [
+        _cand("d:s1", "keep", 10),
+        _cand("d:t1r1", "table dropped", 10),
+        _cand("d:s2", "page dropped", 200),
+    ]
+    out = filter_candidates(cands, consolidated_start_page=133, needs_tables=False)
+    assert [c.evidence_id for c in out] == ["d:s1"]
+
+
+def test_filter_candidates_empty_input() -> None:
+    assert filter_candidates([], consolidated_start_page=133, needs_tables=True) == []
