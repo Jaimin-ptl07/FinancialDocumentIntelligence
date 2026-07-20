@@ -740,7 +740,7 @@ Today `GET /documents` **requires** a `doc_key` query param (`routes.py:362-365`
       offset: int
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `backend/tests/integration/test_documents_list.py`:
 
@@ -897,12 +897,12 @@ async def test_list_all_documents_rejects_a_bad_limit(make_client) -> None:
     assert r.status_code == 422
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_documents_list.py -q`
 Expected: FAIL. The list-all tests fail with `assert 422 == 200` — FastAPI rejects the request because `doc_key` is still a required query param (`{"detail":[{"type":"missing","loc":["query","doc_key"]}]}`).
 
-- [ ] **Step 3: Add the repository queries**
+- [x] **Step 3: Add the repository queries**
 
 Append to `RegistryRepository` in `backend/src/fdi/platform/db/repository.py` (after `latest_runs`, line 105):
 
@@ -1012,7 +1012,7 @@ Add `Sequence` to the imports at the top of `repository.py`:
 from collections.abc import Sequence
 ```
 
-- [ ] **Step 4: Add the view models**
+- [x] **Step 4: Add the view models**
 
 Insert into `backend/src/fdi/api/schemas.py` immediately after `DocumentVersionsView` (line 88):
 
@@ -1038,7 +1038,7 @@ class DocumentListView(BaseModel):
     offset: int
 ```
 
-- [ ] **Step 5: Rewrite the route**
+- [x] **Step 5: Rewrite the route**
 
 Replace `backend/src/fdi/api/routes.py:362-365` with:
 
@@ -1098,12 +1098,12 @@ Add `DocumentListView` and `DocumentSummaryView` to the `fdi.api.schemas` import
     DocumentVersionsView,
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_documents_list.py -q`
 Expected: PASS, 5 passed.
 
-- [ ] **Step 7: Run the full gate set**
+- [x] **Step 7: Run the full gate set**
 
 Run:
 ```bash
@@ -1114,7 +1114,7 @@ PYTHONUTF8=1 uv run --directory backend pytest -m "not integration and not e2e" 
 ```
 Expected: all green; lint-imports `Contracts: 1 kept, 0 broken.`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/src/fdi/platform/db/repository.py backend/src/fdi/api/schemas.py backend/src/fdi/api/routes.py backend/tests/integration/test_documents_list.py

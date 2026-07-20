@@ -33,7 +33,9 @@ from fdi.api.schemas import (
     ConceptCompareRequest,
     ConceptComparisonView,
     ConceptLookupView,
+    DocumentListView,
     DocumentStructureView,
+    DocumentSummaryView,
     DocumentVersionsView,
     DocumentView,
     EmbeddingTriggerView,
@@ -359,10 +361,50 @@ async def get_document(doc_id: str, session: SessionDep) -> DocumentView:
     return _view(doc)
 
 
-@router.get("/documents", response_model=DocumentVersionsView)
-async def list_documents(session: SessionDep, doc_key: str) -> DocumentVersionsView:
-    docs = await DocumentRepository(session).list_by_doc_key(doc_key)
-    return DocumentVersionsView(versions=[_view(d) for d in docs])
+@router.get("/documents", response_model=None)
+async def list_documents(
+    session: SessionDep,
+    doc_key: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> DocumentVersionsView | DocumentListView:
+    """Two modes on one path.
+
+    `?doc_key=` -> every version of that key, ascending, exactly as this
+    route has always behaved (SP-17's extractor flow and the SP-18 frontend
+    both call it that way; changing the shape would break them).
+
+    No `doc_key` -> the corpus list a real UI needs: the latest version per
+    doc_key, each with a stage summary, paginated. `response_model=None` +
+    a union return annotation is what lets one path serve both: a declared
+    `response_model` would coerce one shape into the other and silently drop
+    half of each.
+    """
+    repo = DocumentRepository(session)
+    if doc_key is not None:
+        docs = await repo.list_by_doc_key(doc_key)
+        return DocumentVersionsView(versions=[_view(d) for d in docs])
+
+    rows, total = await repo.list_latest_per_doc_key(limit=limit, offset=offset)
+    counts = await RegistryRepository(session).latest_run_status_counts([d.id for d in rows])
+    return DocumentListView(
+        documents=[
+            DocumentSummaryView(
+                id=d.id,
+                checksum=d.checksum,
+                filename=d.filename,
+                byte_size=d.byte_size,
+                doc_key=d.doc_key,
+                version=d.version,
+                content_type=d.content_type,
+                stage_counts=counts.get(d.id, {}),
+            )
+            for d in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(

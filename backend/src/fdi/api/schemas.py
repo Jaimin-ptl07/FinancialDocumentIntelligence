@@ -87,6 +87,27 @@ class DocumentVersionsView(BaseModel):
     versions: list[DocumentView]
 
 
+class DocumentSummaryView(BaseModel):
+    """One corpus-list row: the latest version of a doc_key, plus a
+    {status: count} summary over the latest run per stage name."""
+
+    id: str
+    checksum: str | None
+    filename: str | None
+    byte_size: int | None
+    doc_key: str | None
+    version: int | None
+    content_type: str | None
+    stage_counts: dict[str, int]
+
+
+class DocumentListView(BaseModel):
+    documents: list[DocumentSummaryView]
+    total: int
+    limit: int
+    offset: int
+
+
 class StageStatusView(BaseModel):
     name: str
     status: str

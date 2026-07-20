@@ -2,6 +2,7 @@
 theirs, not ours."""
 
 import uuid
+from collections.abc import Sequence
 
 import sqlalchemy
 from sqlalchemy import func, select
@@ -106,6 +107,51 @@ class RegistryRepository:
         for r in rows:  # later row (by created_at) wins per stage_name
             latest[r.stage_name] = r
         return latest
+
+    async def latest_run_status_counts(
+        self, doc_ids: Sequence[str]
+    ) -> dict[str, dict[str, int]]:
+        """{doc_id: {status: count}} over the LATEST `stage_run` per
+        (doc_id, stage_name), for every id in `doc_ids`.
+
+        Latest-per-stage, not all-runs: a document whose `ocr` was retried
+        three times must contribute one `ocr` to the summary, not three --
+        otherwise a flaky stage looks like a bigger pipeline. Statuses with
+        no rows are simply absent from the inner dict.
+
+        ONE query for the whole page of documents (a `row_number()` window
+        partitioned by (doc_id, stage_name)), not one per document: the
+        caller is a paginated list route, and N+1 there is the difference
+        between one round trip and fifty. An empty `doc_ids` short-circuits
+        to `{}` without a query, same posture as `DocumentRepository.get_many`.
+        """
+        if not doc_ids:
+            return {}
+        ranked = (
+            select(
+                StageRun.doc_id.label("doc_id"),
+                StageRun.status.label("status"),
+                func.row_number()
+                .over(
+                    partition_by=(StageRun.doc_id, StageRun.stage_name),
+                    order_by=(StageRun.created_at.desc(), StageRun.id.desc()),
+                )
+                .label("rn"),
+            )
+            .where(StageRun.doc_id.in_(list(doc_ids)))
+            .subquery()
+        )
+        rows = (
+            await self._s.execute(
+                select(ranked.c.doc_id, ranked.c.status, func.count())
+                .where(ranked.c.rn == 1)
+                .group_by(ranked.c.doc_id, ranked.c.status)
+            )
+        ).all()
+        counts: dict[str, dict[str, int]] = {}
+        for doc_id, status, n in rows:
+            counts.setdefault(str(doc_id), {})[str(status)] = int(n)
+        return counts
 
 
 class EvalRepository:
@@ -231,6 +277,55 @@ class DocumentRepository:
             )
         ).scalars().all()
         return list(rows)
+
+    async def list_latest_per_doc_key(
+        self, *, limit: int, offset: int
+    ) -> tuple[list[Document], int]:
+        """(one page of the corpus, total group count).
+
+        One row per doc_key -- its HIGHEST version -- so a UI's document
+        list shows each filing once rather than once per re-upload. Grouped
+        on `coalesce(doc_key, id)`, NOT on the bare column: `doc_key` is
+        nullable (early intake rows predate it), and grouping on NULL would
+        collapse every such legacy row into one phantom document. Ranking is
+        `version DESC NULLS LAST, created_at DESC, id` so the winner is
+        deterministic even when two rows share a version.
+
+        `total` counts GROUPS, not rows -- it is the denominator for the
+        page count the UI renders, and must not move when someone uploads a
+        new version of a document already in the list.
+        """
+        group = func.coalesce(Document.doc_key, Document.id)
+        ranked = (
+            select(
+                Document.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=group,
+                    order_by=(
+                        Document.version.desc().nullslast(),
+                        Document.created_at.desc(),
+                        Document.id,
+                    ),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
+        latest_ids = select(ranked.c.id).where(ranked.c.rn == 1).subquery()
+        total = (
+            await self._s.execute(select(func.count()).select_from(latest_ids))
+        ).scalar_one()
+        rows = (
+            await self._s.execute(
+                select(Document)
+                .where(Document.id.in_(select(latest_ids.c.id)))
+                .order_by(Document.created_at.desc(), Document.id)
+                .limit(limit)
+                .offset(offset)
+            )
+        ).scalars().all()
+        return list(rows), int(total)
 
     async def get_many(self, ids: list[str]) -> dict[str, Document]:
         """Every `Document` row whose id is in `ids`, keyed by id. Empty input ->
