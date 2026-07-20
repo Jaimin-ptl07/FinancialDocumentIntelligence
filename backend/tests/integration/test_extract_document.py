@@ -2,12 +2,15 @@
 FakeSemantic + FakeExtractorClient -- NO embedder/vector_store configured
 (hybrid_search degrades to keyword-only, RT-4) and NO Azure OpenAI call
 anywhere in this file. Proves: a text field's pool comes from
-keyword_search over the chunks FTS index; a numeric field's pool
-ADDITIONALLY carries a `table:` candidate built from get_tables' canonicalized
-grid (decision 4) even though the table's cell text never reaches
-keyword_search (tables are not chunk text, they live in the `structure`
-artifact); an unmatchable, non-numeric field's pool is empty and still
-yields a well-formed {value: None, confidence: 0.0} record (decision 10).
+keyword_search over the section chunk's FTS row; a numeric field's pool
+ALSO comes from keyword_search alone -- via the table-row chunk (t{i}r{j})
+that build_chunks emits from the `structure` artifact's tables and
+index_chunks_fts indexes right alongside section chunks, no separate
+get_tables injection (a get_tables table-blob candidate was measured to
+flood the rerank with same-scored whole-table renders and HURT top-20
+recall; removed, see fdi.pipeline.extractor's module docstring); an
+unmatchable, non-numeric field's pool is empty and still yields a
+well-formed {value: None, confidence: 0.0} record (decision 10).
 
 ExtractContext carries doc_id AND doc_key AND version (resolved once by the
 caller -- here, the test itself; in production, the route) so extract_field
@@ -77,7 +80,7 @@ def _schema(marker: str) -> dict[str, object]:
                     {
                         "field_name": "Total assets",
                         "source_type": "document_content", "rag_extractable": True,
-                        "data_type": "decimal", "retrieval_query": "Total assets value",
+                        "data_type": "decimal", "retrieval_query": "Total assets",
                         "extraction_prompt": "Extract the total assets value.",
                         "keywords": ["total", "assets"],
                     },
@@ -97,8 +100,10 @@ def _schema(marker: str) -> dict[str, object]:
 @pytest.fixture
 async def processed_doc(session_factory, store):
     """One fully-processed document: a text section (matched by keyword
-    search) + a numeric table (matched only via get_tables, never indexed
-    into chunk FTS). Returns (doc, marker)."""
+    search over its s{i} chunk) + a numeric table (matched by keyword
+    search over its t{i}/t{i}r{j} table chunks, indexed into chunk FTS
+    right alongside section chunks -- no get_tables involved). Returns
+    (doc, marker)."""
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
@@ -153,7 +158,7 @@ async def processed_doc(session_factory, store):
     return doc, marker
 
 
-async def test_extract_document_pools_keyword_and_table_candidates(
+async def test_extract_document_pools_keyword_candidates_only(
     session_factory, store, processed_doc
 ) -> None:
     doc, marker = processed_doc
@@ -167,7 +172,7 @@ async def test_extract_document_pools_keyword_and_table_candidates(
          "confidence": 0.9},
         {"value": 12345.0,
          "source": {"page": None, "snippet": "Total assets 12,345",
-                     "evidence_ids": [f"table:{doc.id}:0"]},
+                     "evidence_ids": [f"{doc.id}:t0r1"]},
          "confidence": 0.95},
         # The third field's pool is empty -- extract_field short-circuits
         # BEFORE calling the client, so only 2 scripted results are consumed.
@@ -190,7 +195,7 @@ async def test_extract_document_pools_keyword_and_table_candidates(
 
     assert f1["field_name"] == "Total assets"
     assert f1["value"] == 12345.0
-    assert f1["source"]["evidence_ids"] == [f"table:{doc.id}:0"]
+    assert f1["source"]["evidence_ids"] == [f"{doc.id}:t0r1"]
 
     assert f2["field_name"] == "Unmatchable field"
     assert f2["value"] is None
@@ -198,11 +203,12 @@ async def test_extract_document_pools_keyword_and_table_candidates(
     assert f2["source"] == {"page": None, "snippet": None, "evidence_ids": []}
 
     # Exactly 2 real LLM calls (the third field never reaches the client);
-    # the numeric field's prompt carries the table's rendered grid text and
-    # its `table:` evidence_id -- proving get_tables' output entered the pool.
+    # the numeric field's prompt carries the table row chunk's text --
+    # found by keyword_search over the chunk FTS index, no get_tables
+    # candidate (evidence_id would be "table:...") anywhere.
     assert len(fake.calls) == 2
     assert "table:" not in fake.calls[0][1]
-    assert f"table:{doc.id}:0" in fake.calls[1][1]
+    assert "table:" not in fake.calls[1][1]
     assert "12,345" in fake.calls[1][1]
 
 

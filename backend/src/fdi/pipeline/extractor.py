@@ -1,17 +1,23 @@
 """The extractor's orchestrator + ExtractorClient seam (design spec sec
-3.2): extract_field pools context per field (hybrid_search + get_tables for
-numeric fields), reranks via fdi.core.extractor (pure), prompts the client,
-and assembles the schema's output_contract record. extract_document loops
-every field. ExtractorClient.extract(*, system, user) -> Mapping is
-SYNCHRONOUS, mirroring fdi.pipeline.agent.AgentClient.complete exactly.
-AzureOpenAIExtractorClient (fdi.platform.extractor, does I/O) structurally
-satisfies this protocol without importing it -- platform may not import
-pipeline. FakeExtractorClient lives here for tests: no live Azure OpenAI
-call anywhere in the default suite.
+3.2): extract_field pools context per field via hybrid_search ALONE (dense
+BGE + keyword Postgres-FTS, RRF-fused -- table content already reaches this
+pool as chunks, since build_chunks emits t{i}/t{i}r{j} table chunks
+alongside s{i} section chunks and EmbeddingStage embeds all of them; a
+separate get_tables table-blob injection was measured to flood the rerank
+with same-scored whole-table renders and HURT top-20 recall, 78.8% ->
+88.1% once removed -- see docs/architecture/2026-07-19-ingestion-audit-
+and-improvement-plan.md), reranks via fdi.core.extractor (pure), prompts
+the client, and assembles the schema's output_contract record.
+extract_document loops every field. ExtractorClient.extract(*, system,
+user) -> Mapping is SYNCHRONOUS, mirroring fdi.pipeline.agent.AgentClient.
+complete exactly. AzureOpenAIExtractorClient (fdi.platform.extractor, does
+I/O) structurally satisfies this protocol without importing it -- platform
+may not import pipeline. FakeExtractorClient lives here for tests: no live
+Azure OpenAI call anywhere in the default suite.
 
 Never raises (decision 10): extract_field guards every I/O step (hybrid_
-search, get_tables, client.extract) individually, so one tool's failure
-degrades this field's pool/answer, never the whole document's batch.
+search, client.extract) individually, so one tool's failure degrades this
+field's pool/answer, never the whole document's batch.
 
 ExtractContext carries doc_id AND doc_key AND version (resolved ONCE by the
 caller -- the /extract/document route, which already looks the document up
@@ -34,12 +40,10 @@ from fdi.core.extractor import (
     FieldSpec,
     assemble_result,
     build_extraction_messages,
-    is_numeric,
     rerank_candidates,
 )
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.retrieval import hybrid_search
-from fdi.pipeline.tables import get_tables
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -83,38 +87,16 @@ class ExtractContext:
     version: int
 
 
-_POOL_K = 12
-_TABLE_BASE_SCORE = 0.5
+_POOL_K = 60
 _EXTRACT_TOP_K = 20
-
-
-def _render_table(table: Mapping[str, object]) -> str:
-    """A canonicalized table grid (fdi.pipeline.tables.get_tables' output
-    shape) -> plain text an LLM can read: header row, then one line per
-    data row, cells pipe-separated. Empty/malformed input -> "" (extract_
-    field adds no candidate for an empty render)."""
-    grid_body = table.get("grid")
-    if not isinstance(grid_body, Mapping):
-        return ""
-    lines: list[str] = []
-    headers = grid_body.get("column_headers")
-    if isinstance(headers, list):
-        lines.append(" | ".join(str(h) for h in headers))
-    rows = grid_body.get("grid")
-    if isinstance(rows, list):
-        for row in rows:
-            if isinstance(row, list):
-                lines.append(" | ".join(str(c) for c in row))
-    return "\n".join(lines)
 
 
 async def extract_field(
     *, ctx: ExtractContext, field: FieldSpec, client: ExtractorClient
 ) -> dict[str, object]:
-    """pool (hybrid_search, scoped to {ctx.doc_key, ctx.version}, +
-    get_tables(ctx.doc_id) if numeric) -> Candidate list -> rerank_
-    candidates -> build_extraction_messages -> client.extract ->
-    assemble_result. Never raises."""
+    """pool (hybrid_search ALONE, scoped to {ctx.doc_key, ctx.version}) ->
+    Candidate list -> rerank_candidates -> build_extraction_messages ->
+    client.extract -> assemble_result. Never raises."""
     candidates: list[Candidate] = []
 
     query = field.retrieval_query.strip()
@@ -134,18 +116,6 @@ async def extract_field(
                 score=float(cast(float, h.get("score", 0.0))),
                 source_tool="hybrid",
             ))
-
-    if is_numeric(field.data_type):
-        tables: list[dict[str, object]] | None = None
-        with contextlib.suppress(Exception):  # never raise (decision 10)
-            tables = await get_tables(session=ctx.session, store=ctx.store, doc_id=ctx.doc_id)
-        for t in tables or []:
-            text = _render_table(t)
-            if text:
-                candidates.append(Candidate(
-                    evidence_id=f"table:{ctx.doc_id}:{t.get('table_index')}",
-                    text=text, page=None, score=_TABLE_BASE_SCORE, source_tool="table",
-                ))
 
     ranked = rerank_candidates(candidates, field.keywords, top_k=_EXTRACT_TOP_K)
     if not ranked:
