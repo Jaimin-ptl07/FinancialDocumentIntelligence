@@ -1149,7 +1149,7 @@ No endpoint serves the uploaded PDF. `intake_document` writes it to the artifact
 - Consumes: `fdi.pipeline.intake.document_key(checksum: str) -> str` (existing, `intake.py:23`); `ArtifactStore.exists(key) -> bool`, `ArtifactStore.get_bytes(key) -> bytes` (existing).
 - Produces: `GET /documents/{doc_id}/file` → `200` with `Content-Type: application/pdf`, `Content-Disposition: inline; filename="..."; filename*=UTF-8''...`, `Content-Length`, body = the exact uploaded bytes; `404` otherwise. No new Python symbol other tasks depend on.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `backend/tests/integration/test_document_file.py`:
 
@@ -1270,12 +1270,12 @@ async def test_file_document_without_a_checksum_is_404(make_client, migrated_eng
     assert "no source file" in r.json()["detail"]
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_document_file.py -q`
 Expected: FAIL, 4 failed with `assert 404 == 200` and `assert 405 == 404` — the path `/documents/{doc_id}/file` does not exist, so FastAPI never routes it.
 
-- [ ] **Step 3: Write the route**
+- [x] **Step 3: Write the route**
 
 Append to `backend/src/fdi/api/routes.py` immediately after `document_artifact` (line 452):
 
@@ -1342,12 +1342,12 @@ Add the two new imports to `backend/src/fdi/api/routes.py`: `from urllib.parse i
 from fdi.pipeline.intake import document_key, intake_document
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `PYTHONUTF8=1 uv run --directory backend pytest tests/integration/test_document_file.py -q`
 Expected: PASS, 4 passed.
 
-- [ ] **Step 5: Run the full gate set**
+- [x] **Step 5: Run the full gate set**
 
 Run:
 ```bash
@@ -1358,7 +1358,7 @@ PYTHONUTF8=1 uv run --directory backend pytest -m "not integration and not e2e" 
 ```
 Expected: all green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/src/fdi/api/routes.py backend/tests/integration/test_document_file.py

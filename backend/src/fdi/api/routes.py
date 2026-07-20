@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import cast
+from urllib.parse import quote
 
 import sqlalchemy
 import structlog
@@ -94,7 +95,7 @@ from fdi.pipeline.graphquery import (
     reading_order as reading_order_query,
 )
 from fdi.pipeline.graphstore import GraphStore
-from fdi.pipeline.intake import intake_document
+from fdi.pipeline.intake import document_key, intake_document
 from fdi.pipeline.retrieval import (
     hybrid_search,
     index_chunks_fts,
@@ -491,6 +492,62 @@ async def document_artifact(
         raise HTTPException(status_code=404, detail=f"no {stage} artifact for document {doc_id}")
     body = await store.get_json(run.artifact_key)
     return dict(body)
+
+
+def _content_disposition(filename: str | None) -> str:
+    """`inline` + BOTH filename forms (RFC 6266).
+
+    `filename=` must be a quoted ASCII token: a real filing named
+    "ACME -- FY24.pdf" with an em dash puts a non-latin-1 byte into a header
+    value, which the ASGI server rejects outright. So the plain form is
+    sanitized (every non-ASCII / quote / control byte -> "_") and the true
+    name is carried alongside in the RFC 5987 `filename*` form, which every
+    current browser prefers when present. Absent filename -> "document.pdf".
+    """
+    name = filename or "document.pdf"
+    ascii_name = "".join(c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in name)
+    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
+@router.get("/documents/{doc_id}/file")
+async def document_file(doc_id: str, session: SessionDep, store: StoreDep) -> Response:
+    """The source PDF, proxied through this API rather than presigned.
+
+    SP-18 sec 2 decision 1: a browser fetching MinIO directly would need
+    MinIO's own CORS configured, so artifact bodies come through the
+    already-CORS'd API instead. An embedded PDF viewer is exactly that case,
+    so it keeps the same posture -- `presigned_get_url` stays available on
+    /jobs for direct downloads.
+
+    HTTP range support is DEFERRED, not forgotten: `ArtifactStore.get_raw`
+    is built around reading a whole body and then close()/release_conn()
+    (see its own comment on what leaks once the body stops being read
+    whole), so ranges need a new streaming `get_range` on the storage layer
+    plus Range/If-Range parsing and 206/416 handling. Until then this
+    deliberately emits NO `Accept-Ranges` header -- advertising `bytes` and
+    then ignoring the header is what makes a viewer render garbage.
+    """
+    doc = await DocumentRepository(session).get(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    if not doc.checksum:
+        raise HTTPException(
+            status_code=404, detail=f"no source file for document {doc_id} (no checksum)"
+        )
+    key = document_key(doc.checksum)
+    if not await store.exists(key):
+        raise HTTPException(
+            status_code=404, detail=f"no source file for document {doc_id} at {key}"
+        )
+    data = await store.get_bytes(key)
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": _content_disposition(doc.filename),
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 # --------------------------------------------------------------------------
