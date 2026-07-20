@@ -1,0 +1,119 @@
+import { http, HttpResponse } from "msw";
+
+const API = "http://localhost:8000";
+
+export const handlers = [
+  http.get(`${API}/documents`, () =>
+    HttpResponse.json({
+      documents: [
+        {
+          id: "doc-1",
+          checksum: "abc123",
+          filename: "annual-report-2025.pdf",
+          byte_size: 4_200_000,
+          doc_key: "annual-report-2025.pdf",
+          version: 1,
+          content_type: "application/pdf",
+          stages_done: 15,
+          stages_total: 15,
+          stages_failed: 0,
+          failed_stage: null,
+          created_at: "2026-07-18T09:12:00Z",
+        },
+      ],
+      total: 1,
+    }),
+  ),
+
+  http.get(`${API}/documents/:docId`, ({ params }) =>
+    HttpResponse.json({
+      id: params.docId,
+      checksum: "abc123",
+      filename: "annual-report-2025.pdf",
+      byte_size: 4_200_000,
+      doc_key: "annual-report-2025.pdf",
+      version: 1,
+      content_type: "application/pdf",
+    }),
+  ),
+
+  http.get(`${API}/documents/:docId/stages`, () =>
+    HttpResponse.json({
+      stages: [
+        { name: "ocr", status: "done", error: null },
+        { name: "ast", status: "running", error: null },
+      ],
+    }),
+  ),
+
+  http.get(`${API}/analytics`, () =>
+    HttpResponse.json({
+      corpus: {
+        document_count: 3,
+        doc_key_count: 2,
+        total_bytes: 12_600_000,
+        latest_ingested_at: "2026-07-18T09:12:00Z",
+      },
+      stages: [
+        {
+          name: "ocr",
+          done: 3,
+          running: 0,
+          queued: 0,
+          failed: 0,
+          median_seconds: 42.5,
+        },
+        {
+          name: "index",
+          done: 2,
+          running: 0,
+          queued: 0,
+          failed: 1,
+          median_seconds: 3.1,
+        },
+      ],
+      documents_complete: 2,
+      documents_failed: 1,
+      chunk_count: 1840,
+    }),
+  ),
+
+  http.get(`${API}/schema`, () =>
+    HttpResponse.json({
+      version: "3.1.0",
+      title: "Field extraction schema",
+      description: "Retrieve-once, extract-many.",
+      modules: [
+        {
+          id: 3,
+          key: "module_3_balance_sheet",
+          name: "Balance Sheet",
+          retrieval_unit_count: 1,
+          retrieval_units: [
+            {
+              unit_id: "ru_bs_01",
+              title: "Balance Sheet",
+              scope: "primary_statement",
+              statement_type: "BS",
+              locator_keywords: ["balance sheet"],
+              retrieval_query: "consolidated balance sheet total assets",
+              field_count: 1,
+              fields: [
+                {
+                  field_name: "total_assets",
+                  field_path: "module_3_balance_sheet.total_assets",
+                  canonical_label: "Total assets",
+                  aliases: ["Total assets", "TOTAL ASSETS"],
+                  data_type: "decimal",
+                  description: "Total assets as stated in the Balance Sheet.",
+                  extraction_prompt:
+                    "Extract the total assets from the Balance Sheet.",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  ),
+];

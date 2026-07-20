@@ -1,26 +1,269 @@
 @import "tailwindcss";
 
+/* ===========================================================================
+   STATUTORY LEDGER
+   ---------------------------------------------------------------------------
+   The visual language comes from the annual report itself: statutory filing
+   paper, ledger ruling, the auditor's tick, and above all the CROSS-REFERENCE
+   — in a printed annual report every figure on the balance sheet carries a
+   superscript pointing to a note elsewhere in the book. That superscript is
+   exactly what this product automates. It is the motif.
+
+   ONE RULE GOVERNS THE PALETTE: --tether appears only where the interface is
+   asserting "this figure came from there". Never a button, never a link,
+   never a generic accent. If a button is red, the system has lied.
+   =========================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  /* --- Surfaces: paper laid on a desk ----------------------------------- */
+  --paper: #eaede6; /* app background — cool pale sage, statutory stock */
+  --leaf: #fbfcf9; /* the sheet itself */
+  --leaf-2: #f1f3ee; /* inset rows, hover, table stripes */
+  --rule: #d3d8cc; /* ledger ruling, borders */
+  --rule-soft: #e2e6dc; /* interior dividers that must not shout */
+
+  /* --- Ink -------------------------------------------------------------- */
+  --ink: #0f151b; /* near-black, blue cast */
+  --ink-soft: #59636e; /* labels, captions, secondary */
+  --ink-faint: #8b949d; /* placeholders, disabled */
+
+  /* --- The three semantic marks ----------------------------------------- */
+  --tether: #b3341c; /* PROVENANCE ONLY. See the rule above. */
+  --tick: #1e5c48; /* verified, stage complete */
+  --flag: #8a6a12; /* needs review, low confidence — ochre, not red */
+
+  /* Tinted washes, derived so they track the theme automatically. */
+  --tether-wash: color-mix(in srgb, var(--tether) 10%, transparent);
+  --tick-wash: color-mix(in srgb, var(--tick) 12%, transparent);
+  --flag-wash: color-mix(in srgb, var(--flag) 14%, transparent);
+
+  /* --- Elevation: a sheet sits above the desk, it does not float --------- */
+  --shadow-sm: 0 1px 2px rgb(15 21 27 / 0.05), 0 1px 3px rgb(15 21 27 / 0.04);
+  --shadow-md: 0 2px 4px rgb(15 21 27 / 0.05), 0 8px 20px rgb(15 21 27 / 0.07);
+  --shadow-lg: 0 4px 8px rgb(15 21 27 / 0.06), 0 20px 44px rgb(15 21 27 / 0.1);
+
+  /* --- Type: three roles, three families -------------------------------- */
+  --font-display: var(--font-archivo), system-ui, sans-serif;
+  --font-body: var(--font-public-sans), system-ui, sans-serif;
+  --font-data: var(--font-plex-mono), ui-monospace, monospace;
+
+  --text-2xs: 0.6875rem; /* 11 — reference marks */
+  --text-xs: 0.75rem; /* 12 — captions, chunk ids */
+  --text-sm: 0.8125rem; /* 13 — table data, labels */
+  --text-base: 0.9375rem; /* 15 — body */
+  --text-md: 1.125rem; /* 18 — section headings */
+  --text-lg: 1.5rem; /* 24 — card titles */
+  --text-xl: 2.125rem; /* 34 — display */
+  --text-2xl: 3.25rem; /* 52 — display */
+
+  /* --- Space: 4px base -------------------------------------------------- */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.25rem;
+  --sp-6: 1.5rem;
+  --sp-8: 2rem;
+  --sp-10: 2.5rem;
+  --sp-12: 3rem;
+  --sp-16: 4rem;
+
+  /* --- Structure -------------------------------------------------------- */
+  --spine-w: 232px;
+  --radius: 6px;
+  --radius-sm: 3px;
+  --radius-lg: 10px;
+  --hairline: 1px solid var(--rule);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/* The same desk at night. The green cast survives into the darks so the
+   product is recognizably itself; the three marks brighten to hold contrast
+   against a dark ground. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+    --paper: #0e1210;
+    --leaf: #161b18;
+    --leaf-2: #1d2320;
+    --rule: #2b332e;
+    --rule-soft: #222925;
+    --ink: #e8ece5;
+    --ink-soft: #98a29a;
+    --ink-faint: #6b756e;
+    --tether: #e2603f;
+    --tick: #4fb894;
+    --flag: #d3a83e;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 8px 20px rgb(0 0 0 / 0.35);
+    --shadow-lg: 0 4px 8px rgb(0 0 0 / 0.45), 0 20px 44px rgb(0 0 0 / 0.5);
   }
 }
 
+@theme inline {
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-paper: var(--paper);
+  --color-leaf: var(--leaf);
+  --color-leaf-2: var(--leaf-2);
+  --color-rule: var(--rule);
+  --color-rule-soft: var(--rule-soft);
+  --color-tether: var(--tether);
+  --color-tick: var(--tick);
+  --color-flag: var(--flag);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-data: var(--font-data);
+  --radius-sheet: var(--radius);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------------
+   Type roles
+   ------------------------------------------------------------------------ */
+
+/* Archivo pushed wide on its width axis — statutory signage. Restraint is the
+   rule: page titles and statement headers only, never body copy. */
+.display {
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 112;
+  font-weight: 700;
+  letter-spacing: -0.018em;
+  line-height: 1.06;
+}
+
+/* Every numeral in the application. Tabular figures are what make a column of
+   money comparable at a glance — in a financial tool this is not a flourish. */
+.data {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "zero" 1;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow {
+  font-family: var(--font-data);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+/* ---------------------------------------------------------------------------
+   Surfaces
+   ------------------------------------------------------------------------ */
+
+.sheet {
+  background: var(--leaf);
+  border: var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.sheet-flat {
+  background: var(--leaf);
+  border: var(--hairline);
+  border-radius: var(--radius);
+}
+
+/* ---------------------------------------------------------------------------
+   Controls. Note what is absent: none of these is --tether. The primary
+   action is ink-filled, because the loudest color in this product is spent
+   entirely on provenance.
+   ------------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--leaf);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--leaf-2);
+  border-color: var(--ink-faint);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--leaf);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 86%, var(--paper));
+  border-color: color-mix(in srgb, var(--ink) 86%, var(--paper));
+}
+
+.input {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--leaf);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+
+.input::placeholder {
+  color: var(--ink-faint);
+}
+
+.input:focus {
+  border-color: var(--ink-faint);
+}
+
+/* ---------------------------------------------------------------------------
+   Accessibility floor
+   ------------------------------------------------------------------------ */
+
+:focus-visible {
+  outline: 2px solid var(--tether);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbars, so a dense three-pane screen does not sprout chrome-colored
+   bars that belong to no theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
 }
