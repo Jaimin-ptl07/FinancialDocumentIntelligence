@@ -73,6 +73,67 @@ class Candidate:
     source_tool: str
 
 
+_TABLE_NEEDING_DATA_TYPES = frozenset({"decimal", "integer", "list"})
+
+_UNIT_TOP_K_MIN = 20
+_UNIT_TOP_K_MAX = 60
+
+
+@dataclass(frozen=True)
+class UnitSpec:
+    """One Retrieval Unit: the fields sharing a single retrieval + a single
+    LLM call. Schema v3.1's own retrieval_model states "Retrieve-once,
+    extract-many. Retrieval is per Retrieval Unit, not per field."."""
+
+    unit_id: str
+    unit_title: str
+    retrieval_query: str
+    locator_keywords: tuple[str, ...]
+    fields: tuple[FieldSpec, ...]
+
+
+def group_fields_by_unit(fields: Sequence[FieldSpec]) -> list[UnitSpec]:
+    """Group `fields` by `unit_id`, order-preserving on first appearance so
+    the caller can restore input order afterwards. A field with a blank
+    `unit_id` (a hand-built FieldSpec) becomes its OWN singleton unit rather
+    than being merged with every other blank-id field into one bogus group.
+    Unit metadata is taken from the first field of each group."""
+    order: list[str] = []
+    grouped: dict[str, list[FieldSpec]] = {}
+    for i, field in enumerate(fields):
+        key = field.unit_id if field.unit_id else f"\x00singleton:{i}"
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(field)
+
+    units: list[UnitSpec] = []
+    for key in order:
+        members = grouped[key]
+        head = members[0]
+        units.append(UnitSpec(
+            unit_id=head.unit_id,
+            unit_title=head.unit_title,
+            retrieval_query=head.retrieval_query,
+            locator_keywords=head.locator_keywords,
+            fields=tuple(members),
+        ))
+    return units
+
+
+def unit_top_k(n_fields: int) -> int:
+    """How many reranked candidates a unit's single LLM call receives:
+    `max(20, min(60, n_fields * 2 + 10))`."""
+    return max(_UNIT_TOP_K_MIN, min(_UNIT_TOP_K_MAX, n_fields * 2 + 10))
+
+
+def unit_needs_tables(unit: UnitSpec) -> bool:
+    """True when any field wants a number or a list. `list` is deliberate:
+    subsidiary/JV disclosures are AOC-1 style TABLES, and treating them as
+    narrative strips the very chunks those fields need."""
+    return any(f.data_type in _TABLE_NEEDING_DATA_TYPES for f in unit.fields)
+
+
 def _module_matches(module: Mapping[str, object], selector: str) -> bool:
     """v3.1 modules carry `key` (stable id, e.g. "module_3_balance_sheet")
     and `name` (human label, e.g. "Balance Sheet") -- and no `folder`, which

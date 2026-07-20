@@ -1,12 +1,16 @@
 from fdi.core.extractor import (
     Candidate,
     FieldSpec,
+    UnitSpec,
     assemble_result,
     build_extraction_messages,
+    group_fields_by_unit,
     is_numeric,
     keyword_overlap,
     parse_field_specs,
     rerank_candidates,
+    unit_needs_tables,
+    unit_top_k,
 )
 
 
@@ -263,6 +267,16 @@ def _cand(evidence_id: str, text: str, score: float) -> Candidate:
     return Candidate(evidence_id=evidence_id, text=text, page=1, score=score, source_tool="hybrid")
 
 
+def _fs(name: str, *, unit_id: str = "U1", data_type: str = "decimal",
+        query: str = "q", locators: tuple[str, ...] = ("kw",)) -> FieldSpec:
+    return FieldSpec(
+        field_name=name, data_type=data_type, retrieval_query=query,
+        keywords=(name,), extraction_prompt=f"Extract {name}.", enum_values=None,
+        module_id=1, module_name="M", unit_id=unit_id, unit_title=f"T-{unit_id}",
+        field_path=f"m.{name}", locator_keywords=locators,
+    )
+
+
 def test_rerank_candidates_keyword_boost_changes_order() -> None:
     low_score_relevant = _cand("a", "Total Assets 100", 0.4)
     high_score_irrelevant = _cand("b", "nothing relevant here", 0.5)
@@ -456,3 +470,63 @@ def test_field_spec_constructs_without_the_new_members() -> None:
     assert spec.field_path == ""
     assert spec.periods == ()
     assert spec.locator_keywords == ()
+
+
+def test_group_fields_by_unit_groups_and_preserves_order() -> None:
+    fields = [_fs("a", unit_id="U1"), _fs("b", unit_id="U2"), _fs("c", unit_id="U1")]
+    units: list[UnitSpec] = group_fields_by_unit(fields)
+    assert [u.unit_id for u in units] == ["U1", "U2"]
+    assert [f.field_name for f in units[0].fields] == ["a", "c"]
+    assert [f.field_name for f in units[1].fields] == ["b"]
+
+
+def test_group_fields_by_unit_carries_unit_metadata() -> None:
+    fields = [_fs("a", unit_id="RU_BS", query="Balance Sheet", locators=("balance sheet",))]
+    [unit] = group_fields_by_unit(fields)
+    assert unit.unit_id == "RU_BS"
+    assert unit.unit_title == "T-RU_BS"
+    assert unit.retrieval_query == "Balance Sheet"
+    assert unit.locator_keywords == ("balance sheet",)
+
+
+def test_group_fields_by_unit_blank_unit_id_makes_singleton_units() -> None:
+    """A hand-built FieldSpec has unit_id="" -- those must NOT all collapse
+    into one bogus group."""
+    fields = [_fs("a", unit_id=""), _fs("b", unit_id="")]
+    units = group_fields_by_unit(fields)
+    assert len(units) == 2
+    assert [len(u.fields) for u in units] == [1, 1]
+
+
+def test_group_fields_by_unit_empty_input() -> None:
+    assert group_fields_by_unit([]) == []
+
+
+def test_unit_top_k_clamps_low_and_high() -> None:
+    assert unit_top_k(1) == 20      # max(20, ...) floor
+    assert unit_top_k(2) == 20      # 2*2+10 = 14 -> floored to 20
+    assert unit_top_k(40) == 60     # 40*2+10 = 90 -> capped to 60
+    assert unit_top_k(0) == 20
+
+
+def test_unit_top_k_linear_in_the_middle() -> None:
+    assert unit_top_k(10) == 30     # 10*2+10
+    assert unit_top_k(9) == 28      # 9*2+10
+
+
+def test_unit_needs_tables_true_for_numeric_and_list() -> None:
+    for dt in ("decimal", "integer", "list"):
+        [unit] = group_fields_by_unit([_fs("a", data_type=dt)])
+        assert unit_needs_tables(unit) is True, dt
+
+
+def test_unit_needs_tables_false_for_all_narrative_unit() -> None:
+    fields = [_fs("a", data_type="string"), _fs("b", data_type="date")]
+    [unit] = group_fields_by_unit(fields)
+    assert unit_needs_tables(unit) is False
+
+
+def test_unit_needs_tables_true_if_any_field_is_numeric() -> None:
+    fields = [_fs("a", data_type="string"), _fs("b", data_type="decimal")]
+    [unit] = group_fields_by_unit(fields)
+    assert unit_needs_tables(unit) is True
