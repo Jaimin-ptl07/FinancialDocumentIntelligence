@@ -3,14 +3,71 @@ theirs, not ours."""
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
+from typing import TypedDict
 
 import sqlalchemy
-from sqlalchemy import func, select
+from sqlalchemy import Float, case, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
-from fdi.platform.db.models import Document, EvalCaseResult, EvalRun, StageRun
+from fdi.platform.db.models import Chunk, Document, EvalCaseResult, EvalRun, StageRun
+
+
+class CorpusTotals(TypedDict):
+    """Whole-corpus figures for `GET /analytics`. A TypedDict, not a bare
+    `dict[str, object]`, so the route can read `totals["total_bytes"]` as an
+    `int` without a cast and mypy still checks the key names."""
+
+    document_count: int
+    doc_key_count: int
+    total_bytes: int
+    latest_ingested_at: datetime | None
+    chunk_count: int
+
+
+class StageThroughput(TypedDict):
+    """One row of the per-stage pipeline summary. `median_seconds` is None
+    when the stage has no `done` runs to take a median over."""
+
+    name: str
+    done: int
+    running: int
+    queued: int
+    failed: int
+    median_seconds: float | None
+
+
+def _latest_stage_runs() -> sqlalchemy.Subquery:
+    """Every `stage_run` tagged with its rank within (doc_id, stage_name),
+    newest first, plus its wall-clock duration in seconds.
+
+    Callers filter on `rn == 1` to get the LATEST run per (doc_id,
+    stage_name) -- the same rule as `RegistryRepository.latest_run_status_counts`,
+    and for the same reason: a document whose `ocr` was retried three times
+    must contribute one `ocr` to any summary, not three, or a flaky stage
+    looks like a bigger pipeline than it is.
+
+    `seconds` is cast to float8 rather than left as the `numeric` that
+    `extract(epoch from interval)` yields: `percentile_cont` is declared over
+    double precision, and the cast keeps the median a Python `float` instead
+    of a `Decimal` that would need converting at every call site.
+    """
+    return select(
+        StageRun.doc_id.label("doc_id"),
+        StageRun.stage_name.label("stage_name"),
+        StageRun.status.label("status"),
+        sqlalchemy.cast(
+            func.extract("epoch", StageRun.updated_at - StageRun.created_at), Float
+        ).label("seconds"),
+        func.row_number()
+        .over(
+            partition_by=(StageRun.doc_id, StageRun.stage_name),
+            order_by=(StageRun.created_at.desc(), StageRun.id.desc()),
+        )
+        .label("rn"),
+    ).subquery()
 
 
 class RegistryRepository:
@@ -152,6 +209,101 @@ class RegistryRepository:
         for doc_id, status, n in rows:
             counts.setdefault(str(doc_id), {})[str(status)] = int(n)
         return counts
+
+    async def stage_throughput(self) -> list[StageThroughput]:
+        """One row per distinct `stage_name`, over the LATEST run per
+        (doc_id, stage_name), ordered by name.
+
+        The corpus-wide counterpart of `latest_run_status_counts`, which is
+        keyed by document and takes a page of ids; this one has no id filter
+        because `GET /analytics` is not paginated. Same latest-per-stage rule
+        (see `_latest_stage_runs`).
+
+        `median_seconds` is `percentile_cont(0.5)` over the duration of the
+        runs counted as `done` ONLY -- a failed run's duration is the time it
+        took to give up, which is not throughput, and a `running` run's
+        `updated_at` is just "now" and would drag the median toward wall-clock
+        age. The `FILTER` is what keeps those out of the ordered set; with no
+        `done` runs the aggregate returns NULL, which is the contract's
+        `median_seconds: null` rather than a zero that would read as "instant".
+
+        One query with a window function, not one per stage: the number of
+        distinct stages is a property of the pipeline, but the number of
+        round trips should not be.
+        """
+        ranked = _latest_stage_runs()
+
+        def _count(status: str) -> sqlalchemy.sql.elements.ColumnElement[int]:
+            return func.count().filter(ranked.c.status == status)
+
+        rows = (
+            await self._s.execute(
+                select(
+                    ranked.c.stage_name,
+                    _count("done"),
+                    _count("running"),
+                    _count("queued"),
+                    _count("failed"),
+                    func.percentile_cont(0.5)
+                    .within_group(ranked.c.seconds)
+                    .filter(ranked.c.status == "done"),
+                )
+                .where(ranked.c.rn == 1)
+                .group_by(ranked.c.stage_name)
+                .order_by(ranked.c.stage_name)
+            )
+        ).all()
+        return [
+            StageThroughput(
+                name=str(name),
+                done=int(done),
+                running=int(running),
+                queued=int(queued),
+                failed=int(failed),
+                median_seconds=None if median is None else float(median),
+            )
+            for name, done, running, queued, failed, median in rows
+        ]
+
+    async def document_outcome_counts(self) -> dict[str, int]:
+        """{"complete": n, "failed": n} over the whole corpus.
+
+        `complete` is documents whose latest `index` run is `done`: `index`
+        is the pipeline's terminal stage and nothing depends on it, so it is
+        the only stage whose success means the document is finished. Counting
+        "all stages done" instead would mark a document complete the moment
+        its first stage succeeded, since absent stages have no rows.
+
+        `failed` is documents with at least one latest-per-stage run in
+        `failed` -- latest-per-stage so a stage that failed and was
+        successfully retried does not keep the document marked failed
+        forever.
+
+        `count(distinct case(...))` rather than two queries: the CASE yields
+        NULL for non-matching rows and `count` ignores NULLs, so both figures
+        fall out of one scan of the same ranked set. A document can be in
+        both counts (a failed `ocr` retry alongside a done `index`); they are
+        two independent questions, not a partition.
+        """
+        ranked = _latest_stage_runs()
+        complete = func.count(
+            distinct(
+                case(
+                    (
+                        (ranked.c.stage_name == "index") & (ranked.c.status == "done"),
+                        ranked.c.doc_id,
+                    ),
+                    else_=None,
+                )
+            )
+        )
+        failed = func.count(
+            distinct(case((ranked.c.status == "failed", ranked.c.doc_id), else_=None))
+        )
+        row = (
+            await self._s.execute(select(complete, failed).where(ranked.c.rn == 1))
+        ).one()
+        return {"complete": int(row[0]), "failed": int(row[1])}
 
 
 class EvalRepository:
@@ -326,6 +478,44 @@ class DocumentRepository:
             )
         ).scalars().all()
         return list(rows), int(total)
+
+    async def corpus_totals(self) -> CorpusTotals:
+        """Whole-corpus counters for `GET /analytics`, in one round trip.
+
+        `doc_key_count` counts distinct `coalesce(doc_key, id)` groups, NOT
+        distinct `doc_key` -- exactly as `list_latest_per_doc_key` groups,
+        and for the same reason: `doc_key` is nullable (early intake rows
+        predate it), so `count(distinct doc_key)` would drop every legacy row
+        from the total instead of counting each as its own filing, and the
+        number on the analytics screen would disagree with the number of rows
+        the document list renders.
+
+        `total_bytes` coalesces `byte_size` to 0 per row, then coalesces the
+        SUM itself: the inner one stops a single NULL-sized row from being
+        silently skipped, the outer one turns the empty-corpus `sum() -> NULL`
+        into the 0 the response contract requires. `count()` and `max()` need
+        no such help -- they already return 0 and NULL. `chunk_count` rides
+        along as a scalar subquery (it correlates with nothing, so it costs
+        one extra scan, not one per document) rather than a second await.
+        """
+        totals = (
+            await self._s.execute(
+                select(
+                    func.count(),
+                    func.count(distinct(func.coalesce(Document.doc_key, Document.id))),
+                    func.coalesce(func.sum(func.coalesce(Document.byte_size, 0)), 0),
+                    func.max(Document.created_at),
+                    select(func.count()).select_from(Chunk).scalar_subquery(),
+                ).select_from(Document)
+            )
+        ).one()
+        return CorpusTotals(
+            document_count=int(totals[0]),
+            doc_key_count=int(totals[1]),
+            total_bytes=int(totals[2]),
+            latest_ingested_at=totals[3],
+            chunk_count=int(totals[4]),
+        )
 
     async def get_many(self, ids: list[str]) -> dict[str, Document]:
         """Every `Document` row whose id is in `ids`, keyed by id. Empty input ->

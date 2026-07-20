@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from fdi.core.ontology import CanonicalConcept
@@ -516,3 +518,39 @@ class SchemaValidationView(BaseModel):
     module_count: int
     unit_count: int
     field_count: int
+
+
+class CorpusTotalsView(BaseModel):
+    """Whole-corpus intake figures. `document_count` counts rows,
+    `doc_key_count` counts filings (rows grouped on `coalesce(doc_key, id)`),
+    so the two differ by exactly the number of re-uploaded versions."""
+
+    document_count: int
+    doc_key_count: int
+    total_bytes: int
+    latest_ingested_at: datetime | None
+
+
+class StageThroughputView(BaseModel):
+    """One pipeline stage, counted over the LATEST run per (document, stage).
+    `median_seconds` covers the `done` runs only, and is null when there are
+    none -- a stage that has never succeeded has no throughput, which is not
+    the same as a throughput of zero."""
+
+    name: str
+    done: int
+    running: int
+    queued: int
+    failed: int
+    median_seconds: float | None
+
+
+class AnalyticsView(BaseModel):
+    """`GET /analytics`. Corpus-wide and never paginated: the screen that
+    reads it shows totals, and a page of totals is not a total."""
+
+    corpus: CorpusTotalsView
+    stages: list[StageThroughputView]
+    documents_complete: int
+    documents_failed: int
+    chunk_count: int

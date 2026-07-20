@@ -27,11 +27,13 @@ from fdi.api.deps import (
     VectorStoreDep,
 )
 from fdi.api.schemas import (
+    AnalyticsView,
     AskRequest,
     AskResponse,
     ConceptCompareRequest,
     ConceptComparisonView,
     ConceptLookupView,
+    CorpusTotalsView,
     DocumentListView,
     DocumentStructureView,
     DocumentSummaryView,
@@ -73,6 +75,7 @@ from fdi.api.schemas import (
     SemanticTriggerView,
     StageStatusView,
     StagesView,
+    StageThroughputView,
     StaleView,
     TablesView,
     VectorSearchRequest,
@@ -1079,4 +1082,46 @@ async def validate_schema_route(body: SchemaValidateRequest) -> SchemaValidation
         module_count=module_count,
         unit_count=unit_count,
         field_count=field_count,
+    )
+
+
+@router.get("/analytics", response_model=AnalyticsView)
+async def analytics(session: SessionDep) -> AnalyticsView:
+    """Corpus totals and per-stage pipeline throughput, over everything.
+
+    Deliberately unpaginated and unfiltered: the screen that reads this
+    answers "how big is the corpus and where is the pipeline stuck", and
+    both questions are about the whole of it. Three aggregate queries, no
+    per-document work -- see `DocumentRepository.corpus_totals` and
+    `RegistryRepository.stage_throughput` for why each is one round trip.
+
+    An empty corpus is a 200 with zeros and an empty `stages` list, not a
+    404: "no documents yet" is the answer to the question, not an absence of
+    the resource, and the UI renders it as an empty state.
+    """
+    totals = await DocumentRepository(session).corpus_totals()
+    registry = RegistryRepository(session)
+    stages = await registry.stage_throughput()
+    outcomes = await registry.document_outcome_counts()
+    return AnalyticsView(
+        corpus=CorpusTotalsView(
+            document_count=totals["document_count"],
+            doc_key_count=totals["doc_key_count"],
+            total_bytes=totals["total_bytes"],
+            latest_ingested_at=totals["latest_ingested_at"],
+        ),
+        stages=[
+            StageThroughputView(
+                name=s["name"],
+                done=s["done"],
+                running=s["running"],
+                queued=s["queued"],
+                failed=s["failed"],
+                median_seconds=s["median_seconds"],
+            )
+            for s in stages
+        ],
+        documents_complete=outcomes["complete"],
+        documents_failed=outcomes["failed"],
+        chunk_count=totals["chunk_count"],
     )
