@@ -2961,7 +2961,7 @@ because create_app runs at import time and under fixtures that clear FDI_*."
 
 ## Final verification
 
-- [ ] **Run every gate, including integration**
+- [x] **Run every gate, including integration**
 
 ```bash
 PYTHONUTF8=1 uv run --directory backend ruff check .
@@ -2973,7 +2973,7 @@ PYTHONUTF8=1 uv run --directory backend pytest -m integration -q
 
 Expected: ruff `All checks passed!`; mypy `Success: no issues found`; lint-imports `Contracts: 1 kept, 0 broken.`; both pytest runs green.
 
-- [ ] **Smoke-check the revived extraction path against the real schema**
+- [x] **Smoke-check the revived extraction path against the real schema**
 
 ```bash
 PYTHONUTF8=1 uv run --directory backend python -c "import json, sys; sys.path.insert(0, 'src'); from fdi.core.extractor import parse_field_specs; d = json.load(open('../docs/architecture/field-extraction-schema.json', encoding='utf-8')); print(len(parse_field_specs(d)))"
