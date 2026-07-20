@@ -1,81 +1,123 @@
 "use client";
-import { useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { listDocuments } from "@/lib/api";
+import { PageHeader } from "@/components/shell/PageHeader";
+import { FilingRow } from "@/components/data/FilingRow";
 
-type Doc = { id: string; checksum: string | null; version: number | null };
-type Stage = { name: string; status: string; error: string | null };
-type Ast = { title: string | null; sections: { heading: string | null; paragraphs: string[] }[] };
+/** The analyst's question on opening this app is "which filings are ready to
+ *  work on". This screen answers exactly that and nothing else — it is a
+ *  ledger index, not a wall of KPI tiles. The figures live on /analytics. */
+export default function Dashboard() {
+  const { data, error, isPending } = useQuery({
+    queryKey: ["documents"],
+    queryFn: () => listDocuments(),
+  });
 
-export default function Home() {
-  const [doc, setDoc] = useState<Doc | null>(null);
-  const [stages, setStages] = useState<Stage[]>([]);
-  const [ast, setAst] = useState<Ast | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function upload(file: File) {
-    const form = new FormData();
-    form.append("file", file);
-    const r = await fetch(`${API}/documents`, { method: "POST", body: form });
-    setDoc(await r.json()); setStages([]); setAst(null);
-  }
-
-  async function runOcr() {
-    if (!doc) return;
-    setBusy(true);
-    try {
-      await fetch(`${API}/documents/${doc.id}/ocr`, { method: "POST" });
-      for (let i = 0; i < 90; i++) {
-        const s: { stages: Stage[] } = await (await fetch(`${API}/documents/${doc.id}/stages`)).json();
-        setStages(s.stages);
-        const astStage = s.stages.find((x) => x.name === "ast");
-        if (astStage?.status === "done") {
-          setAst(await (await fetch(`${API}/documents/${doc.id}/artifacts/ast`)).json());
-          return;
-        }
-        if (s.stages.some((x) => x.status === "failed")) return;
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    } finally { setBusy(false); }
-  }
+  // On an empty corpus the empty state owns the invitation; a second identical
+  // button in the header would just be the same call to action twice.
+  const empty = data?.documents.length === 0;
 
   return (
-    <main className="mx-auto max-w-2xl p-8 font-mono">
-      <h1 className="text-2xl font-bold">Financial Document Intelligence</h1>
-      <p className="mt-1 text-sm opacity-60">Upload a PDF → OCR → normalize → AST</p>
+    <>
+      <PageHeader
+        eyebrow="Corpus"
+        title="Filings"
+        lede="Every annual report read into the system, with how far each one got through the pipeline."
+      >
+        {empty ? null : (
+          <Link href="/ingest" className="btn btn-primary">
+            Add a filing
+          </Link>
+        )}
+      </PageHeader>
 
-      <input type="file" accept="application/pdf" className="mt-6 block"
-             onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
-
-      {doc && (
-        <div className="mt-4 text-sm">
-          <div>document <code>{doc.id}</code> · v{doc.version}</div>
-          <button onClick={() => void runOcr()} disabled={busy}
-                  className="mt-3 rounded bg-black px-4 py-2 text-white disabled:opacity-40 dark:bg-white dark:text-black">
-            {busy ? "Running…" : "Run OCR pipeline"}
-          </button>
-        </div>
-      )}
-
-      {stages.length > 0 && (
-        <ul className="mt-6 text-sm">
-          {stages.map((s) => (
-            <li key={s.name}>{s.name}: <b>{s.status}</b>{s.error ? ` — ${s.error}` : ""}</li>
-          ))}
-        </ul>
-      )}
-
-      {ast && (
-        <section className="mt-6">
-          <h2 className="text-lg font-bold">{ast.title ?? "(untitled)"}</h2>
-          {ast.sections.map((sec, i) => (
-            <div key={i} className="mt-3">
-              <h3 className="font-semibold">{sec.heading ?? "(preamble)"}</h3>
-              {sec.paragraphs.map((p, j) => <p key={j} className="mt-1 text-sm">{p}</p>)}
-            </div>
-          ))}
-        </section>
-      )}
-    </main>
+      <div style={{ padding: "var(--sp-8)" }}>
+        {error ? (
+          <p className="sheet" style={{ padding: "var(--sp-6)" }}>
+            {(error as Error).message}
+          </p>
+        ) : isPending ? (
+          <p className="eyebrow">Loading filings</p>
+        ) : data.documents.length === 0 ? (
+          <div
+            className="sheet"
+            style={{ padding: "var(--sp-16)", textAlign: "center" }}
+          >
+            <p
+              className="display"
+              style={{
+                fontSize: "var(--text-lg)",
+                marginBottom: "var(--sp-2)",
+              }}
+            >
+              No filings yet
+            </p>
+            <p
+              style={{
+                color: "var(--ink-soft)",
+                marginBottom: "var(--sp-6)",
+              }}
+            >
+              Upload an annual report to start reading figures out of it.
+            </p>
+            <Link href="/ingest" className="btn btn-primary">
+              Add a filing
+            </Link>
+          </div>
+        ) : (
+          <table
+            className="sheet"
+            style={{
+              width: "100%",
+              textAlign: "left",
+              borderCollapse: "collapse",
+              overflow: "hidden",
+            }}
+          >
+            <caption className="sr-only">
+              Filings, with pipeline progress
+            </caption>
+            <thead>
+              <tr>
+                <th
+                  className="eyebrow"
+                  style={{ padding: "var(--sp-3) var(--sp-4)" }}
+                >
+                  Filing
+                </th>
+                <th
+                  className="eyebrow"
+                  style={{ padding: "var(--sp-3) var(--sp-4)" }}
+                >
+                  Version
+                </th>
+                <th
+                  className="eyebrow"
+                  style={{
+                    padding: "var(--sp-3) var(--sp-4)",
+                    textAlign: "right",
+                  }}
+                >
+                  Size
+                </th>
+                <th
+                  className="eyebrow"
+                  style={{ padding: "var(--sp-3) var(--sp-4)" }}
+                >
+                  Pipeline
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.documents.map((d) => (
+                <FilingRow key={d.id} document={d} />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
   );
 }
