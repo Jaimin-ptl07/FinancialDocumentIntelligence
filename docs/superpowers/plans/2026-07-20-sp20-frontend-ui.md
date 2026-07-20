@@ -1,5 +1,41 @@
 # SP-20 Frontend UI Implementation Plan
 
+> **STATUS: implemented 2026-07-21.** All eight tasks landed, plus a fifth screen
+> (`/analytics`) and a backend `GET /analytics` this plan did not anticipate.
+> Frontend gates green: 48 tests, `typecheck`, `lint`, `next build`.
+>
+> **Where the shipped code deliberately departs from this document.** The plan is
+> kept as written for its reasoning; the code is the truth.
+>
+> 1. **`--tether` was used against its own rule in three places** — the active nav
+>    marker (Task 2 Step 6), the selected field in `ModuleTree` (Task 7 Step 5), and
+>    the `failed` stage mark (Task 4 Step 5). Red is provenance-only. Shipped:
+>    active states use `inset 2px 0 0 0 var(--ink)`; a failed stage is a struck ink
+>    chip, legible without borrowing a reserved hue.
+> 2. **`FieldEditor`'s aliases textarea could not be typed into.** Feeding
+>    `aliases.join("\n")` back as the value while trimming on every keystroke
+>    deletes the space and newline mid-word — `"Total assets\nSum of assets"`
+>    collapsed to `"TotalassetsSumofassets"`. Shipped: an `AliasesBox` holding raw
+>    text, normalizing only on the way out, keyed on `field_path`.
+> 3. **The tether drifted off its endpoints on scroll.** Task 8's `useLayoutEffect`
+>    re-measured only on `[selected, fields]`. Shipped: re-measures on `resize` and
+>    capture-phase `scroll` too, and the tether is withdrawn below 1024px where the
+>    viewer stacks.
+> 4. **Response shapes.** SP-19 shipped `stage_counts` as a `{status: count}` map
+>    (not flat `stages_done`/`stages_total`), wrapped the schema in a
+>    `SchemaView` envelope under `schema_document`, and made `bounding_regions`
+>    always a list. `lib/types.ts` mirrors what shipped.
+> 5. **Design tokens were warmed up** per the user: real elevation, 6px control
+>    radius, a dark theme, and a responsive shell (rail above 768px, top bar below).
+> 6. **`vitest.config.mts`, not `.ts`** — `package.json` has no `"type": "module"`
+>    and vite 7 is ESM-only, so a `.ts` config loads as CJS and throws.
+>
+> **Still deferred:** persisted extraction results. `POST /extract/document` is
+> synchronous and stores nothing, so `/analytics` reports corpus and pipeline
+> figures from the database but reads extraction quality fresh, one filing at a
+> time. Corpus-wide quality trends need a stored-extraction table first.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the SP-18 thin UI with a four-screen product interface — filings dashboard, ingestion, schema editor, and a side-by-side annual-report viewer that joins each extracted field to the region of the PDF it came from.
