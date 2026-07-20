@@ -6,26 +6,18 @@ import { usePathname } from "next/navigation";
 /** Destinations are named by what the analyst does there, not by the noun the
  *  system stores. "Add a filing", not "Upload". */
 const DESTINATIONS = [
-  { href: "/", label: "Filings", hint: "Everything read so far" },
-  { href: "/ingest", label: "Add a filing", hint: "Upload and process" },
-  { href: "/schema", label: "Extraction schema", hint: "What to look for" },
-  { href: "/analytics", label: "Quality", hint: "How well it read" },
+  { href: "/", label: "Filings" },
+  { href: "/ingest", label: "Add a filing" },
+  { href: "/schema", label: "Extraction schema" },
+  { href: "/analytics", label: "Quality" },
 ] as const;
 
 export function Spine() {
   const pathname = usePathname();
 
   return (
-    <nav
-      aria-label="Sections"
-      className="shrink-0 flex flex-col"
-      style={{
-        width: "var(--spine-w)",
-        background: "var(--leaf)",
-        borderRight: "var(--hairline)",
-      }}
-    >
-      <div style={{ padding: "var(--sp-6) var(--sp-5) var(--sp-5)" }}>
+    <nav aria-label="Sections" className="spine">
+      <div className="spine-brand">
         <div className="eyebrow">Financial document</div>
         <div
           className="display"
@@ -35,7 +27,7 @@ export function Spine() {
         </div>
       </div>
 
-      <ul style={{ padding: "var(--sp-2) var(--sp-3)" }}>
+      <ul className="spine-nav">
         {DESTINATIONS.map((d) => {
           const active =
             d.href === "/" ? pathname === "/" : pathname.startsWith(d.href);
@@ -44,8 +36,9 @@ export function Spine() {
               <Link
                 href={d.href}
                 aria-current={active ? "page" : undefined}
-                className="block"
                 style={{
+                  display: "block",
+                  whiteSpace: "nowrap",
                   padding: "var(--sp-2) var(--sp-3)",
                   marginBottom: "2px",
                   borderRadius: "var(--radius-sm)",
@@ -63,13 +56,7 @@ export function Spine() {
         })}
       </ul>
 
-      <div
-        className="mt-auto"
-        style={{
-          padding: "var(--sp-4) var(--sp-5)",
-          borderTop: "1px solid var(--rule-soft)",
-        }}
-      >
+      <div className="spine-foot">
         <p
           style={{
             fontSize: "var(--text-xs)",

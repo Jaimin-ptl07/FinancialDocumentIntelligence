@@ -37,7 +37,7 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <Providers>
-          <div className="flex min-h-screen">
+          <div className="app-shell">
             <Spine />
             <main className="flex-1 min-w-0">{children}</main>
           </div>

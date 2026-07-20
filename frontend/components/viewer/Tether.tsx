@@ -35,7 +35,7 @@ export function Tether({
   return (
     <svg
       aria-hidden="true"
-      className="absolute inset-0 pointer-events-none"
+      className="tether-layer absolute inset-0 pointer-events-none"
       width={container.width}
       height={container.height}
       style={{ zIndex: 5 }}

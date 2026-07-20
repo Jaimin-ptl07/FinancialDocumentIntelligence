@@ -242,6 +242,106 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
+   Shell. The spine is a left rail on a desk and a scrolling top bar on a
+   phone — 232px of fixed chrome would leave 158px of content at 390px wide.
+   ------------------------------------------------------------------------ */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.spine {
+  display: flex;
+  flex-direction: column;
+  background: var(--leaf);
+  border-bottom: var(--hairline);
+}
+
+.spine-brand {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+.spine-nav {
+  display: flex;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.spine-nav > li {
+  flex: none;
+}
+
+.spine-foot {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .app-shell {
+    flex-direction: row;
+  }
+
+  .spine {
+    width: var(--spine-w);
+    flex-shrink: 0;
+    border-bottom: none;
+    border-right: var(--hairline);
+  }
+
+  .spine-brand {
+    padding: var(--sp-6) var(--sp-5) var(--sp-5);
+  }
+
+  .spine-nav {
+    display: block;
+    overflow-x: visible;
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  .spine-foot {
+    display: block;
+    margin-top: auto;
+    padding: var(--sp-4) var(--sp-5);
+    border-top: 1px solid var(--rule-soft);
+  }
+}
+
+/* The viewer stacks below the width where two useful columns fit. The tether
+   is a horizontal join between them, so it is withdrawn rather than redrawn
+   at an angle that would assert a relationship the layout no longer shows. */
+.viewer-split {
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-aside {
+  width: 100%;
+  border-top: var(--hairline);
+}
+
+.tether-layer {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .viewer-split {
+    flex-direction: row;
+  }
+
+  .viewer-aside {
+    width: 440px;
+    flex-shrink: 0;
+    border-top: none;
+  }
+
+  .tether-layer {
+    display: block;
+  }
+}
+
+/* ---------------------------------------------------------------------------
    Accessibility floor
    ------------------------------------------------------------------------ */
 

@@ -95,12 +95,12 @@ export default function ReportViewer({
 
       <div
         ref={containerRef}
-        className="relative flex"
-        style={{ height: "calc(100vh - 129px)" }}
+        className="viewer-split relative"
+        style={{ minHeight: "calc(100vh - 129px)" }}
       >
         <div
           className="flex-1 min-w-0 flex flex-col"
-          style={{ borderRight: "var(--hairline)" }}
+          style={{ borderRight: "1px solid var(--rule)" }}
         >
           <div
             className="flex items-center shrink-0"
@@ -146,8 +146,8 @@ export default function ReportViewer({
         </div>
 
         <div
-          className="shrink-0 overflow-y-auto"
-          style={{ width: "440px", background: "var(--leaf)" }}
+          className="viewer-aside overflow-y-auto"
+          style={{ background: "var(--leaf)" }}
         >
           {extract.error ? (
             <p style={{ padding: "var(--sp-6)", fontSize: "var(--text-sm)" }}>
