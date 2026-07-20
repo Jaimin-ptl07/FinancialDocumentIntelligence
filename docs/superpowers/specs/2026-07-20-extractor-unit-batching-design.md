@@ -257,6 +257,27 @@ through `normalize_ocr`, written under the `ocr` stage's content-addressed key
 so `run_stage` treats it as a cache hit. Azure Document Intelligence calls: **0**.
 The DAG then runs `structure` onward for real.
 
+**Also seed `semantic` as `{"schema_version": 1, "sections": []}`.** This is
+not only a cost decision, it is the *faithful* one:
+
+- The 87.4% benchmark was itself produced with an empty semantic artifact —
+  `build_pool_cache.py` calls `build_chunks(ast, {"sections": []}, provenance,
+  structure)`. All 2752 cached chunks carry `section_type: None`.
+- `section_type` is **inert for extraction**. It appears nowhere in
+  `fdi.pipeline.extractor` or `fdi.core.extractor`; `extract_field` scopes
+  `hybrid_search` by `doc_key`/`version` only, and `build_vector_results` skips
+  its section filter when `section_type is None`.
+- Running `semantic` for real costs **one Azure OpenAI call per AST section —
+  510 for this document**, ~28× the 18 extraction calls, and would populate
+  `section_type` where the benchmark had `None`, making the chunk set differ
+  from the one the 87.4% was measured on.
+
+Since `section_type` never changes chunk *text*, embeddings and retrieval are
+identical either way; seeding merely avoids 510 pointless calls. Note this
+leaves `chunk.section_type` NULL, so the `/retrieve` route's `section_type`
+filter and the `knowledge` stage are not meaningfully exercised by this run —
+acceptable, as neither is on the extraction path under test.
+
 Then `POST /extract/document` and read the resulting JSON against the schema's
 `example` values directly — no scoring script, per the scope decision in §2.
 
