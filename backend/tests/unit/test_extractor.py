@@ -217,6 +217,9 @@ def test_parse_field_specs_field_shape() -> None:
         unit_title="Corporate Information",
         scope="front_matter",
         statement_type=None,
+        field_path="",
+        periods=(),
+        locator_keywords=("corporate information", "CIN"),
     )
 
 
@@ -373,3 +376,83 @@ def test_assemble_result_malformed_evidence_ids_falls_back() -> None:
     ranked = [_cand("d1:s0", "candidate text", 0.9), _cand("d1:s1", "more text", 0.8)]
     out = assemble_result(_field(), {"source": {"evidence_ids": "not-a-list"}}, ranked)
     assert out["source"]["evidence_ids"] == ["d1:s0", "d1:s1"]
+
+
+def test_parse_field_specs_carries_field_path_periods_and_locator_keywords() -> None:
+    schema = {
+        "modules": [
+            {
+                "id": 3,
+                "key": "module_3_balance_sheet",
+                "name": "Balance Sheet",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_BS",
+                        "title": "Balance Sheet",
+                        "locator_keywords": ["balance sheet", "total assets"],
+                        "retrieval_query": "Balance Sheet",
+                        "fields": [
+                            {
+                                "field_name": "Total equity",
+                                "field_path": "module_3_balance_sheet.equity.total_equity",
+                                "aliases": ["Total equity"],
+                                "data_type": "decimal",
+                                "periods": ["current", "comparative_prior"],
+                                "extraction_prompt": "Extract total equity.",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    [spec] = parse_field_specs(schema)
+    assert spec.field_path == "module_3_balance_sheet.equity.total_equity"
+    assert spec.periods == ("current", "comparative_prior")
+    assert spec.locator_keywords == ("balance sheet", "total assets")
+    # keywords keeps its existing aliases-then-locator_keywords contract
+    assert spec.keywords == ("Total equity", "balance sheet", "total assets")
+
+
+def test_parse_field_specs_missing_field_path_and_periods_default_empty() -> None:
+    schema = {
+        "modules": [
+            {
+                "id": 2,
+                "key": "m2",
+                "name": "M2",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_X",
+                        "title": "X",
+                        "locator_keywords": [],
+                        "retrieval_query": "x",
+                        "fields": [
+                            {
+                                "field_name": "No path",
+                                "aliases": [],
+                                "data_type": "string",
+                                "extraction_prompt": "Extract it.",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    [spec] = parse_field_specs(schema)
+    assert spec.field_path == ""
+    assert spec.periods == ()
+    assert spec.locator_keywords == ()
+
+
+def test_field_spec_constructs_without_the_new_members() -> None:
+    """Hand-built FieldSpecs (tests, synthesizing callers) must keep working."""
+    spec = FieldSpec(
+        field_name="F", data_type="string", retrieval_query="q",
+        keywords=("k",), extraction_prompt="p", enum_values=None,
+        module_id=1, module_name="M",
+    )
+    assert spec.field_path == ""
+    assert spec.periods == ()
+    assert spec.locator_keywords == ()

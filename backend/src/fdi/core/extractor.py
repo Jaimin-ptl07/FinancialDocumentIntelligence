@@ -59,6 +59,9 @@ class FieldSpec:
     unit_title: str = ""
     scope: str | None = None
     statement_type: str | None = None
+    field_path: str = ""
+    periods: tuple[str, ...] = ()
+    locator_keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,6 +146,10 @@ def _field_spec_from(
     unit_id = unit.get("unit_id")
     unit_title = unit.get("title")
 
+    field_path = field.get("field_path")
+    periods = _str_tuple(field.get("periods"))
+    locator_keywords = _str_tuple(unit.get("locator_keywords"))
+
     return FieldSpec(
         field_name=field_name, data_type=data_type, retrieval_query=retrieval_query,
         keywords=keywords, extraction_prompt=extraction_prompt, enum_values=enum_values,
@@ -151,6 +158,9 @@ def _field_spec_from(
         unit_title=unit_title if isinstance(unit_title, str) else "",
         scope=_non_blank_str(unit.get("scope")),
         statement_type=_non_blank_str(unit.get("statement_type")),
+        field_path=field_path if isinstance(field_path, str) else "",
+        periods=periods,
+        locator_keywords=locator_keywords,
     )
 
 
