@@ -302,34 +302,43 @@ def rerank_candidates(
     return sorted(candidates, key=blended, reverse=True)[:top_k]
 
 
+_SHARED_EXTRACTION_RULES = (
+    "Use ONLY the context given below -- never prior knowledge of a specific "
+    "company or filing. "
+    "When a context row/line shows more than one period column (financial "
+    "statements commonly print the current year then the prior year side "
+    "by side), the FIRST / most-recent period column is the CURRENT "
+    "reporting-year value and the second is the prior-year comparative. "
+    "When the same figure appears in more than one place, prefer the "
+    "value from the PRIMARY financial statement (Balance Sheet, "
+    "Statement of Profit and Loss, or Cash Flow Statement) over a note, "
+    "schedule, or other disclosure that restates it. "
+    "A number printed in PARENTHESES is NEGATIVE -- accounting notation. "
+    "\"(12.97)\" means -12.97, and \"(1,234)\" means -1234. Return it as a "
+    "negative number, never as its positive magnitude. "
+    "The field may be labeled differently than its name in the "
+    "document -- recognize LABEL SYNONYMS and extract a value whose "
+    "MEANING matches even when the wording differs (e.g. \"closing cash "
+    "balance\" = \"Cash and cash equivalents\" at year-end; \"revenue\" "
+    "= \"Revenue from operations\"). "
+    "Apart from parenthesis-negation, return the number exactly as printed "
+    "in the context -- do not rescale, convert, or reinterpret units. "
+)
+
+
 def build_extraction_messages(field: FieldSpec, candidates: Sequence[Candidate]) -> tuple[str, str]:
     """(system, user) messages for ExtractorClient.extract. system states
     the JSON output_contract and the "only the given context" constraint,
-    plus four field-agnostic extraction rules learned from real-document
+    plus the field-agnostic extraction rules learned from real-document
     extraction misses (multi-year columns, statement-vs-notes duplication,
-    label wording drift, unit fidelity -- see module docstring's design
-    spec); user carries field.extraction_prompt plus every candidate
-    labeled with its evidence_id/page/text, so the LLM can cite one back."""
+    parentheses-negative accounting notation, label wording drift, unit
+    fidelity -- see module docstring's design spec); user carries
+    field.extraction_prompt plus every candidate labeled with its
+    evidence_id/page/text, so the LLM can cite one back."""
     system = (
-        "You extract ONE field's value from financial-document context. Use "
-        "ONLY the context given below -- never prior knowledge of a specific "
-        "company or filing. "
-        "When a context row/line shows more than one period column (financial "
-        "statements commonly print the current year then the prior year side "
-        "by side), return the CURRENT reporting-year value -- the FIRST / "
-        "most-recent period column -- never a prior-year comparative. "
-        "When the same figure appears in more than one place, prefer the "
-        "value from the PRIMARY financial statement (Balance Sheet, "
-        "Statement of Profit and Loss, or Cash Flow Statement) over a note, "
-        "schedule, or other disclosure that restates it. "
-        "The field may be labeled differently than its name in the "
-        "document -- recognize LABEL SYNONYMS and extract a value whose "
-        "MEANING matches even when the wording differs (e.g. \"closing cash "
-        "balance\" = \"Cash and cash equivalents\" at year-end; \"revenue\" "
-        "= \"Revenue from operations\"). "
-        "Return the number exactly as printed in the context -- do not "
-        "rescale, convert, or reinterpret units. "
-        "Respond with a single JSON object, nothing else, "
+        "You extract ONE field's value from financial-document context. "
+        + _SHARED_EXTRACTION_RULES
+        + "Respond with a single JSON object, nothing else, "
         "shaped exactly like this: "
         '{"value": <the extracted value, or null if not present in the '
         'context>, "source": {"page": <int or null>, "snippet": <verbatim '
@@ -339,6 +348,45 @@ def build_extraction_messages(field: FieldSpec, candidates: Sequence[Candidate])
         "confidence to 0.0 -- never guess."
     )
     lines = [field.extraction_prompt, "", "Context:"]
+    for c in candidates:
+        lines.append(f"[{c.evidence_id}] (page {c.page}): {c.text}")
+    return system, "\n".join(lines)
+
+
+def build_unit_messages(
+    unit: UnitSpec, candidates: Sequence[Candidate]
+) -> tuple[str, str]:
+    """(system, user) for ONE batched call covering every field in `unit`.
+    The response is a JSON object keyed by `field_path` -- globally unique,
+    unlike field_name."""
+    system = (
+        "You extract MULTIPLE fields from ONE shared block of "
+        "financial-document context, all belonging to the SAME Retrieval Unit "
+        "(e.g. one statement or one note). "
+        + _SHARED_EXTRACTION_RULES
+        + "Respond with a single JSON object, nothing else, whose KEYS are "
+        "exactly the field_path values listed below and whose values are "
+        'shaped like: {"value": <extracted value -- for a dual-period field '
+        'this MUST be {"current": <num or null>, "prior": <num or null>}, '
+        'otherwise a scalar or null>, "source": {"page": <int or null>, '
+        '"snippet": <verbatim supporting text or null>, "evidence_ids": '
+        '[<ids you used>]}, "confidence": <float 0.0-1.0>}. '
+        "Include EVERY field_path as a key. If a field is not present in the "
+        "context, set its value to null (or {\"current\": null, \"prior\": "
+        "null} if dual-period) and confidence to 0.0 -- never guess."
+    )
+
+    lines = [f"Retrieval Unit: {unit.unit_title}", "", "Fields to extract:"]
+    for f in unit.fields:
+        key = f.field_path or f.field_name
+        dual = " (dual-period: return {current, prior})" if f.periods else ""
+        aliases = f", aliases={list(f.keywords)}" if f.keywords else ""
+        lines.append(
+            f'- field_path="{key}" label="{f.field_name}" '
+            f"data_type={f.data_type}{dual}{aliases}: {f.extraction_prompt}"
+        )
+    lines.append("")
+    lines.append("Context:")
     for c in candidates:
         lines.append(f"[{c.evidence_id}] (page {c.page}): {c.text}")
     return system, "\n".join(lines)
@@ -387,6 +435,29 @@ def assemble_result(
         "source": {"page": page, "snippet": snippet, "evidence_ids": evidence_ids},
         "confidence": _clamp_confidence(raw.get("confidence")),
     }
+
+
+def assemble_unit_results(
+    unit: UnitSpec, raw: Mapping[str, object], ranked: Sequence[Candidate]
+) -> list[dict[str, object]]:
+    """One output_contract record per field in `unit`, in unit order.
+
+    Looks each field up by `field_path`, falling back to `field_name` (a model
+    that echoes the label still resolves). A missing or non-Mapping entry
+    degrades through `assemble_result`'s existing fallbacks, so a partial or
+    garbled batched response still yields one well-formed record per field.
+    Never raises."""
+    out: list[dict[str, object]] = []
+    for field in unit.fields:
+        entry: object = None
+        if isinstance(raw, Mapping):
+            if field.field_path:
+                entry = raw.get(field.field_path)
+            if entry is None:
+                entry = raw.get(field.field_name)
+        field_raw = entry if isinstance(entry, Mapping) else {}
+        out.append(assemble_result(field, field_raw, ranked))
+    return out
 
 
 # Markers are deliberately SPECIFIC. A bare "consolidated financial

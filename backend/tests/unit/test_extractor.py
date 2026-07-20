@@ -3,7 +3,9 @@ from fdi.core.extractor import (
     FieldSpec,
     UnitSpec,
     assemble_result,
+    assemble_unit_results,
     build_extraction_messages,
+    build_unit_messages,
     filter_candidates,
     find_consolidated_start_page,
     group_fields_by_unit,
@@ -345,6 +347,95 @@ def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
     assert "d1:s0" in user
     assert "Total assets were 100." in user
     assert "1" in user  # the candidate's page
+
+
+def test_shared_rules_state_parentheses_are_negative() -> None:
+    field = _fs("a")
+    system, _ = build_extraction_messages(field, [_cand("d:s1", "t", 1)])
+    lowered = system.casefold()
+    assert "parenthes" in lowered
+    assert "negative" in lowered
+
+
+def test_build_unit_messages_system_states_parentheses_rule() -> None:
+    [unit] = group_fields_by_unit([_fs("a")])
+    system, _ = build_unit_messages(unit, [_cand("d:s1", "t", 1)])
+    lowered = system.casefold()
+    assert "parenthes" in lowered
+    assert "negative" in lowered
+
+
+def test_build_unit_messages_user_lists_every_field_and_candidate() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    _, user = build_unit_messages(unit, [_cand("d:s1", "row text", 7)])
+    assert "m.alpha" in user
+    assert "m.beta" in user
+    assert "Extract alpha." in user
+    assert "Extract beta." in user
+    assert "[d:s1]" in user
+    assert "row text" in user
+    assert "page 7" in user
+
+
+def test_build_unit_messages_marks_dual_period_fields() -> None:
+    dual = FieldSpec(
+        field_name="total_equity", data_type="decimal", retrieval_query="q",
+        keywords=("k",), extraction_prompt="Extract equity.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T",
+        field_path="m.total_equity", periods=("current", "comparative_prior"),
+    )
+    [unit] = group_fields_by_unit([dual])
+    system, user = build_unit_messages(unit, [_cand("d:s1", "t", 1)])
+    assert "current" in user and "prior" in user
+    assert "field_path" in system
+
+
+def test_assemble_unit_results_maps_response_by_field_path() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    ranked = [_cand("d:s1", "t", 3)]
+    raw = {
+        "m.alpha": {"value": 1.5, "source": {"page": 9, "snippet": "s",
+                                             "evidence_ids": ["d:s1"]}, "confidence": 0.9},
+        "m.beta": {"value": "x", "source": {"page": 4, "snippet": "y",
+                                            "evidence_ids": ["d:s1"]}, "confidence": 0.5},
+    }
+    out = assemble_unit_results(unit, raw, ranked)
+    assert [r["field_name"] for r in out] == ["alpha", "beta"]
+    assert out[0]["value"] == 1.5
+    assert out[0]["confidence"] == 0.9
+    assert out[1]["value"] == "x"
+
+
+def test_assemble_unit_results_missing_field_path_degrades_to_well_formed() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    ranked = [_cand("d:s1", "fallback text", 3)]
+    raw = {"m.alpha": {"value": 1.0, "confidence": 0.8}}
+    out = assemble_unit_results(unit, raw, ranked)
+    assert len(out) == 2
+    assert out[1]["field_name"] == "beta"
+    assert out[1]["value"] is None
+    assert out[1]["confidence"] == 0.0
+    assert out[1]["source"]["page"] == 3
+
+
+def test_assemble_unit_results_malformed_raw_yields_one_record_per_field() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    for raw in ({}, {"m.alpha": "not a dict"}, {"unrelated": {"value": 1}}):
+        out = assemble_unit_results(unit, raw, [])
+        assert len(out) == 2
+        assert all(r["value"] is None for r in out)
+        assert all(r["confidence"] == 0.0 for r in out)
+
+
+def test_assemble_unit_results_falls_back_to_field_name_key() -> None:
+    """A model that echoes field_name instead of field_path still resolves."""
+    [unit] = group_fields_by_unit([_fs("alpha")])
+    out = assemble_unit_results(unit, {"alpha": {"value": 7, "confidence": 1.0}}, [])
+    assert out[0]["value"] == 7
 
 
 def test_assemble_result_full_llm_dict_passthrough() -> None:
