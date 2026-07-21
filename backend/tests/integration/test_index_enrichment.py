@@ -144,11 +144,26 @@ async def test_index_upserts_enriched_metadata(session_factory, store) -> None:
     hits = fake_store.search(query_vector, k=1)
     assert hits[0]["id"] == f"{doc.id}:s0"
     assert hits[0]["metadata"] == {
+        "text": "Balance Sheet\nAssets 100",
+        "doc_id": doc.id,
         "heading": "Balance Sheet",
         "chunk_id": "s0",
         "section_type": "BALANCE_SHEET",
         "page": 1,
     }
+    # RT-9: the row now carries the BM25 input and the filterable doc scalar
+    assert hits[0]["metadata"]["text"].startswith("Balance Sheet")
+    assert hits[0]["metadata"]["doc_id"] == doc.id
+    # still true from v2 -- these must not regress
+    assert hits[0]["metadata"]["chunk_id"] == "s0"
+    assert hits[0]["metadata"]["section_type"] == SectionType.BALANCE_SHEET.value
+
+
+def test_index_stage_version_is_3() -> None:
+    """v3 rows carry `text` and `doc_id`; v2 rows carry neither. The bump is
+    what re-runs `index` -- and only `index` -- for already-ingested
+    documents, since the DAG is content-addressed on {stage}/v{version}."""
+    assert IndexStage().version == 3
 
 
 async def test_index_is_successor_of_embedding_and_chunks() -> None:
