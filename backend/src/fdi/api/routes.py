@@ -55,6 +55,9 @@ from fdi.api.schemas import (
     HybridSearchResultView,
     JobAccepted,
     JobView,
+    KeywordHitView,
+    KeywordSearchRequest,
+    KeywordSearchResultsView,
     LeaderboardEntry,
     LeaderboardView,
     OcrTriggerView,
@@ -98,7 +101,7 @@ from fdi.pipeline.graphquery import (
 )
 from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.intake import document_key, intake_document
-from fdi.pipeline.retrieval import hybrid_search, vector_search
+from fdi.pipeline.retrieval import bm25_search, hybrid_search, vector_search
 from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
@@ -733,14 +736,38 @@ async def concept_lookup_route(
 
 # --------------------------------------------------------------------------
 # RT-9: POST /retrieve -- hybrid (RRF) retrieval over RT-2's vector_search +
-# RT-9's bm25_search. `/documents/{id}/index_fts` and `/retrieve/keyword`
-# (RT-3's Postgres-only keyword channel, plainto_tsquery + ts_rank) are
-# REMOVED here along with keyword_search/index_chunks_fts themselves --
-# plainto_tsquery ANDed every lexeme, so every real (sentence-shaped) query
-# returned zero hits. This route's own 503-when-unconfigured handling (to
-# match /retrieve/vector, now that both its channels share one VectorStore
-# seam) is a later task's job, not reinstated here.
+# RT-9's bm25_search. `/documents/{id}/index_fts` and the Postgres-only
+# keyword channel behind the old `/retrieve/keyword` (RT-3's plainto_tsquery
+# + ts_rank, which ANDed every lexeme and returned zero hits for every real,
+# sentence-shaped query) are GONE along with keyword_search/index_chunks_fts
+# themselves. `/retrieve/keyword` is kept and repointed at bm25_search
+# instead -- the Postgres implementation dies, but the capability starts
+# working for the first time. Both routes 503 when Milvus is unconfigured,
+# matching /retrieve/vector: with both channels sharing one VectorStore seam,
+# there is nothing left to degrade to (supersedes RT-4 decision 2 -- a
+# confident empty list is the failure this whole sub-project exists to
+# correct).
 # --------------------------------------------------------------------------
+
+
+@router.post("/retrieve/keyword", response_model=KeywordSearchResultsView)
+async def keyword_search_route(
+    body: KeywordSearchRequest, session: SessionDep, vector_store: VectorStoreDep
+) -> KeywordSearchResultsView:
+    if vector_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "retrieve/keyword is not configured: missing vector_store "
+                "(set FDI_MILVUS_URI -- BM25 is served by Milvus)"
+            ),
+        )
+    hits = await bm25_search(
+        session=session, vector_store=vector_store, query=body.query, k=body.k,
+        filters={"section_type": body.section_type, "doc_key": body.doc_key,
+                 "version": body.version},
+    )
+    return KeywordSearchResultsView(results=[KeywordHitView(**h) for h in hits])
 
 
 @router.post("/retrieve", response_model=HybridSearchResultsView)
@@ -751,6 +778,21 @@ async def hybrid_search_route(
     embedder: EmbedderDep,
     vector_store: VectorStoreDep,
 ) -> HybridSearchResultsView:
+    missing = [
+        name
+        for name, svc in (("embedder", embedder), ("vector_store", vector_store))
+        if svc is None
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"retrieve is not configured: missing {', '.join(missing)} "
+                "(set FDI_MILVUS_URI -- embeddings run locally via BGE and need no endpoint/key)"
+            ),
+        )
+    assert embedder is not None
+    assert vector_store is not None
     filters = {
         "section_type": body.filters.section_type if body.filters else None,
         "doc_key": body.filters.doc_key if body.filters else None,

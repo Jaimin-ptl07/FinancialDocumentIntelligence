@@ -129,12 +129,16 @@ async def _pool_for(
     *, ctx: ExtractContext, query: str, k: int
 ) -> list[Candidate]:
     """hybrid_search -> Candidate list, scoped to this document/version.
-    Never raises (decision 10): a failed search degrades to an empty pool."""
+    Never raises (decision 10): a failed search degrades to an empty pool.
+    An unconfigured embedder/vector_store degrades the same way -- hybrid_
+    search now requires both non-None, so there is nothing to call."""
+    if ctx.embedder is None or ctx.vector_store is None:
+        return []
     hits: list[dict[str, object]] = []
     if query.strip():
         with contextlib.suppress(Exception):
             hits = await hybrid_search(
-                session=ctx.session, store=ctx.store, embedder=ctx.embedder,
+                session=ctx.session, embedder=ctx.embedder,
                 vector_store=ctx.vector_store, query=query.strip(), k=k,
                 filters={"doc_key": ctx.doc_key, "version": ctx.version},
             )

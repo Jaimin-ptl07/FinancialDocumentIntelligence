@@ -103,12 +103,14 @@ class _CompareConceptArgs(BaseModel):
 
 async def _search(args: BaseModel, ctx: AgentContext) -> dict[str, object]:
     a = cast(_SearchArgs, args)
+    if ctx.embedder is None or ctx.vector_store is None:
+        return {"error": "search is unavailable: vector store not configured"}
     filters = {
         "section_type": a.section_type.value if a.section_type is not None else None,
         "doc_key": a.doc_key, "version": a.version,
     }
     results = await hybrid_search(
-        session=ctx.session, store=ctx.store, embedder=ctx.embedder,
+        session=ctx.session, embedder=ctx.embedder,
         vector_store=ctx.vector_store, query=a.query, k=a.k, filters=filters,
     )
     return {"results": results}
