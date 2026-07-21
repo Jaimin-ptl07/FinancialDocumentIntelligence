@@ -182,25 +182,40 @@ def test_ensure_collection_declares_bm25_function_and_sparse_index(
 
         def create_collection(self, **kw: object) -> None:
             created.update(kw)
+            created["functions_at_create"] = len(cast(_FakeSchema, kw["schema"]).functions)
 
         def upsert(self, **kw: object) -> None:
             pass
 
     monkeypatch.setattr(vs, "MilvusClient", _FakeClient)
-    store = vs.MilvusVectorStore(uri="http://x", collection="c", dim=384)
-    store.upsert([{"id": "d:s1", "vector": [0.0] * 384, "metadata": {"text": "hello"}}])
+    # dim=4, not 384: a hardcoded self._dim would still pass every assertion
+    # below unless the schema's `vector` field dim is checked against the
+    # exact value the constructor was given.
+    store = vs.MilvusVectorStore(uri="http://x", collection="c", dim=4)
+    store.upsert([{"id": "d:s1", "vector": [0.0] * 4, "metadata": {"text": "hello"}}])
 
     schema = created["schema"]
     names = {f["name"] for f in schema.fields}
     assert {"id", "vector", "text", "sparse", "doc_id", "chunk_id",
             "section_type", "heading", "page"} <= names
 
+    vector_field = next(f for f in schema.fields if f["name"] == "vector")
+    assert vector_field["dim"] == 4
+
     text_field = next(f for f in schema.fields if f["name"] == "text")
     assert text_field["enable_analyzer"] is True
 
     # the BM25 function must be declared BEFORE create_collection -- it cannot
-    # be added to a live collection
+    # be added to a live collection. `_FakeClient.create_collection` snapshots
+    # the function count AT THE MOMENT it is called, so this actually enforces
+    # ordering (schema.functions alone would still be 1 even if add_function
+    # ran after create_collection, since _FakeSchema is a shared mutable
+    # object captured by reference).
     assert len(schema.functions) == 1
+    assert created["functions_at_create"] == 1, (
+        "the BM25 Function must be declared BEFORE create_collection -- "
+        "Milvus cannot add one to a live collection"
+    )
 
     index_params = created["index_params"]
     sparse_index = next(i for i in index_params.indexes if i["field_name"] == "sparse")

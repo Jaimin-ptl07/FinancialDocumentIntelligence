@@ -52,6 +52,10 @@ class MilvusVectorStore:
             return
 
         schema = self._client.create_schema(auto_id=False)
+        # ids are f"{doc_id}:{chunk_id}" -- a 36-char UUID, a colon, and a
+        # short chunk id like s12/t3r7, so ~50 chars in practice. 512 is far
+        # above that ceiling and costs nothing: max_length is a validation
+        # bound, not an allocation.
         schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=512)
         schema.add_field("vector", DataType.FLOAT_VECTOR, dim=self._dim)
         schema.add_field(
