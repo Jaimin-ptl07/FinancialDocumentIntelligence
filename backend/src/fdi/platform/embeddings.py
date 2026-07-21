@@ -41,6 +41,8 @@ from fastembed import TextEmbedding
 
 from fdi.platform.config import Settings
 
+_EMBED_BATCH_SIZE = 32
+
 
 class BgeEmbeddingClient:
     """EmbeddingClient backed by a local BGE-small model (fastembed, CPU).
@@ -57,7 +59,18 @@ class BgeEmbeddingClient:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         impl = self._get_impl()
-        return [vector.tolist() for vector in impl.embed(texts)]
+        # batch_size is passed EXPLICITLY rather than left to fastembed's default
+        # (256). The ONNX Attention node allocates a dense
+        # batch x heads x seq x seq buffer, so peak RSS scales with the batch, not
+        # with the corpus. On a host already carrying Milvus/Postgres/MinIO, a
+        # 256-wide batch of 512-token chunks raised
+        # `RUNTIME_EXCEPTION ... Attention_0 ... bad allocation` and killed the
+        # embedding stage outright. 32 bounds the peak; the vectors themselves are
+        # 384 floats each and stay negligible.
+        return [
+            vector.tolist()
+            for vector in impl.embed(texts, batch_size=_EMBED_BATCH_SIZE)
+        ]
 
     @staticmethod
     def from_settings(settings: "Settings") -> "BgeEmbeddingClient":
