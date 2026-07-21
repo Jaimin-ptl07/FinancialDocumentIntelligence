@@ -1,23 +1,34 @@
 """The extractor's orchestrator + ExtractorClient seam (design spec sec
-3.2): extract_field pools context per field via hybrid_search ALONE (dense
-BGE + keyword Postgres-FTS, RRF-fused -- table content already reaches this
-pool as chunks, since build_chunks emits t{i}/t{i}r{j} table chunks
-alongside s{i} section chunks and EmbeddingStage embeds all of them; a
-separate get_tables table-blob injection was measured to flood the rerank
+3.2): extract_unit pools context ONCE per Retrieval Unit via hybrid_search
+ALONE (dense BGE + keyword Postgres-FTS, RRF-fused -- table content already
+reaches this pool as chunks, since build_chunks emits t{i}/t{i}r{j} table
+chunks alongside s{i} section chunks and EmbeddingStage embeds all of them;
+a separate get_tables table-blob injection was measured to flood the rerank
 with same-scored whole-table renders and HURT top-20 recall, 78.8% ->
 88.1% once removed -- see docs/architecture/2026-07-19-ingestion-audit-
-and-improvement-plan.md), reranks via fdi.core.extractor (pure), prompts
-the client, and assembles the schema's output_contract record.
-extract_document loops every field. ExtractorClient.extract(*, system,
-user) -> Mapping is SYNCHRONOUS, mirroring fdi.pipeline.agent.AgentClient.
-complete exactly. AzureOpenAIExtractorClient (fdi.platform.extractor, does
-I/O) structurally satisfies this protocol without importing it -- platform
-may not import pipeline. FakeExtractorClient lives here for tests: no live
-Azure OpenAI call anywhere in the default suite.
+and-improvement-plan.md), scopes the pool with fdi.core.extractor's two
+filters (drop candidates at/after the document's Consolidated-section
+boundary; drop whole-table chunks for units with no numeric/list field),
+reranks with an adaptive top_k (unit_top_k -- bigger units get a bigger
+pool so no field is starved), prompts the client ONCE with every field in
+the unit batched into a single call (schema v3.1's "Retrieve-once,
+extract-many"), and assembles one output_contract record per field.
+extract_document groups fields into Retrieval Units (group_fields_by_unit)
+and runs one retrieval + one LLM call per unit, then restores the caller's
+field order -- NOT one call per field, the pre-batching behaviour.
+ExtractorClient.extract(*, system, user) -> Mapping is SYNCHRONOUS,
+mirroring fdi.pipeline.agent.AgentClient.complete exactly.
+AzureOpenAIExtractorClient (fdi.platform.extractor, does I/O) structurally
+satisfies this protocol without importing it -- platform may not import
+pipeline. FakeExtractorClient lives here for tests: no live Azure OpenAI
+call anywhere in the default suite. extract_field (single-field pooling/
+prompting) is preserved unchanged for callers that hold one FieldSpec; it is
+NOT routed through extract_unit.
 
-Never raises (decision 10): extract_field guards every I/O step (hybrid_
-search, client.extract) individually, so one tool's failure degrades this
-field's pool/answer, never the whole document's batch.
+Never raises (decision 10): extract_unit guards every I/O step (hybrid_
+search, client.extract) individually, so one UNIT's failure degrades that
+unit's fields to well-formed null records, never the whole document's batch
+-- extract_field does the same at field granularity for its own callers.
 
 ExtractContext carries doc_id AND doc_key AND version (resolved ONCE by the
 caller -- the /extract/document route, which already looks the document up
@@ -33,6 +44,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast, runtime_checkable
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.extractor import (
@@ -55,6 +67,8 @@ from fdi.pipeline.retrieval import hybrid_search, read_chunks
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
+
+log = structlog.get_logger(__name__)
 
 
 @runtime_checkable
@@ -185,11 +199,25 @@ async def extract_field(
 async def _consolidated_start_page(ctx: ExtractContext) -> int | None:
     """Read this document's `chunks` artifact ONCE and derive the boundary.
     Never raises: a missing/unreadable artifact yields None, so extraction
-    proceeds unscoped rather than failing."""
-    with contextlib.suppress(Exception):
+    proceeds unscoped rather than failing -- logged here (pipeline layer;
+    fdi.core stays log-free) so a boundary of None is distinguishable from a
+    document that legitimately has no Consolidated section vs. one where the
+    chunks artifact was missing/unreadable and the whole scoping feature
+    silently no-opped."""
+    try:
         chunks = await read_chunks(RegistryRepository(ctx.session), ctx.store, ctx.doc_id)
-        return find_consolidated_start_page(chunks)
-    return None
+    except Exception as exc:  # noqa: BLE001 -- never raise (decision 10)
+        log.warning(
+            "extractor.consolidated_boundary_suppressed_exception",
+            doc_id=ctx.doc_id, error=repr(exc),
+        )
+        return None
+    boundary = find_consolidated_start_page(chunks)
+    if boundary is None:
+        log.info("extractor.consolidated_boundary_none", doc_id=ctx.doc_id)
+    else:
+        log.info("extractor.consolidated_boundary_found", doc_id=ctx.doc_id, page=boundary)
+    return boundary
 
 
 async def extract_document(

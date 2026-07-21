@@ -353,6 +353,24 @@ def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
     assert "1" in user  # the candidate's page
 
 
+def test_build_extraction_messages_states_the_fields_dual_period_status() -> None:
+    """Only build_unit_messages told the model whether a field is dual-period;
+    build_extraction_messages (single-field path) never did, so the model
+    could not apply _SHARED_EXTRACTION_RULES' "NOT dual-period -> current
+    year only" clause. Must now state it explicitly, in both directions."""
+    dual_field = FieldSpec(
+        field_name="total_equity", data_type="decimal", retrieval_query="q",
+        keywords=(), extraction_prompt="Extract equity.", enum_values=None,
+        module_id=1, module_name="M", periods=("current", "comparative_prior"),
+    )
+    _, dual_user = build_extraction_messages(dual_field, [])
+    assert "dual-period" in dual_user
+
+    non_dual_field = _fs("revenue")  # periods=() by default
+    _, non_dual_user = build_extraction_messages(non_dual_field, [])
+    assert "not dual-period" in non_dual_user
+
+
 def test_shared_rules_state_parentheses_are_negative() -> None:
     field = _fs("a")
     system, _ = build_extraction_messages(field, [_cand("d:s1", "t", 1)])
@@ -383,16 +401,28 @@ def test_build_unit_messages_user_lists_every_field_and_candidate() -> None:
 
 
 def test_build_unit_messages_marks_dual_period_fields() -> None:
+    """Must actually distinguish a dual-period field from a non-dual-period
+    one within the SAME unit, not just assert something present for every
+    unit regardless (the weak assertion this replaces)."""
     dual = FieldSpec(
         field_name="total_equity", data_type="decimal", retrieval_query="q",
         keywords=("k",), extraction_prompt="Extract equity.", enum_values=None,
         module_id=1, module_name="M", unit_id="U1", unit_title="T",
         field_path="m.total_equity", periods=("current", "comparative_prior"),
     )
-    [unit] = group_fields_by_unit([dual])
-    system, user = build_unit_messages(unit, [_cand("d:s1", "t", 1)])
-    assert "current" in user and "prior" in user
-    assert "field_path" in system
+    non_dual = FieldSpec(
+        field_name="company_name", data_type="string", retrieval_query="q",
+        keywords=("k",), extraction_prompt="Extract name.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T",
+        field_path="m.company_name", periods=(),
+    )
+    [unit] = group_fields_by_unit([dual, non_dual])
+    _, user = build_unit_messages(unit, [_cand("d:s1", "t", 1)])
+    lines_by_path = {
+        ln.split('"')[1]: ln for ln in user.splitlines() if ln.startswith("- field_path=")
+    }
+    assert "dual-period" in lines_by_path["m.total_equity"]
+    assert "dual-period" not in lines_by_path["m.company_name"]
 
 
 def test_assemble_unit_results_maps_response_by_field_path() -> None:
@@ -680,6 +710,31 @@ def test_find_consolidated_start_page_malformed_input_never_raises() -> None:
     assert find_consolidated_start_page([{"text": 123, "page": "x"}]) is None  # type: ignore[list-item]
 
 
+def test_find_consolidated_start_page_ignores_toc_dot_leader_entry() -> None:
+    """A Contents-page line ("Consolidated Balance Sheet ...... 140") matches
+    _CONSOLIDATED_MARKERS verbatim but sits at a low page. The dot-leader
+    guard must reject it while still finding the real marker deep in the
+    document -- returning the HIGH page, never the low TOC page."""
+    chunks = [
+        _chunk("s1", "Consolidated Balance Sheet ................ 140", 4),
+        _chunk("s2", "Independent Auditor's Report on Consolidated "
+                     "Financial Statements ... 133", 4),
+        _chunk("s3", "Consolidated Balance Sheet", 140),
+    ]
+    assert find_consolidated_start_page(chunks) == 140
+
+
+def test_find_consolidated_start_page_ignores_match_in_opening_quarter() -> None:
+    """A marker match with NO dot leaders is still ignored if it falls in the
+    opening quarter of the document -- the Consolidated section always
+    follows Standalone, so it can never legitimately start there."""
+    chunks = [
+        _chunk("s1", "Consolidated Balance Sheet", 10),
+        _chunk("s2", "Notes to accounts, unrelated narrative", 180),
+    ]
+    assert find_consolidated_start_page(chunks) is None
+
+
 def _cand(evidence_id: str, text: str, page: int | None) -> Candidate:
     return Candidate(evidence_id=evidence_id, text=text, page=page, score=1.0, source_tool="hybrid")
 
@@ -734,3 +789,13 @@ def test_filter_candidates_applies_both_filters() -> None:
 
 def test_filter_candidates_empty_input() -> None:
     assert filter_candidates([], consolidated_start_page=133, needs_tables=True) == []
+
+
+def test_filter_candidates_evidence_id_without_colon_falls_back_to_whole_id() -> None:
+    """The table-chunk check does `evidence_id.split(":", 1)[1] if ":" in
+    evidence_id else evidence_id` -- previously untested when there is no
+    ":" separator at all."""
+    cands = [_cand("t3r7", "table row, no doc-id prefix", 11)]
+    assert filter_candidates(cands, consolidated_start_page=None, needs_tables=False) == []
+    kept = filter_candidates(cands, consolidated_start_page=None, needs_tables=True)
+    assert [c.evidence_id for c in kept] == ["t3r7"]

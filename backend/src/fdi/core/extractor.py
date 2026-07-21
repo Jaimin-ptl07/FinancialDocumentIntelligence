@@ -29,6 +29,22 @@ prompt IN, the LLM's raw dict OUT -> the schema's output_contract record,
 with fallbacks so a malformed LLM response degrades to a well-formed record
 rather than raising (decisions 8, 10). Every function here is total: no
 raise, on any input shape, anywhere.
+
+UnitSpec/group_fields_by_unit implement the unit-batched extraction model:
+schema v3.1's retrieval_model is "Retrieve-once, extract-many" -- one
+retrieval + one LLM call per Retrieval Unit, not per field -- so fields are
+grouped by unit_id (order-preserving) and unit_top_k adapts the reranked
+pool size to the unit's field count. build_unit_messages/assemble_unit_
+results are UnitSpec's equivalent of the single-field prompt/assemble pair,
+keyed by field_path (globally unique, unlike field_name) so a partial or
+garbled batched response still degrades to one well-formed record per field.
+
+find_consolidated_start_page/filter_candidates are the two-filter scoping
+step that keeps a unit's pool restricted to the document's Standalone
+section (see the constants' own docstrings below for the table-of-contents
+false-positive this guards against) and, independently, drops whole-table
+chunks from units that have no numeric/list field. Both filters run between
+pooling and reranking, in fdi.pipeline.extractor's extract_unit.
 """
 
 import re
@@ -42,9 +58,11 @@ _NUMERIC_DATA_TYPES = frozenset({"decimal", "integer"})
 class FieldSpec:
     """One extractable field, flattened out of its module and retrieval unit.
 
-    The five unit/module members after `module_name` carry defaults so a
-    hand-built FieldSpec (tests, and any future caller that synthesizes one
-    outside the parser) still constructs with the v2.0-era argument set.
+    The eight unit/module members after `module_name` (module_key, unit_id,
+    unit_title, scope, statement_type, field_path, periods, locator_keywords)
+    carry defaults so a hand-built FieldSpec (tests, and any future caller
+    that synthesizes one outside the parser) still constructs with the
+    v2.0-era argument set.
     """
 
     field_name: str
@@ -335,7 +353,12 @@ def build_extraction_messages(field: FieldSpec, candidates: Sequence[Candidate])
     extraction misses (multi-year columns, statement-vs-notes duplication,
     parentheses-negative accounting notation, label wording drift, unit
     fidelity -- see module docstring's design spec); user carries
-    field.extraction_prompt plus every candidate labeled with its
+    field.extraction_prompt plus an explicit dual-period status derived from
+    field.periods (mirroring how build_unit_messages marks a dual-period
+    field), so _SHARED_EXTRACTION_RULES' "for a field that is NOT dual-period,
+    return ONLY the current reporting-year value" clause is actually
+    satisfiable here -- unlike build_unit_messages, this single-field prompt
+    has no other place to state it; plus every candidate labeled with its
     evidence_id/page/text, so the LLM can cite one back."""
     system = (
         "You extract ONE field's value from financial-document context. "
@@ -349,7 +372,12 @@ def build_extraction_messages(field: FieldSpec, candidates: Sequence[Candidate])
         "If the context does not contain the answer, set value to null and "
         "confidence to 0.0 -- never guess."
     )
-    lines = [field.extraction_prompt, "", "Context:"]
+    dual = (
+        " (dual-period: return {current, prior})"
+        if field.periods
+        else " (not dual-period: return ONLY the current reporting-year value)"
+    )
+    lines = [field.extraction_prompt + dual, "", "Context:"]
     for c in candidates:
         lines.append(f"[{c.evidence_id}] (page {c.page}): {c.text}")
     return system, "\n".join(lines)
@@ -477,6 +505,25 @@ _CONSOLIDATED_MARKERS = (
 
 _TABLE_CHUNK_RE = re.compile(r"^t\d+(r\d+)?$")
 
+# Every Indian annual report opens with a Contents page whose lines read
+# like "Consolidated Balance Sheet ................ 140" -- a dot-leader
+# run connecting the entry to its page number. Those lines match
+# _CONSOLIDATED_MARKERS verbatim, so without this guard a Contents page at,
+# say, page 4 would make find_consolidated_start_page return 4 and
+# filter_candidates would then drop nearly the entire document. A run of 4+
+# consecutive periods is specific to tabular/TOC layout and essentially
+# never occurs inside real prose, so it is a safe, cheap discriminator.
+_DOT_LEADER_RE = re.compile(r"\.{4,}")
+
+# The Consolidated section always FOLLOWS the Standalone financials in an
+# Indian annual report's page order, so it is never in the opening quarter
+# of the document -- whereas a table-of-contents entry always IS, since a
+# TOC sits at the front matter. This is the second, independent guard
+# against a TOC false positive: even a marker match with no dot leaders
+# (e.g. a TOC rendered without leader dots, or reflowed across chunks) is
+# ignored unless its page clears this fraction of the document's max page.
+_CONSOLIDATED_MIN_PAGE_FRACTION = 0.25
+
 
 def find_consolidated_start_page(chunks: Sequence[Mapping[str, object]]) -> int | None:
     """First page of the document's Consolidated section, or None when it has
@@ -487,21 +534,34 @@ def find_consolidated_start_page(chunks: Sequence[Mapping[str, object]]) -> int 
     primary statement with DIFFERENT values. Returning the minimum page across
     all marker matches lets the caller drop that whole region.
 
+    Two independent guards defeat a table-of-contents false match before the
+    minimum is taken: a chunk whose text/heading contains a dot-leader run
+    (_DOT_LEADER_RE) is skipped outright, and a match's page must be at least
+    _CONSOLIDATED_MIN_PAGE_FRACTION of the document's max page (see that
+    constant's docstring for why). Either guard alone can be defeated by a
+    reflowed or leader-less Contents entry; together they hold.
+
     Never raises: a malformed chunk, a non-str text/heading, or a non-int page
     is skipped."""
-    pages: list[int] = []
+    max_page = 0
+    matches: list[int] = []
     for chunk in chunks:
         if not isinstance(chunk, Mapping):
             continue
         page = chunk.get("page")
         if not isinstance(page, int) or isinstance(page, bool):
             continue
+        max_page = max(max_page, page)
         parts = [chunk.get("heading"), chunk.get("text")]
         haystack = " ".join(p for p in parts if isinstance(p, str)).casefold()
         if not haystack:
             continue
+        if _DOT_LEADER_RE.search(haystack):
+            continue
         if any(marker in haystack for marker in _CONSOLIDATED_MARKERS):
-            pages.append(page)
+            matches.append(page)
+    threshold = max_page * _CONSOLIDATED_MIN_PAGE_FRACTION
+    pages = [p for p in matches if p >= threshold]
     return min(pages) if pages else None
 
 
@@ -524,6 +584,7 @@ def filter_candidates(
         if (
             consolidated_start_page is not None
             and isinstance(c.page, int)
+            and not isinstance(c.page, bool)
             and c.page >= consolidated_start_page
         ):
             continue
