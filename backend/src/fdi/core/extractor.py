@@ -309,6 +309,8 @@ _SHARED_EXTRACTION_RULES = (
     "statements commonly print the current year then the prior year side "
     "by side), the FIRST / most-recent period column is the CURRENT "
     "reporting-year value and the second is the prior-year comparative. "
+    "For a field that is NOT dual-period, return ONLY the CURRENT "
+    "reporting-year value -- never the prior-year comparative. "
     "When the same figure appears in more than one place, prefer the "
     "value from the PRIMARY financial statement (Balance Sheet, "
     "Statement of Profit and Loss, or Cash Flow Statement) over a note, "

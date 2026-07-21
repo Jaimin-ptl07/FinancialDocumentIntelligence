@@ -338,6 +338,10 @@ def test_build_extraction_messages_system_states_extraction_guidance() -> None:
     assert "primary financial statement" in system_cf
     assert "label synonyms" in system_cf
     assert "do not" in system_cf and "rescale" in system_cf
+    # The imperative: single-valued (non-dual-period) fields must be told
+    # WHICH column to pick, not just what each column means.
+    assert "not dual-period" in system_cf
+    assert "never the prior-year comparative" in system_cf
 
 
 def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
