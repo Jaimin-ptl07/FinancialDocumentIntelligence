@@ -101,3 +101,40 @@ SP-14: MERGED (vector retrieval; IndexStage + POST /search + Milvus opt-in; base
 NOTE: pymilvus resolved 3.0.0 vs compose milvus 2.6.20 server — live-integration compat to verify when the vector profile is exercised (opt-in; does not affect the mocked suite).
 RESUMED post-restart. State: SP-14 merged (306 passed); SP-13 shipped Azure embeddings but user wants BGE-small — correcting.
 WAVE 5 DISPATCHED: SP-13b (BGE-small via fastembed, 384-dim, replaces Azure embed backend; config restructured) + SP-15 (KnowledgeStage, first 3-dep). Disjoint; parallel worktrees. Merge SP-13b first (config trio), then SP-15 (roadmap-only conflict).
+
+## EX-1 unit-batched extraction (plan 2026-07-20-ex1-unit-batched-extraction.md, base 996c6f7)
+EX-1 Task 1: complete (commit d714624, review clean, 32 passed, ruff+mypy green; FieldSpec +field_path/periods/locator_keywords)
+EX-1 Task 2: complete (commit 5aaeeed, review clean, 41 passed, ruff+mypy green; UnitSpec + grouping/top_k/needs_tables)
+EX-1 Task 3: complete (commit 576001c, review clean, 54 passed, ruff+mypy green; detector verified =133 on real 2752-chunk doc by controller AND implementer)
+  Minor (defer to final review): filter_candidates page check does not exclude bool (harmless, matches existing Candidate-trusting convention)
+  Minor (defer to final review): min(pages) could pick a table-of-contents mention of "Consolidated Balance Sheet" earlier than true section start; brief-specified algorithm, correct on real doc
+  Note: pre-existing test helper _cand(evidence_id,text,score) renamed to _scored_cand across ~12 sites; reviewer verified every site individually, no semantic change
+EX-1 Task 4: complete (commits ee11a4a + fix b082e2e, review clean, 62 unit / 546 fast passed, ruff+mypy green)
+  Reviewer caught Important plan-mandated defect: shared-rules refactor replaced the current-period IMPERATIVE with a
+  neutral description, and the existing guidance test passed only INCIDENTALLY (noun phrases survived as substrings).
+  Human adjudicated -> fix. Imperative restored for non-dual-period fields alongside the description; test strengthened
+  to pin "not dual-period" + "never the prior-year comparative" so removal now fails it. Re-review APPROVED.
+EX-1 Task 5: complete (commit 3348fe7, review clean, 546 fast passed, ruff+mypy green; extract_unit + rewire)
+  Controller overrode brief twice: (1) _read_chunks renamed public read_chunks (2nd consumer), all 4 sites verified;
+  (2) order restoration uses per-identity QUEUE not {id(f):i}, so a duplicated FieldSpec object cannot collide.
+  Minor (defer to final review): blanket contextlib.suppress(Exception) in _pool_for/_consolidated_start_page could
+  hide a genuine bug; pre-existing pattern carried over, not a regression.
+EX-1 Task 6: complete (commit a504b3b, review APPROVED; integration 3 passed by name, ruff+mypy green)
+  Implementer subagent HUNG (polling loop, never committed or reported). Controller took over, verified its partial
+  edits, ran the tests, and committed.
+  PLAN GAP CAUGHT BY FULL SUITE: test_api.py::test_extract_document_happy_path also scripts FakeExtractorClient with
+  single-field dicts; the plan's breaking-change audit only examined test_extract_document.py. Full suite failed 1/765;
+  fixed by re-keying, no assertion weakened. Swept all 5 FakeExtractorClient sites: 2 re-keyed, 2 empty-list, 1 new.
+  Reviewer confirmed the batching test is non-vacuous (would fail at 5 calls) and input/unit orders genuinely differ.
+EX-1 FINAL WHOLE-BRANCH REVIEW (opus, 996c6f7..a504b3b): CHANGES REQUESTED -> fixed d6fbb35 -> re-review READY TO MERGE
+  BLOCKER found & fixed: find_consolidated_start_page used min(page) over marker matches. An annual report's Contents
+  page ("Consolidated Balance Sheet ....... 140") matches the markers verbatim; a TOC hit at page ~4 would drop every
+  candidate, empty every unit, short-circuit before the LLM, and return ALL 198 fields null with no error and no log.
+  Real doc returned 133 only by luck (its TOC did not chunk with those phrases). Two independent guards added:
+  dot-leader skip (\.{4,}) + ignore matches below 25% of max page (named constant + rationale).
+  Controller independently verified 6 cases incl. synthetic TOC -> 140, only-early -> None, REAL DOC -> 133 unchanged.
+  Also fixed: pipeline-layer logging of the boundary (core stays log-free), stale docstrings, single-field prompt now
+  states dual-period status, weak/one-sided tests strengthened, bool exclusion made consistent.
+  Residuals closed in c70123a: log chunk count on both outcomes (missing-artifact vs no-consolidated-section were
+  indistinguishable); dual-period assertion made two-sided ("dual-period" is a substring of "not dual-period").
+EX-1 ALL 6 TASKS COMPLETE. Definitive full suite at c70123a: 769 passed, 9 skipped, 0 failed (baseline was 513+9). Branch green, reviewed, NOT yet merged; end-to-end accuracy verification still outstanding.
