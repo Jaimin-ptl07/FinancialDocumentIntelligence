@@ -23,7 +23,7 @@ import pytest
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from fdi.core.extractor import parse_field_specs
+from fdi.core.extractor import FieldSpec, parse_field_specs
 from fdi.pipeline.extractor import ExtractContext, FakeExtractorClient, extract_document
 from fdi.pipeline.intake import intake_document
 from fdi.pipeline.ocr import FakeOcrClient
@@ -200,16 +200,18 @@ async def test_extract_document_pools_keyword_candidates_only(
     assert len(fields) == 3  # both modules' fields, no module filter
 
     fake = FakeExtractorClient([
-        {"value": "ACME is a manufacturer.",
-         "source": {"page": 1, "snippet": "ACME Ltd is a manufacturing company",
-                     "evidence_ids": [f"{doc.id}:s0"]},
-         "confidence": 0.9},
-        {"value": 12345.0,
-         "source": {"page": None, "snippet": "Total assets 12,345",
-                     "evidence_ids": [f"{doc.id}:t0r1"]},
-         "confidence": 0.95},
-        # The third field's pool is empty -- extract_field short-circuits
-        # BEFORE calling the client, so only 2 scripted results are consumed.
+        {"Company overview text": {
+            "value": "ACME is a manufacturer.",
+            "source": {"page": 1, "snippet": "ACME Ltd is a manufacturing company",
+                       "evidence_ids": [f"{doc.id}:s0"]},
+            "confidence": 0.9}},
+        {"Total assets": {
+            "value": 12345.0,
+            "source": {"page": None, "snippet": "Total assets 12,345",
+                       "evidence_ids": [f"{doc.id}:t0r1"]},
+            "confidence": 0.95}},
+        # The third field's unit has an empty pool -- extract_unit
+        # short-circuits BEFORE calling the client, so only 2 are consumed.
     ])
 
     async with session_factory() as s:
@@ -287,3 +289,45 @@ async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
         "field_name": "Blank query field", "value": None,
         "source": {"page": None, "snippet": None, "evidence_ids": []}, "confidence": 0.0,
     }
+
+
+async def test_extract_document_makes_one_llm_call_per_unit(
+    session_factory, store, processed_doc
+) -> None:
+    """THE batching regression: 5 fields across 2 units must produce 2
+    client.extract calls, not 5 -- and come back in INPUT order."""
+    doc, marker = processed_doc
+
+    def _f(name: str, unit_id: str) -> FieldSpec:
+        return FieldSpec(
+            field_name=name, data_type="string",
+            retrieval_query=f"manufacturing company {marker}",
+            keywords=(name,), extraction_prompt=f"Extract {name}.", enum_values=None,
+            module_id=1, module_name="M", unit_id=unit_id, unit_title=f"T-{unit_id}",
+            field_path=f"m.{name}", locator_keywords=("manufacturing",),
+        )
+
+    # interleaved on purpose: input order (a,b,c,d,e) != unit order (a,b,e,c,d)
+    fields = [
+        _f("a", "U1"), _f("b", "U1"), _f("c", "U2"), _f("d", "U2"), _f("e", "U1"),
+    ]
+    fake = FakeExtractorClient([
+        {"m.a": {"value": "A", "confidence": 1.0},
+         "m.b": {"value": "B", "confidence": 1.0},
+         "m.e": {"value": "E", "confidence": 1.0}},
+        {"m.c": {"value": "C", "confidence": 1.0},
+         "m.d": {"value": "D", "confidence": 1.0}},
+    ])
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=None, vector_store=None,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        result = await extract_document(ctx=ctx, fields=fields, client=fake)
+
+    assert len(fake.calls) == 2, f"expected 2 unit calls, got {len(fake.calls)}"
+    assert result["field_count"] == 5
+    # input order preserved, NOT unit order
+    assert [r["field_name"] for r in result["fields"]] == ["a", "b", "c", "d", "e"]
+    assert [r["value"] for r in result["fields"]] == ["A", "B", "C", "D", "E"]

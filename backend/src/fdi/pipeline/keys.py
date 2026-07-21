@@ -23,3 +23,16 @@ def derived_input_hash(upstream_output_hashes: list[str]) -> str:
 
 def artifact_key(doc_id: str, stage: str, version: int, input_hash: str) -> str:
     return f"artifacts/{doc_id}/{stage}/v{version}/{input_hash}.json"
+
+
+def extraction_key(doc_id: str, record_version: int, schema_hash: str) -> str:
+    """Key for a persisted extraction record.
+
+    Parallel to `artifact_key` but deliberately NOT under `artifacts/`:
+    extraction is not a DAG stage, has no StageRun row, and must not collide
+    with the stage namespace that `run_stage` owns. Keyed on the hash of the
+    FIELD SCHEMA that produced it, so re-extracting the same document under a
+    revised schema writes a new object instead of overwriting the old one --
+    the two are different answers to different questions, and comparing them
+    is the point."""
+    return f"extractions/{doc_id}/v{record_version}/{schema_hash}.json"

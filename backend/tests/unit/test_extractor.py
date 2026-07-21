@@ -1,12 +1,20 @@
 from fdi.core.extractor import (
     Candidate,
     FieldSpec,
+    UnitSpec,
     assemble_result,
+    assemble_unit_results,
     build_extraction_messages,
+    build_unit_messages,
+    filter_candidates,
+    find_consolidated_start_page,
+    group_fields_by_unit,
     is_numeric,
     keyword_overlap,
     parse_field_specs,
     rerank_candidates,
+    unit_needs_tables,
+    unit_top_k,
 )
 
 
@@ -217,6 +225,9 @@ def test_parse_field_specs_field_shape() -> None:
         unit_title="Corporate Information",
         scope="front_matter",
         statement_type=None,
+        field_path="",
+        periods=(),
+        locator_keywords=("corporate information", "CIN"),
     )
 
 
@@ -256,13 +267,26 @@ def test_keyword_overlap_empty_keywords_is_zero() -> None:
     assert keyword_overlap("anything", []) == 0.0
 
 
-def _cand(evidence_id: str, text: str, score: float) -> Candidate:
+def _scored_cand(evidence_id: str, text: str, score: float) -> Candidate:
+    """Fixed page=1, variable score -- for rerank/assemble tests that vary
+    score to test ordering/fallback behavior. Distinct from the Task 3
+    `_cand` helper below, which fixes score and varies page instead."""
     return Candidate(evidence_id=evidence_id, text=text, page=1, score=score, source_tool="hybrid")
 
 
+def _fs(name: str, *, unit_id: str = "U1", data_type: str = "decimal",
+        query: str = "q", locators: tuple[str, ...] = ("kw",)) -> FieldSpec:
+    return FieldSpec(
+        field_name=name, data_type=data_type, retrieval_query=query,
+        keywords=(name,), extraction_prompt=f"Extract {name}.", enum_values=None,
+        module_id=1, module_name="M", unit_id=unit_id, unit_title=f"T-{unit_id}",
+        field_path=f"m.{name}", locator_keywords=locators,
+    )
+
+
 def test_rerank_candidates_keyword_boost_changes_order() -> None:
-    low_score_relevant = _cand("a", "Total Assets 100", 0.4)
-    high_score_irrelevant = _cand("b", "nothing relevant here", 0.5)
+    low_score_relevant = _scored_cand("a", "Total Assets 100", 0.4)
+    high_score_irrelevant = _scored_cand("b", "nothing relevant here", 0.5)
     ranked = rerank_candidates(
         [high_score_irrelevant, low_score_relevant], ["total", "assets"], keyword_weight=1.0
     )
@@ -270,13 +294,13 @@ def test_rerank_candidates_keyword_boost_changes_order() -> None:
 
 
 def test_rerank_candidates_stable_on_ties() -> None:
-    a, b, c = _cand("a", "x", 0.5), _cand("b", "x", 0.5), _cand("c", "x", 0.5)
+    a, b, c = _scored_cand("a", "x", 0.5), _scored_cand("b", "x", 0.5), _scored_cand("c", "x", 0.5)
     ranked = rerank_candidates([a, b, c], [])
     assert [x.evidence_id for x in ranked] == ["a", "b", "c"]  # original order preserved
 
 
 def test_rerank_candidates_top_k_truncation() -> None:
-    cands = [_cand(str(i), "x", float(i)) for i in range(5)]
+    cands = [_scored_cand(str(i), "x", float(i)) for i in range(5)]
     ranked = rerank_candidates(cands, [], top_k=2)
     assert [c.evidence_id for c in ranked] == ["4", "3"]
 
@@ -314,10 +338,14 @@ def test_build_extraction_messages_system_states_extraction_guidance() -> None:
     assert "primary financial statement" in system_cf
     assert "label synonyms" in system_cf
     assert "do not" in system_cf and "rescale" in system_cf
+    # The imperative: single-valued (non-dual-period) fields must be told
+    # WHICH column to pick, not just what each column means.
+    assert "not dual-period" in system_cf
+    assert "never the prior-year comparative" in system_cf
 
 
 def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
-    cands = [_cand("d1:s0", "Total assets were 100.", 0.9)]
+    cands = [_scored_cand("d1:s0", "Total assets were 100.", 0.9)]
     _, user = build_extraction_messages(_field(), cands)
     assert _field().extraction_prompt in user
     assert "d1:s0" in user
@@ -325,12 +353,135 @@ def test_build_extraction_messages_user_carries_prompt_and_candidates() -> None:
     assert "1" in user  # the candidate's page
 
 
+def test_build_extraction_messages_states_the_fields_dual_period_status() -> None:
+    """Only build_unit_messages told the model whether a field is dual-period;
+    build_extraction_messages (single-field path) never did, so the model
+    could not apply _SHARED_EXTRACTION_RULES' "NOT dual-period -> current
+    year only" clause. Must now state it explicitly, in both directions."""
+    dual_field = FieldSpec(
+        field_name="total_equity", data_type="decimal", retrieval_query="q",
+        keywords=(), extraction_prompt="Extract equity.", enum_values=None,
+        module_id=1, module_name="M", periods=("current", "comparative_prior"),
+    )
+    _, dual_user = build_extraction_messages(dual_field, [])
+    assert "dual-period" in dual_user
+    # Two-sided: "dual-period" alone is a substring of "not dual-period", so
+    # the positive assertion above would also pass if the code wrongly marked
+    # a dual-period field as NOT dual-period.
+    assert "not dual-period" not in dual_user
+
+    non_dual_field = _fs("revenue")  # periods=() by default
+    _, non_dual_user = build_extraction_messages(non_dual_field, [])
+    assert "not dual-period" in non_dual_user
+
+
+def test_shared_rules_state_parentheses_are_negative() -> None:
+    field = _fs("a")
+    system, _ = build_extraction_messages(field, [_cand("d:s1", "t", 1)])
+    lowered = system.casefold()
+    assert "parenthes" in lowered
+    assert "negative" in lowered
+
+
+def test_build_unit_messages_system_states_parentheses_rule() -> None:
+    [unit] = group_fields_by_unit([_fs("a")])
+    system, _ = build_unit_messages(unit, [_cand("d:s1", "t", 1)])
+    lowered = system.casefold()
+    assert "parenthes" in lowered
+    assert "negative" in lowered
+
+
+def test_build_unit_messages_user_lists_every_field_and_candidate() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    _, user = build_unit_messages(unit, [_cand("d:s1", "row text", 7)])
+    assert "m.alpha" in user
+    assert "m.beta" in user
+    assert "Extract alpha." in user
+    assert "Extract beta." in user
+    assert "[d:s1]" in user
+    assert "row text" in user
+    assert "page 7" in user
+
+
+def test_build_unit_messages_marks_dual_period_fields() -> None:
+    """Must actually distinguish a dual-period field from a non-dual-period
+    one within the SAME unit, not just assert something present for every
+    unit regardless (the weak assertion this replaces)."""
+    dual = FieldSpec(
+        field_name="total_equity", data_type="decimal", retrieval_query="q",
+        keywords=("k",), extraction_prompt="Extract equity.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T",
+        field_path="m.total_equity", periods=("current", "comparative_prior"),
+    )
+    non_dual = FieldSpec(
+        field_name="company_name", data_type="string", retrieval_query="q",
+        keywords=("k",), extraction_prompt="Extract name.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T",
+        field_path="m.company_name", periods=(),
+    )
+    [unit] = group_fields_by_unit([dual, non_dual])
+    _, user = build_unit_messages(unit, [_cand("d:s1", "t", 1)])
+    lines_by_path = {
+        ln.split('"')[1]: ln for ln in user.splitlines() if ln.startswith("- field_path=")
+    }
+    assert "dual-period" in lines_by_path["m.total_equity"]
+    assert "dual-period" not in lines_by_path["m.company_name"]
+
+
+def test_assemble_unit_results_maps_response_by_field_path() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    ranked = [_cand("d:s1", "t", 3)]
+    raw = {
+        "m.alpha": {"value": 1.5, "source": {"page": 9, "snippet": "s",
+                                             "evidence_ids": ["d:s1"]}, "confidence": 0.9},
+        "m.beta": {"value": "x", "source": {"page": 4, "snippet": "y",
+                                            "evidence_ids": ["d:s1"]}, "confidence": 0.5},
+    }
+    out = assemble_unit_results(unit, raw, ranked)
+    assert [r["field_name"] for r in out] == ["alpha", "beta"]
+    assert out[0]["value"] == 1.5
+    assert out[0]["confidence"] == 0.9
+    assert out[1]["value"] == "x"
+
+
+def test_assemble_unit_results_missing_field_path_degrades_to_well_formed() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    ranked = [_cand("d:s1", "fallback text", 3)]
+    raw = {"m.alpha": {"value": 1.0, "confidence": 0.8}}
+    out = assemble_unit_results(unit, raw, ranked)
+    assert len(out) == 2
+    assert out[1]["field_name"] == "beta"
+    assert out[1]["value"] is None
+    assert out[1]["confidence"] == 0.0
+    assert out[1]["source"]["page"] == 3
+
+
+def test_assemble_unit_results_malformed_raw_yields_one_record_per_field() -> None:
+    fields = [_fs("alpha"), _fs("beta")]
+    [unit] = group_fields_by_unit(fields)
+    for raw in ({}, {"m.alpha": "not a dict"}, {"unrelated": {"value": 1}}):
+        out = assemble_unit_results(unit, raw, [])
+        assert len(out) == 2
+        assert all(r["value"] is None for r in out)
+        assert all(r["confidence"] == 0.0 for r in out)
+
+
+def test_assemble_unit_results_falls_back_to_field_name_key() -> None:
+    """A model that echoes field_name instead of field_path still resolves."""
+    [unit] = group_fields_by_unit([_fs("alpha")])
+    out = assemble_unit_results(unit, {"alpha": {"value": 7, "confidence": 1.0}}, [])
+    assert out[0]["value"] == 7
+
+
 def test_assemble_result_full_llm_dict_passthrough() -> None:
     raw = {
         "value": 145, "confidence": 0.8,
         "source": {"page": 3, "snippet": "Total assets 145", "evidence_ids": ["d1:s0"]},
     }
-    out = assemble_result(_field(), raw, [_cand("d1:s0", "Total assets 145", 0.9)])
+    out = assemble_result(_field(), raw, [_scored_cand("d1:s0", "Total assets 145", 0.9)])
     assert out == {
         "field_name": "Total assets", "value": 145,
         "source": {"page": 3, "snippet": "Total assets 145", "evidence_ids": ["d1:s0"]},
@@ -339,7 +490,7 @@ def test_assemble_result_full_llm_dict_passthrough() -> None:
 
 
 def test_assemble_result_missing_keys_fall_back_to_candidates() -> None:
-    ranked = [_cand("d1:s0", "Total assets were 100.", 0.9)]
+    ranked = [_scored_cand("d1:s0", "Total assets were 100.", 0.9)]
     out = assemble_result(_field(), {}, ranked)
     assert out["value"] is None
     assert out["confidence"] == 0.0
@@ -364,12 +515,291 @@ def test_assemble_result_confidence_clamp() -> None:
 
 
 def test_assemble_result_malformed_source_falls_back() -> None:
-    ranked = [_cand("d1:s0", "candidate text", 0.9)]
+    ranked = [_scored_cand("d1:s0", "candidate text", 0.9)]
     out = assemble_result(_field(), {"source": "not-a-dict"}, ranked)
     assert out["source"] == {"page": 1, "snippet": "candidate text", "evidence_ids": ["d1:s0"]}
 
 
 def test_assemble_result_malformed_evidence_ids_falls_back() -> None:
-    ranked = [_cand("d1:s0", "candidate text", 0.9), _cand("d1:s1", "more text", 0.8)]
+    ranked = [_scored_cand("d1:s0", "candidate text", 0.9), _scored_cand("d1:s1", "more text", 0.8)]
     out = assemble_result(_field(), {"source": {"evidence_ids": "not-a-list"}}, ranked)
     assert out["source"]["evidence_ids"] == ["d1:s0", "d1:s1"]
+
+
+def test_parse_field_specs_carries_field_path_periods_and_locator_keywords() -> None:
+    schema = {
+        "modules": [
+            {
+                "id": 3,
+                "key": "module_3_balance_sheet",
+                "name": "Balance Sheet",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_BS",
+                        "title": "Balance Sheet",
+                        "locator_keywords": ["balance sheet", "total assets"],
+                        "retrieval_query": "Balance Sheet",
+                        "fields": [
+                            {
+                                "field_name": "Total equity",
+                                "field_path": "module_3_balance_sheet.equity.total_equity",
+                                "aliases": ["Total equity"],
+                                "data_type": "decimal",
+                                "periods": ["current", "comparative_prior"],
+                                "extraction_prompt": "Extract total equity.",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    [spec] = parse_field_specs(schema)
+    assert spec.field_path == "module_3_balance_sheet.equity.total_equity"
+    assert spec.periods == ("current", "comparative_prior")
+    assert spec.locator_keywords == ("balance sheet", "total assets")
+    # keywords keeps its existing aliases-then-locator_keywords contract
+    assert spec.keywords == ("Total equity", "balance sheet", "total assets")
+
+
+def test_parse_field_specs_missing_field_path_and_periods_default_empty() -> None:
+    schema = {
+        "modules": [
+            {
+                "id": 2,
+                "key": "m2",
+                "name": "M2",
+                "retrieval_units": [
+                    {
+                        "unit_id": "RU_X",
+                        "title": "X",
+                        "locator_keywords": [],
+                        "retrieval_query": "x",
+                        "fields": [
+                            {
+                                "field_name": "No path",
+                                "aliases": [],
+                                "data_type": "string",
+                                "extraction_prompt": "Extract it.",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+    [spec] = parse_field_specs(schema)
+    assert spec.field_path == ""
+    assert spec.periods == ()
+    assert spec.locator_keywords == ()
+
+
+def test_field_spec_constructs_without_the_new_members() -> None:
+    """Hand-built FieldSpecs (tests, synthesizing callers) must keep working."""
+    spec = FieldSpec(
+        field_name="F", data_type="string", retrieval_query="q",
+        keywords=("k",), extraction_prompt="p", enum_values=None,
+        module_id=1, module_name="M",
+    )
+    assert spec.field_path == ""
+    assert spec.periods == ()
+    assert spec.locator_keywords == ()
+
+
+def test_group_fields_by_unit_groups_and_preserves_order() -> None:
+    fields = [_fs("a", unit_id="U1"), _fs("b", unit_id="U2"), _fs("c", unit_id="U1")]
+    units: list[UnitSpec] = group_fields_by_unit(fields)
+    assert [u.unit_id for u in units] == ["U1", "U2"]
+    assert [f.field_name for f in units[0].fields] == ["a", "c"]
+    assert [f.field_name for f in units[1].fields] == ["b"]
+
+
+def test_group_fields_by_unit_carries_unit_metadata() -> None:
+    fields = [_fs("a", unit_id="RU_BS", query="Balance Sheet", locators=("balance sheet",))]
+    [unit] = group_fields_by_unit(fields)
+    assert unit.unit_id == "RU_BS"
+    assert unit.unit_title == "T-RU_BS"
+    assert unit.retrieval_query == "Balance Sheet"
+    assert unit.locator_keywords == ("balance sheet",)
+
+
+def test_group_fields_by_unit_blank_unit_id_makes_singleton_units() -> None:
+    """A hand-built FieldSpec has unit_id="" -- those must NOT all collapse
+    into one bogus group."""
+    fields = [_fs("a", unit_id=""), _fs("b", unit_id="")]
+    units = group_fields_by_unit(fields)
+    assert len(units) == 2
+    assert [len(u.fields) for u in units] == [1, 1]
+
+
+def test_group_fields_by_unit_empty_input() -> None:
+    assert group_fields_by_unit([]) == []
+
+
+def test_unit_top_k_clamps_low_and_high() -> None:
+    assert unit_top_k(1) == 20      # max(20, ...) floor
+    assert unit_top_k(2) == 20      # 2*2+10 = 14 -> floored to 20
+    assert unit_top_k(40) == 60     # 40*2+10 = 90 -> capped to 60
+    assert unit_top_k(0) == 20
+
+
+def test_unit_top_k_linear_in_the_middle() -> None:
+    assert unit_top_k(10) == 30     # 10*2+10
+    assert unit_top_k(9) == 28      # 9*2+10
+
+
+def test_unit_needs_tables_true_for_numeric_and_list() -> None:
+    for dt in ("decimal", "integer", "list"):
+        [unit] = group_fields_by_unit([_fs("a", data_type=dt)])
+        assert unit_needs_tables(unit) is True, dt
+
+
+def test_unit_needs_tables_false_for_all_narrative_unit() -> None:
+    fields = [_fs("a", data_type="string"), _fs("b", data_type="date")]
+    [unit] = group_fields_by_unit(fields)
+    assert unit_needs_tables(unit) is False
+
+
+def test_unit_needs_tables_true_if_any_field_is_numeric() -> None:
+    fields = [_fs("a", data_type="string"), _fs("b", data_type="decimal")]
+    [unit] = group_fields_by_unit(fields)
+    assert unit_needs_tables(unit) is True
+
+
+def _chunk(
+    chunk_id: str, text: str, page: int | None, heading: str | None = None
+) -> dict[str, object]:
+    return {"chunk_id": chunk_id, "text": text, "page": page, "heading": heading}
+
+
+def test_find_consolidated_start_page_finds_auditor_report_marker() -> None:
+    chunks = [
+        _chunk("s1", "INDEPENDENT AUDITOR'S REPORT", 20),
+        _chunk("s2", "Balance Sheet as at 31-03-2024", 60),
+        _chunk("s3", "INDEPENDENT AUDITOR'S REPORT ON CONSOLIDATED FINANCIAL STATEMENTS", 133),
+        _chunk("s4", "Consolidated Balance Sheet", 140),
+    ]
+    assert find_consolidated_start_page(chunks) == 133
+
+
+def test_find_consolidated_start_page_takes_the_minimum_page() -> None:
+    chunks = [
+        _chunk("s1", "Consolidated Balance Sheet", 140),
+        _chunk("s2", "Consolidated Statement of Profit and Loss", 133),
+    ]
+    assert find_consolidated_start_page(chunks) == 133
+
+
+def test_find_consolidated_start_page_matches_on_heading_too() -> None:
+    chunks = [_chunk("s1", "body text", 133, heading="Consolidated Balance Sheet")]
+    assert find_consolidated_start_page(chunks) == 133
+
+
+def test_find_consolidated_start_page_none_when_no_consolidated_section() -> None:
+    chunks = [
+        _chunk("s1", "Balance Sheet as at 31-03-2024", 60),
+        _chunk("s2", "Statement of Profit and Loss", 62),
+    ]
+    assert find_consolidated_start_page(chunks) is None
+
+
+def test_find_consolidated_start_page_ignores_marker_with_no_page() -> None:
+    chunks = [_chunk("s1", "Consolidated Balance Sheet", None)]
+    assert find_consolidated_start_page(chunks) is None
+
+
+def test_find_consolidated_start_page_malformed_input_never_raises() -> None:
+    assert find_consolidated_start_page([]) is None
+    assert find_consolidated_start_page([{}]) is None
+    assert find_consolidated_start_page([{"text": 123, "page": "x"}]) is None  # type: ignore[list-item]
+
+
+def test_find_consolidated_start_page_ignores_toc_dot_leader_entry() -> None:
+    """A Contents-page line ("Consolidated Balance Sheet ...... 140") matches
+    _CONSOLIDATED_MARKERS verbatim but sits at a low page. The dot-leader
+    guard must reject it while still finding the real marker deep in the
+    document -- returning the HIGH page, never the low TOC page."""
+    chunks = [
+        _chunk("s1", "Consolidated Balance Sheet ................ 140", 4),
+        _chunk("s2", "Independent Auditor's Report on Consolidated "
+                     "Financial Statements ... 133", 4),
+        _chunk("s3", "Consolidated Balance Sheet", 140),
+    ]
+    assert find_consolidated_start_page(chunks) == 140
+
+
+def test_find_consolidated_start_page_ignores_match_in_opening_quarter() -> None:
+    """A marker match with NO dot leaders is still ignored if it falls in the
+    opening quarter of the document -- the Consolidated section always
+    follows Standalone, so it can never legitimately start there."""
+    chunks = [
+        _chunk("s1", "Consolidated Balance Sheet", 10),
+        _chunk("s2", "Notes to accounts, unrelated narrative", 180),
+    ]
+    assert find_consolidated_start_page(chunks) is None
+
+
+def _cand(evidence_id: str, text: str, page: int | None) -> Candidate:
+    return Candidate(evidence_id=evidence_id, text=text, page=page, score=1.0, source_tool="hybrid")
+
+
+def test_filter_candidates_drops_at_or_after_consolidated_boundary() -> None:
+    cands = [
+        _cand("d:s1", "standalone", 60),
+        _cand("d:s2", "consolidated", 133),
+        _cand("d:s3", "consolidated later", 150),
+    ]
+    out = filter_candidates(cands, consolidated_start_page=133, needs_tables=True)
+    assert [c.evidence_id for c in out] == ["d:s1"]
+
+
+def test_filter_candidates_boundary_none_is_a_no_op() -> None:
+    cands = [_cand("d:s1", "a", 60), _cand("d:s2", "b", 400)]
+    out = filter_candidates(cands, consolidated_start_page=None, needs_tables=True)
+    assert len(out) == 2
+
+
+def test_filter_candidates_keeps_candidates_with_no_page() -> None:
+    cands = [_cand("d:s1", "no page", None)]
+    out = filter_candidates(cands, consolidated_start_page=133, needs_tables=True)
+    assert len(out) == 1
+
+
+def test_filter_candidates_drops_table_chunks_for_narrative_units() -> None:
+    cands = [
+        _cand("d:s1", "narrative", 10),
+        _cand("d:t3", "whole table", 11),
+        _cand("d:t3r7", "table row", 11),
+    ]
+    out = filter_candidates(cands, consolidated_start_page=None, needs_tables=False)
+    assert [c.evidence_id for c in out] == ["d:s1"]
+
+
+def test_filter_candidates_keeps_table_chunks_when_needs_tables() -> None:
+    cands = [_cand("d:s1", "narrative", 10), _cand("d:t3r7", "table row", 11)]
+    out = filter_candidates(cands, consolidated_start_page=None, needs_tables=True)
+    assert len(out) == 2
+
+
+def test_filter_candidates_applies_both_filters() -> None:
+    cands = [
+        _cand("d:s1", "keep", 10),
+        _cand("d:t1r1", "table dropped", 10),
+        _cand("d:s2", "page dropped", 200),
+    ]
+    out = filter_candidates(cands, consolidated_start_page=133, needs_tables=False)
+    assert [c.evidence_id for c in out] == ["d:s1"]
+
+
+def test_filter_candidates_empty_input() -> None:
+    assert filter_candidates([], consolidated_start_page=133, needs_tables=True) == []
+
+
+def test_filter_candidates_evidence_id_without_colon_falls_back_to_whole_id() -> None:
+    """The table-chunk check does `evidence_id.split(":", 1)[1] if ":" in
+    evidence_id else evidence_id` -- previously untested when there is no
+    ":" separator at all."""
+    cands = [_cand("t3r7", "table row, no doc-id prefix", 11)]
+    assert filter_candidates(cands, consolidated_start_page=None, needs_tables=False) == []
+    kept = filter_candidates(cands, consolidated_start_page=None, needs_tables=True)
+    assert [c.evidence_id for c in kept] == ["t3r7"]

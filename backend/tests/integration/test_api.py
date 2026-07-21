@@ -2046,11 +2046,15 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     schema_path = tmp_path / "schema.json"
     schema_path.write_text(json.dumps(schema), encoding="utf-8")
 
+    # One call per Retrieval Unit, not per field: the response is keyed by
+    # field_path, falling back to field_name when the schema omits it (as
+    # this one does).
     fake = FakeExtractorClient([
-        {"value": "ACME is a manufacturer.",
-         "source": {"page": 1, "snippet": "ACME is a manufacturer",
-                     "evidence_ids": [f"{doc.id}:s0"]},
-         "confidence": 0.9},
+        {"Company overview text": {
+            "value": "ACME is a manufacturer.",
+            "source": {"page": 1, "snippet": "ACME is a manufacturer",
+                       "evidence_ids": [f"{doc.id}:s0"]},
+            "confidence": 0.9}},
     ])
 
     async with make_client(

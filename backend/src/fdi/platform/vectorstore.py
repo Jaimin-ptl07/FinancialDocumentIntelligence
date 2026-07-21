@@ -40,6 +40,16 @@ class MilvusVectorStore:
                 auto_id=False,
                 primary_field_name="id",
                 id_type="string",
+                # Milvus REQUIRES an explicit max_length for a VARCHAR primary
+                # key -- without it create_collection fails outright with
+                # `type param(max_length) should be specified for the
+                # field(id)`, so the first document ever indexed takes the
+                # whole index stage down. Ids are f"{doc_id}:{chunk_id}": a
+                # 36-char UUID, a colon, and a short chunk id (`s12`, `t3r7`),
+                # so ~50 chars in practice. 512 is far above that ceiling and
+                # costs nothing -- Milvus stores VARCHAR variably, max_length
+                # is a validation bound, not an allocation.
+                max_length=512,
                 vector_field_name="vector",
             )
 

@@ -14,13 +14,20 @@ def test_bge_client_is_lazy_and_caches_the_model(monkeypatch: pytest.MonkeyPatch
 
     construct_calls: list[str] = []
     embed_calls: list[list[str]] = []
+    batch_sizes: list[int] = []
 
     class _FakeTextEmbedding:
         def __init__(self, model_name: str) -> None:
             construct_calls.append(model_name)
 
-        def embed(self, texts: list[str]) -> list[_FakeVector]:
+        def embed(self, texts: list[str], batch_size: int) -> list[_FakeVector]:
+            # batch_size is REQUIRED, not defaulted: the client must always pass
+            # it explicitly. Leaving it to fastembed's default (256) OOMs the
+            # ONNX Attention node on a loaded host, which took the whole
+            # embedding stage down -- a fake that tolerated its absence would
+            # let that regression back in silently.
             embed_calls.append(list(texts))
+            batch_sizes.append(batch_size)
             return [_FakeVector([0.1, 0.2, 0.3]) for _ in texts]
 
     monkeypatch.setattr(emb, "TextEmbedding", _FakeTextEmbedding)
@@ -35,6 +42,9 @@ def test_bge_client_is_lazy_and_caches_the_model(monkeypatch: pytest.MonkeyPatch
     client.embed(["Notes"])
     assert construct_calls == ["BAAI/bge-small-en-v1.5"]  # cached, NOT rebuilt
     assert embed_calls == [["Balance Sheet", "Income Statement"], ["Notes"]]
+    # every call carries the bounded batch size, on every invocation
+    assert batch_sizes == [emb._EMBED_BATCH_SIZE, emb._EMBED_BATCH_SIZE]
+    assert emb._EMBED_BATCH_SIZE <= 64
 
 
 def test_bge_client_exposes_model_name() -> None:
