@@ -25,7 +25,7 @@ from fdi.platform.db.repository import DocumentRepository, RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 
-async def _read_chunks(
+async def read_chunks(
     repo: RegistryRepository, store: ArtifactStore, doc_id: str
 ) -> list[Mapping[str, object]]:
     run = await repo.latest_run(doc_id, "chunks")
@@ -40,7 +40,7 @@ async def resolve_chunk(
     *, session: AsyncSession, store: ArtifactStore, doc_id: str, chunk_id: str
 ) -> dict[str, object] | None:
     repo = RegistryRepository(session)
-    for c in await _read_chunks(repo, store, doc_id):
+    for c in await read_chunks(repo, store, doc_id):
         if c.get("chunk_id") == chunk_id:
             return {"doc_id": doc_id, **c}
     return None
@@ -59,7 +59,7 @@ async def resolve_chunks(
     repo = RegistryRepository(session)
     out: dict[str, dict[str, object]] = {}
     for doc_id, chunk_ids in by_doc.items():
-        records = {c.get("chunk_id"): c for c in await _read_chunks(repo, store, doc_id)}
+        records = {c.get("chunk_id"): c for c in await read_chunks(repo, store, doc_id)}
         for chunk_id in chunk_ids:
             rec = records.get(chunk_id)
             if rec is not None:
@@ -125,7 +125,7 @@ async def index_chunks_fts(*, session: AsyncSession, store: ArtifactStore, doc_i
     doc = await repo.get_document(doc_id)
     if doc is None:
         return 0
-    chunks = await _read_chunks(repo, store, doc_id)
+    chunks = await read_chunks(repo, store, doc_id)
     rows = chunk_rows_for_index(
         doc_id=doc_id, doc_key=doc.doc_key, version=doc.version, chunks=chunks
     )

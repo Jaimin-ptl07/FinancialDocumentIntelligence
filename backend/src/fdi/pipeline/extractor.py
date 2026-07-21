@@ -38,13 +38,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fdi.core.extractor import (
     Candidate,
     FieldSpec,
+    UnitSpec,
     assemble_result,
+    assemble_unit_results,
     build_extraction_messages,
+    build_unit_messages,
+    filter_candidates,
+    find_consolidated_start_page,
+    group_fields_by_unit,
     rerank_candidates,
+    unit_needs_tables,
+    unit_top_k,
 )
 from fdi.pipeline.embeddings import EmbeddingClient
-from fdi.pipeline.retrieval import hybrid_search
+from fdi.pipeline.retrieval import hybrid_search, read_chunks
 from fdi.pipeline.vectorstore import VectorStore
+from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 
@@ -90,34 +99,79 @@ class ExtractContext:
 _POOL_K = 60
 _EXTRACT_TOP_K = 20
 
+# The pool is over-fetched RELATIVE to top_k, not fixed. The filters run
+# BETWEEN pooling and reranking, so a fixed 60 against an adaptive top_k of up
+# to 60 would leave large units (RU_BS) with fewer post-filter candidates than
+# top_k -- strictly less context than the harness supplied, a silent recall
+# regression. top_k*2 mirrors the harness's fuse(k=top_k*2).
+_POOL_OVERFETCH = 2
+
+
+async def _pool_for(
+    *, ctx: ExtractContext, query: str, k: int
+) -> list[Candidate]:
+    """hybrid_search -> Candidate list, scoped to this document/version.
+    Never raises (decision 10): a failed search degrades to an empty pool."""
+    hits: list[dict[str, object]] = []
+    if query.strip():
+        with contextlib.suppress(Exception):
+            hits = await hybrid_search(
+                session=ctx.session, store=ctx.store, embedder=ctx.embedder,
+                vector_store=ctx.vector_store, query=query.strip(), k=k,
+                filters={"doc_key": ctx.doc_key, "version": ctx.version},
+            )
+    return [
+        Candidate(
+            evidence_id=f"{h['doc_id']}:{h['chunk_id']}",
+            text=str(h.get("text", "")),
+            page=cast(int | None, h.get("page")),
+            score=float(cast(float, h.get("score", 0.0))),
+            source_tool="hybrid",
+        )
+        for h in hits
+    ]
+
+
+async def extract_unit(
+    *,
+    ctx: ExtractContext,
+    unit: UnitSpec,
+    client: ExtractorClient,
+    consolidated_start_page: int | None = None,
+) -> list[dict[str, object]]:
+    """ONE retrieval + ONE LLM call for every field in `unit` -- schema v3.1's
+    "Retrieve-once, extract-many". Returns one output_contract record per
+    field, in unit order. Never raises (decision 10): a failed search or
+    client call degrades THIS unit's fields to well-formed null records and
+    never affects another unit."""
+    top_k = unit_top_k(len(unit.fields))
+    pool = await _pool_for(ctx=ctx, query=unit.retrieval_query, k=top_k * _POOL_OVERFETCH)
+
+    scoped = filter_candidates(
+        pool,
+        consolidated_start_page=consolidated_start_page,
+        needs_tables=unit_needs_tables(unit),
+    )
+    ranked = rerank_candidates(scoped, unit.locator_keywords, top_k=top_k)
+    if not ranked:
+        return assemble_unit_results(unit, {}, ranked)
+
+    system, user = build_unit_messages(unit, ranked)
+    raw: Mapping[str, object] = {}
+    with contextlib.suppress(Exception):  # never raise (decision 10)
+        raw = client.extract(system=system, user=user)
+    return assemble_unit_results(unit, raw, ranked)
+
 
 async def extract_field(
     *, ctx: ExtractContext, field: FieldSpec, client: ExtractorClient
 ) -> dict[str, object]:
-    """pool (hybrid_search ALONE, scoped to {ctx.doc_key, ctx.version}) ->
-    Candidate list -> rerank_candidates -> build_extraction_messages ->
-    client.extract -> assemble_result. Never raises."""
-    candidates: list[Candidate] = []
-
-    query = field.retrieval_query.strip()
-    if query:
-        hits: list[dict[str, object]] = []
-        with contextlib.suppress(Exception):  # never raise (decision 10)
-            hits = await hybrid_search(
-                session=ctx.session, store=ctx.store, embedder=ctx.embedder,
-                vector_store=ctx.vector_store, query=query, k=_POOL_K,
-                filters={"doc_key": ctx.doc_key, "version": ctx.version},
-            )
-        for h in hits:
-            candidates.append(Candidate(
-                evidence_id=f"{h['doc_id']}:{h['chunk_id']}",
-                text=str(h.get("text", "")),
-                page=cast(int | None, h.get("page")),
-                score=float(cast(float, h.get("score", 0.0))),
-                source_tool="hybrid",
-            ))
-
-    ranked = rerank_candidates(candidates, field.keywords, top_k=_EXTRACT_TOP_K)
+    """Single-field extraction, preserved for callers that hold one FieldSpec.
+    Pools with the single-field constants (_POOL_K / _EXTRACT_TOP_K) and the
+    single-field prompt, exactly as before -- it is NOT routed through
+    extract_unit, so its behaviour is unchanged. Never raises."""
+    pool = await _pool_for(ctx=ctx, query=field.retrieval_query, k=_POOL_K)
+    ranked = rerank_candidates(pool, field.keywords, top_k=_EXTRACT_TOP_K)
     if not ranked:
         return assemble_result(field, {}, ranked)
 
@@ -128,15 +182,44 @@ async def extract_field(
     return assemble_result(field, raw, ranked)
 
 
+async def _consolidated_start_page(ctx: ExtractContext) -> int | None:
+    """Read this document's `chunks` artifact ONCE and derive the boundary.
+    Never raises: a missing/unreadable artifact yields None, so extraction
+    proceeds unscoped rather than failing."""
+    with contextlib.suppress(Exception):
+        chunks = await read_chunks(RegistryRepository(ctx.session), ctx.store, ctx.doc_id)
+        return find_consolidated_start_page(chunks)
+    return None
+
+
 async def extract_document(
     *, ctx: ExtractContext, fields: Sequence[FieldSpec], client: ExtractorClient
 ) -> dict[str, object]:
-    """Loop `fields`, calling extract_field for each; always returns one
-    record per field, never raises (decision 10). Empty `fields` ->
-    field_count 0, fields []. `doc_key`/`module` are NOT part of this
-    return -- the route (which already holds both from the request body)
-    attaches them; see fdi.api.routes.extract_document_route (Task 5)."""
-    results = [await extract_field(ctx=ctx, field=field, client=client) for field in fields]
+    """Group `fields` into Retrieval Units and run ONE retrieval + ONE LLM
+    call per unit, then restore the caller's field order. Signature unchanged
+    -- `doc_key`/`module` are still attached by the route. Never raises."""
+    boundary = await _consolidated_start_page(ctx)
+
+    units = group_fields_by_unit(fields)
+    flat: list[dict[str, object]] = []
+    for unit in units:
+        flat.extend(
+            await extract_unit(
+                ctx=ctx, unit=unit, client=client, consolidated_start_page=boundary,
+            )
+        )
+
+    # restore input order: group_fields_by_unit is order-preserving, so the
+    # flat unit-order list lines up positionally with `unit_order` below. A
+    # plain {id(f): i} dict breaks if the SAME FieldSpec object appears twice
+    # in `fields` (both entries would map to one record) -- a queue per
+    # identity instead assigns each occurrence its own position, in order.
+    unit_order: list[FieldSpec] = [f for unit in units for f in unit.fields]
+    positions: dict[int, list[int]] = {}
+    for i, f in enumerate(unit_order):
+        positions.setdefault(id(f), []).append(i)
+    results = [flat[positions[id(f)].pop(0)] for f in fields]
+
     return {
         "schema_version": 1, "doc_id": ctx.doc_id,
         "field_count": len(results), "fields": results,
