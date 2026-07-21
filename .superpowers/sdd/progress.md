@@ -138,3 +138,26 @@ EX-1 FINAL WHOLE-BRANCH REVIEW (opus, 996c6f7..a504b3b): CHANGES REQUESTED -> fi
   Residuals closed in c70123a: log chunk count on both outcomes (missing-artifact vs no-consolidated-section were
   indistinguishable); dual-period assertion made two-sided ("dual-period" is a substring of "not dual-period").
 EX-1 ALL 6 TASKS COMPLETE. Definitive full suite at c70123a: 769 passed, 9 skipped, 0 failed (baseline was 513+9). Branch green, reviewed, NOT yet merged; end-to-end accuracy verification still outstanding.
+
+## EX-1 END-TO-END VERIFICATION (real stack, real Azure OpenAI) -- 2026-07-21
+Run: host-side against containerised Postgres/MinIO/Milvus (api/worker IMAGES are stale, so driving the
+containerised API would have tested the OLD per-field extractor). ocr + semantic seeded from cache per spec.
+
+PREMISE CONFIRMED:
+  AZURE OPENAI EXTRACTION CALLS: 18 (expected 18)   <- was 198. The 11x cost win is real.
+  Azure DI calls: 0 | semantic LLM calls: 0 | 198/198 fields returned | 2752 chunks indexed
+  extractor.consolidated_boundary_found page=133    <- the TOC-guarded detector works in production
+
+ACCURACY DID NOT REPRODUCE: 133/198 fields have a real (unwrapped) value vs the audit's 173/198 correct.
+ROOT CAUSE FOUND -- PRE-EXISTING, NOT EX-1: fdi.pipeline.retrieval.keyword_search uses plainto_tsquery,
+which ANDs EVERY term. Measured on the live corpus:
+    full 18-word RU_COMPANY query -> 0 hits | "corporate information" -> 9 | "CIN" -> 13 | OR-semantics -> 138
+  ALL 18 unit retrieval_query strings return 0 keyword hits. The keyword channel is 100% DEAD in production,
+  so hybrid_search silently degrades to VECTOR-ONLY for every unit. The audit harness used its own
+  keyword_search with OR/count-of-matching-terms semantics, which is why it scored 87.4%.
+  Compounding: RU_COMPANY (narrative-only) got only TABLE chunks from the vector channel; the narrative-only
+  filter then dropped them, leaving a poor pool -> all 9 fields null.
+  NOTE: build_extraction_record's non_null_count counts {"current":None,"prior":None} as non-null (181 vs
+  the true 133) -- misleading aggregate, worth fixing.
+NEXT: fix keyword_search (websearch_to_tsquery / OR + ts_rank, or restore count-of-matching-terms). That is
+the single highest-value retrieval fix on the board, and it is independent of EX-1.
