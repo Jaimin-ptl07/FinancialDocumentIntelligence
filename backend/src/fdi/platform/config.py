@@ -171,7 +171,11 @@ class Settings(BaseSettings):
     # dimensionality the embedder actually produces -- so a second,
     # independently-set "Milvus dim" can never silently disagree with it.
     milvus_uri: str | None = None
-    milvus_collection: str = "fdi_sections"
+    # Schema v2 (RT-9): dense vector + BM25 sparse vector + stored text. The
+    # BM25 Function cannot be added to an existing collection, so the cutover
+    # is a NEW collection rather than an alter -- `fdi_sections` is left
+    # in place, which makes rollback a one-line revert of this default.
+    milvus_collection: str = "fdi_chunks_v2"
 
     # Cross-document entity resolution (SP-16). Cosine-similarity threshold for
     # single-linkage clustering of whole-document embedding vectors: two documents

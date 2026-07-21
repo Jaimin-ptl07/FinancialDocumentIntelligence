@@ -95,7 +95,7 @@ def test_milvus_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(k, v)
     s = Settings()
     assert s.milvus_uri is None
-    assert s.milvus_collection == "fdi_sections"
+    assert s.milvus_collection == "fdi_chunks_v2"
 
 
 def test_entity_resolution_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:

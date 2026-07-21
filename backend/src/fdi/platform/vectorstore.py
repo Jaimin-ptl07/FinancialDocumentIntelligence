@@ -103,6 +103,12 @@ class MilvusVectorStore:
             for item in items
         ]
         self._client.upsert(collection_name=self._collection, data=rows)
+        # Milvus writes are not immediately readable -- a search issued right
+        # after upsert can see zero rows (verified against a real instance
+        # while writing tests/integration/test_milvus_bm25.py). flush forces
+        # the just-written data to become searchable before this call
+        # returns, so callers (including tests) never need to sleep/poll.
+        self._client.flush(self._collection)
         return {"upserted": len(items)}
 
     def _hits(self, raw: object) -> list[dict[str, object]]:

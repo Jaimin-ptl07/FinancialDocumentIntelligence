@@ -48,6 +48,9 @@ def test_milvus_store_creates_collection_then_upserts(monkeypatch: pytest.Monkey
         def upsert(self, **kwargs: object) -> None:
             calls["upsert"] = kwargs
 
+        def flush(self, collection_name: str) -> None:
+            calls["flush_collection_name"] = collection_name
+
         def search(self, **kwargs: object) -> list[list[dict[str, object]]]:
             calls["search"] = kwargs
             return [[{"id": "doc1:s0", "distance": 0.99, "entity": {"heading": "Balance Sheet"}}]]
@@ -185,6 +188,9 @@ def test_ensure_collection_declares_bm25_function_and_sparse_index(
             created["functions_at_create"] = len(cast(_FakeSchema, kw["schema"]).functions)
 
         def upsert(self, **kw: object) -> None:
+            pass
+
+        def flush(self, collection_name: str) -> None:
             pass
 
     monkeypatch.setattr(vs, "MilvusClient", _FakeClient)
