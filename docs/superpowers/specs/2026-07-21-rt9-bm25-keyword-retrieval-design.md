@@ -83,11 +83,26 @@ design fall out.
 | `vector` | `FLOAT_VECTOR(384)` | unchanged — dense BGE-small |
 | `text` | `VARCHAR(65535)`, `enable_analyzer=True` | BM25 input; the largest real chunk measured is 10,253 chars, so 65535 is comfortably above the ceiling |
 | `sparse` | `SPARSE_FLOAT_VECTOR` | BM25 output, written by the `Function` |
-| `doc_key` | `VARCHAR(256)`, nullable | server-side filtering |
-| `version` | `INT64`, nullable | server-side filtering |
+| `doc_id` | `VARCHAR(64)` | server-side filtering (see below) |
+| `chunk_id` | `VARCHAR(64)` | citation |
 | `section_type` | `VARCHAR(64)`, nullable | server-side filtering |
 | `heading` | `VARCHAR(1024)`, nullable | citation |
 | `page` | `INT64`, nullable | citation |
+
+**Why `doc_id` and not `doc_key`/`version`.** The Milvus rows are written by
+`IndexStage`, and `StageContext` exposes exactly four things — `doc_id`,
+`read_artifact`, `read_source`, `services`. A stage has no database session
+and no `doc_key`/`version`, by deliberate design: the framework owns all I/O
+around a stage. Putting `doc_key` into the collection would therefore mean
+widening the Stage contract, which is a far larger change than this spec
+should carry.
+
+So the collection is keyed and filtered on `doc_id`, and the retrieval layer
+keeps its existing Postgres translation: one `DocumentRepository` call maps
+`doc_key`/`version` → `doc_id` for the filter, and maps `doc_id` →
+`doc_key`/`version` back onto the hits for citations. That call is already
+there today (`get_many`), it is one query per search rather than per hit, and
+`build_vector_results` already derives `doc_id` by splitting the id.
 
 The `Function` and the analyzer **must be declared at collection creation**;
 neither can be added to an existing collection. `_ensure_collection` therefore
@@ -132,20 +147,21 @@ so `POST /retrieve/keyword` and `fuse` are unaffected by the swap.
 each channel, hand both lists to `fuse`, truncate to `k` — and its hit
 contract. Its **parameter list shrinks**, see below.
 
-Because both channels now carry their own `text`, `doc_key`, and `version`,
-`vector_search` no longer needs `resolve_chunks` or
-`DocumentRepository.get_many` — filtering moves into a Milvus `filter`
-expression and the citation is already on the hit. That removes one S3 read
-and one Postgres round-trip per query. `build_vector_results` loses its
-`resolved` and `docs` parameters accordingly.
+Because both channels now carry their own `text`, `vector_search` no longer
+needs `resolve_chunks`: the text is on the hit, so the per-search read of the
+`chunks` artifact from object storage disappears. `build_vector_results` loses
+its `resolved` parameter and reads `text`/`heading`/`page`/`section_type`
+straight off the Milvus hit.
 
-**Consequence, stated explicitly because it contradicts a first reading of
-"unchanged":** with the artifact read and the Postgres join both gone, neither
-channel touches Postgres or the object store, so `session` and `store` become
-dead parameters on `vector_search`, `bm25_search`, and `hybrid_search`. They
-are **removed**, not retained-but-ignored — a parameter that exists and does
-nothing is exactly the kind of silent lie this spec is cleaning up. Three call
-sites update with them:
+**What this does and does not remove.** `store` (the `ArtifactStore`) becomes
+a dead parameter on `vector_search`, `bm25_search`, and `hybrid_search` and is
+**removed** — a parameter that exists and does nothing is the kind of silent
+lie this spec is cleaning up. `session` **stays**: per §3.1 the collection
+filters on `doc_id`, so the retrieval layer still performs the one
+`DocumentRepository` call that translates `doc_key`/`version` both ways.
+`build_vector_results` keeps its `docs` parameter for exactly that reason.
+
+Three call sites update to drop the `store=` argument:
 
 | caller | file |
 |---|---|
@@ -154,8 +170,9 @@ sites update with them:
 | `POST /retrieve`, `POST /retrieve/keyword`, `POST /retrieve/vector` | `fdi/api/routes.py` |
 
 This is the one place RT-9 reaches into EX-1's just-merged code. `_pool_for`
-drops two arguments and nothing else; `extract_unit`, `extract_document`, and
-the batching behaviour are untouched.
+drops one argument and nothing else; `extract_unit`, `extract_document`, and
+the batching behaviour are untouched. `ExtractContext` keeps `store`, which
+`_consolidated_start_page` and `_persist_extraction` still need.
 
 `resolve_chunk` / `resolve_chunks` themselves stay: they are still the way a
 caller turns an arbitrary chunk id back into text, and `read_chunks` has a
