@@ -81,12 +81,13 @@ async def vector_search(
     filters: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """RT-2's semantic retrieval orchestrator: embed `query`, search
-    `vector_store`, filter/join/cite via build_vector_results, attaching text
-    through resolve_chunks. Over-fetches k*_OVERFETCH_FACTOR from the vector
-    store when any filter is set (VectorStore.search has no filter parameter --
-    design spec sec 2.3-4), single-shot: no adaptive re-query on under-fill.
-    Exactly one embed call, one vector_store.search call, one
-    DocumentRepository.get_many call, one resolve_chunks call -- no N+1."""
+    `vector_store`, filter/join/cite via build_vector_results. RT-9: the
+    Milvus hit carries its own text, so there is no separate resolve_chunks
+    call to attach it any more. Over-fetches k*_OVERFETCH_FACTOR from the
+    vector store when any filter is set (VectorStore.search has no filter
+    parameter -- design spec sec 2.3-4), single-shot: no adaptive re-query on
+    under-fill. Exactly one embed call, one vector_store.search call, one
+    DocumentRepository.get_many call -- no N+1."""
     section_type = filters.get("section_type") if filters else None
     doc_key = filters.get("doc_key") if filters else None
     version = filters.get("version") if filters else None
@@ -102,11 +103,8 @@ async def vector_search(
         doc_id: {"doc_key": d.doc_key, "version": d.version} for doc_id, d in doc_rows.items()
     }
 
-    resolved = await resolve_chunks(session=session, store=store, ids=[str(h["id"]) for h in hits])
-
     return build_vector_results(
         cast(list[Mapping[str, object]], hits),
-        resolved,
         docs,
         section_type=cast(str | None, section_type),
         doc_key=cast(str | None, doc_key),
