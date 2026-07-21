@@ -54,6 +54,7 @@ from fdi.core.extractor import (
     assemble_result,
     assemble_unit_results,
     build_extraction_messages,
+    build_extraction_record,
     build_unit_messages,
     filter_candidates,
     find_consolidated_start_page,
@@ -62,7 +63,9 @@ from fdi.core.extractor import (
     unit_needs_tables,
     unit_top_k,
 )
+from fdi.core.extractor import EXTRACTION_RECORD_VERSION
 from fdi.pipeline.embeddings import EmbeddingClient
+from fdi.pipeline.keys import extraction_key, output_hash
 from fdi.pipeline.retrieval import hybrid_search, read_chunks
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.repository import RegistryRepository
@@ -256,7 +259,43 @@ async def extract_document(
         positions.setdefault(id(f), []).append(i)
     results = [flat[positions[id(f)].pop(0)] for f in fields]
 
+    record = build_extraction_record(
+        doc_id=ctx.doc_id, doc_key=ctx.doc_key, version=ctx.version, results=results,
+    )
+    key = await _persist_extraction(ctx=ctx, fields=fields, record=record)
+
     return {
         "schema_version": 1, "doc_id": ctx.doc_id,
         "field_count": len(results), "fields": results,
+        "extraction_key": key,
     }
+
+
+async def _persist_extraction(
+    *, ctx: ExtractContext, fields: Sequence[FieldSpec], record: Mapping[str, object]
+) -> str | None:
+    """Write the extraction record to the artifact store; return its key, or
+    None if the write failed.
+
+    Guarded like every other I/O step in this module (decision 10): a document
+    whose extraction SUCCEEDED must still be returned to the caller when the
+    object store is merely unreachable. Losing the durable copy is a
+    degradation to log, not a reason to discard 200 fields the LLM already
+    paid for."""
+    schema_hash = output_hash([f.field_path or f.field_name for f in fields])
+    key = extraction_key(ctx.doc_id, EXTRACTION_RECORD_VERSION, schema_hash)
+    try:
+        await ctx.store.put_json(key, record)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "extractor.persist_failed",
+            doc_id=ctx.doc_id, key=key, error=str(exc),
+        )
+        return None
+    log.info(
+        "extractor.persisted",
+        doc_id=ctx.doc_id, key=key,
+        field_count=record.get("field_count"),
+        non_null_count=record.get("non_null_count"),
+    )
+    return key

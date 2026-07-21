@@ -490,6 +490,35 @@ def assemble_unit_results(
     return out
 
 
+EXTRACTION_RECORD_VERSION = 1
+
+
+def build_extraction_record(
+    *, doc_id: str, doc_key: str, version: int, results: Sequence[Mapping[str, object]]
+) -> dict[str, object]:
+    """The PERSISTED shape of a document's field extraction. Pure.
+
+    Distinct from what `extract_document` hands the HTTP route: that is a
+    response body, scoped to one request and thrown away after it. This is the
+    durable record, so it carries the two identifiers the response can afford
+    to omit (`doc_key`/`version` -- the route already knows them, a reader of
+    the stored artifact does not) plus `non_null_count`, which is the one
+    aggregate every consumer recomputes by hand.
+
+    `results` is stored verbatim: each entry is already an output_contract
+    record from `assemble_result`, provenance included. Never raises."""
+    records = [dict(r) for r in results]
+    return {
+        "schema_version": EXTRACTION_RECORD_VERSION,
+        "doc_id": doc_id,
+        "doc_key": doc_key,
+        "version": version,
+        "field_count": len(records),
+        "non_null_count": sum(1 for r in records if r.get("value") is not None),
+        "fields": records,
+    }
+
+
 # Markers are deliberately SPECIFIC. A bare "consolidated financial
 # statements" also occurs inside standalone-section narrative (policies,
 # related-party notes), and matching it would set the boundary too early and
