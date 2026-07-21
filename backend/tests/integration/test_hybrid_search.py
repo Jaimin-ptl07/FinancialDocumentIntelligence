@@ -15,7 +15,7 @@ from fdi.pipeline.intake import intake_document
 from fdi.pipeline.ocr import FakeOcrClient
 from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
-from fdi.pipeline.retrieval import hybrid_search, index_chunks_fts
+from fdi.pipeline.retrieval import hybrid_search
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
@@ -164,9 +164,6 @@ async def hybrid_corpus(
             stage_name="index", run_id=str(uuid.uuid4()),
             services={"vector_store": vector_store}, **common,
         )
-        async with session_factory() as s:
-            await index_chunks_fts(session=s, store=store, doc_id=doc.id)
-            await s.commit()
         out[key] = {"doc_id": doc.id, "doc_key": doc_key}
 
     return out, embedder, vector_store, marker

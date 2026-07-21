@@ -53,12 +53,8 @@ from fdi.api.schemas import (
     HybridSearchRequest,
     HybridSearchResultsView,
     HybridSearchResultView,
-    IndexFtsView,
     JobAccepted,
     JobView,
-    KeywordHitView,
-    KeywordSearchRequest,
-    KeywordSearchResultsView,
     LeaderboardEntry,
     LeaderboardView,
     OcrTriggerView,
@@ -102,12 +98,7 @@ from fdi.pipeline.graphquery import (
 )
 from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.intake import document_key, intake_document
-from fdi.pipeline.retrieval import (
-    hybrid_search,
-    index_chunks_fts,
-    keyword_search,
-    vector_search,
-)
+from fdi.pipeline.retrieval import hybrid_search, vector_search
 from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
@@ -642,7 +633,6 @@ async def retrieve_vector(
     }
     results = await vector_search(
         session=session,
-        store=store,
         embedder=embedder,
         vector_store=vector_store,
         query=body.query,
@@ -742,42 +732,14 @@ async def concept_lookup_route(
 
 
 # --------------------------------------------------------------------------
-# RT-3: POST /documents/{id}/index_fts + POST /retrieve/keyword
-# --------------------------------------------------------------------------
-
-
-@router.post("/documents/{doc_id}/index_fts", response_model=IndexFtsView)
-async def trigger_index_fts(doc_id: str, session: SessionDep, store: StoreDep) -> IndexFtsView:
-    """Synchronous, task-free -- like /search and /entities/resolve, NOT like
-    ocr/semantic/embedding/graph_load. Reads the already-cached `chunks`
-    artifact from MinIO and upserts it into Postgres; no external API call
-    (no Azure, no Milvus, no Neo4j), so there is nothing to queue.
-    """
-    if await RegistryRepository(session).get_document(doc_id) is None:
-        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
-    count = await index_chunks_fts(session=session, store=store, doc_id=doc_id)
-    await session.commit()
-    return IndexFtsView(doc_id=doc_id, chunks_indexed=count)
-
-
-@router.post("/retrieve/keyword", response_model=KeywordSearchResultsView)
-async def keyword_search_route(
-    body: KeywordSearchRequest, session: SessionDep
-) -> KeywordSearchResultsView:
-    hits = await keyword_search(
-        session=session, query=body.query, k=body.k,
-        section_type=body.section_type, doc_key=body.doc_key, version=body.version,
-    )
-    return KeywordSearchResultsView(results=[KeywordHitView(**h) for h in hits])
-
-
-# --------------------------------------------------------------------------
-# RT-4: POST /retrieve -- hybrid (RRF) retrieval over RT-2's vector_search +
-# RT-3's keyword_search. Unlike /retrieve/vector, this route has NO
-# 503-when-unconfigured branch: keyword_search has no external dependency
-# (Postgres is mandatory config, RT-3 sec 2 decision 9), so hybrid_search
-# degrades to keyword-only when embedder/vector_store are unconfigured
-# rather than failing the whole request -- design spec sec 2 decision 2.
+# RT-9: POST /retrieve -- hybrid (RRF) retrieval over RT-2's vector_search +
+# RT-9's bm25_search. `/documents/{id}/index_fts` and `/retrieve/keyword`
+# (RT-3's Postgres-only keyword channel, plainto_tsquery + ts_rank) are
+# REMOVED here along with keyword_search/index_chunks_fts themselves --
+# plainto_tsquery ANDed every lexeme, so every real (sentence-shaped) query
+# returned zero hits. This route's own 503-when-unconfigured handling (to
+# match /retrieve/vector, now that both its channels share one VectorStore
+# seam) is a later task's job, not reinstated here.
 # --------------------------------------------------------------------------
 
 
@@ -796,7 +758,6 @@ async def hybrid_search_route(
     }
     results = await hybrid_search(
         session=session,
-        store=store,
         embedder=embedder,
         vector_store=vector_store,
         query=body.query,
