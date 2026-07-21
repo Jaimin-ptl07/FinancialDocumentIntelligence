@@ -101,3 +101,7 @@ SP-14: MERGED (vector retrieval; IndexStage + POST /search + Milvus opt-in; base
 NOTE: pymilvus resolved 3.0.0 vs compose milvus 2.6.20 server — live-integration compat to verify when the vector profile is exercised (opt-in; does not affect the mocked suite).
 RESUMED post-restart. State: SP-14 merged (306 passed); SP-13 shipped Azure embeddings but user wants BGE-small — correcting.
 WAVE 5 DISPATCHED: SP-13b (BGE-small via fastembed, 384-dim, replaces Azure embed backend; config restructured) + SP-15 (KnowledgeStage, first 3-dep). Disjoint; parallel worktrees. Merge SP-13b first (config trio), then SP-15 (roadmap-only conflict).
+
+## SP-19 UI backend enablement (plan 2026-07-20-sp19-ui-backend-enablement.md, base 4b97648)
+Baseline fd64833: v3.1 schema + get_tables removal committed (was uncommitted WIP; 507 non-e2e passed)
+SP-19 Task 1: complete (5af27c9, review clean; 29 unit tests, fast suite 513 passed; extraction revived 0 -> 198 specs; integration gate UNRUN - Docker down)
