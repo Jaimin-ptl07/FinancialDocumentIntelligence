@@ -365,6 +365,10 @@ def test_build_extraction_messages_states_the_fields_dual_period_status() -> Non
     )
     _, dual_user = build_extraction_messages(dual_field, [])
     assert "dual-period" in dual_user
+    # Two-sided: "dual-period" alone is a substring of "not dual-period", so
+    # the positive assertion above would also pass if the code wrongly marked
+    # a dual-period field as NOT dual-period.
+    assert "not dual-period" not in dual_user
 
     non_dual_field = _fs("revenue")  # periods=() by default
     _, non_dual_user = build_extraction_messages(non_dual_field, [])

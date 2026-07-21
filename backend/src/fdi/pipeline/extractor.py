@@ -213,10 +213,18 @@ async def _consolidated_start_page(ctx: ExtractContext) -> int | None:
         )
         return None
     boundary = find_consolidated_start_page(chunks)
+    # `chunks` is logged on BOTH outcomes: read_chunks returns [] WITHOUT
+    # raising when the run or its artifact_key is absent, so chunks=0 with a
+    # None boundary means the scoping feature silently no-opped, while a
+    # non-zero count with a None boundary means the document genuinely has no
+    # Consolidated section. Without the count the two are indistinguishable.
     if boundary is None:
-        log.info("extractor.consolidated_boundary_none", doc_id=ctx.doc_id)
+        log.info("extractor.consolidated_boundary_none", doc_id=ctx.doc_id, chunks=len(chunks))
     else:
-        log.info("extractor.consolidated_boundary_found", doc_id=ctx.doc_id, page=boundary)
+        log.info(
+            "extractor.consolidated_boundary_found",
+            doc_id=ctx.doc_id, page=boundary, chunks=len(chunks),
+        )
     return boundary
 
 
