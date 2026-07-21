@@ -42,7 +42,12 @@ x-backend-env: &backend-env
   FDI_MILVUS_URI: ${FDI_MILVUS_URI}
   FDI_MILVUS_COLLECTION: ${FDI_MILVUS_COLLECTION}
   FDI_ENTITY_SIM_THRESHOLD: ${FDI_ENTITY_SIM_THRESHOLD}
-  FDI_CORS_ORIGINS: ${FDI_CORS_ORIGINS}
+  # Defaulted in-place, unlike its neighbours: cors_origins is the only
+  # complex-typed setting here, and pydantic-settings JSON-decodes those at
+  # the source. An unset var expands to "", which is not valid JSON, so a
+  # bare ${FDI_CORS_ORIGINS} fails the whole stack at boot with an opaque
+  # SettingsError instead of falling back to the field's own default.
+  FDI_CORS_ORIGINS: '${FDI_CORS_ORIGINS:-["http://localhost:3000"]}'
   FDI_EXTRACTION_SCHEMA_PATH: ${FDI_EXTRACTION_SCHEMA_PATH}
 
 x-backend-build: &backend-build

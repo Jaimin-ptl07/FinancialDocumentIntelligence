@@ -1,11 +1,13 @@
 """Configuration. Environment only — Compose reads .env and injects it."""
 
 import os
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import EnvSettingsSource, PydanticBaseSettingsSource
 
 # Repo root, computed from THIS file's own on-disk location
 # (backend/src/fdi/platform/config.py -> platform -> fdi -> src -> backend ->
@@ -17,6 +19,68 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # editable, so __file__ is this source path); see backend/Dockerfile's COPY
 # of the schema file for the deployed-image side of this.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
+
+_SCHEMA_RELPATH = Path("docs") / "architecture" / "field-extraction-schema.json"
+
+
+def _first_existing(*candidates: Path) -> Path:
+    """The first candidate that is a real file, else the first candidate.
+
+    Falling back to `candidates[0]` rather than raising keeps Settings
+    constructible in a checkout that has not got the file, which the unit
+    suite relies on; the caller that actually reads it reports the miss.
+    """
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
+
+def _default_schema_path() -> Path:
+    """Where the seed extraction schema lives, in BOTH execution contexts.
+
+    `_REPO_ROOT` is `parents[4]` of this file, which is the repo root only
+    for the editable install (`backend/src/fdi/platform/config.py`). Inside
+    the built image the package is at
+    `/app/.venv/lib/python3.13/site-packages/fdi/platform/config.py`, so
+    `parents[4]` is `/app/.venv/lib` and the default pointed at a file that
+    has never existed there.
+
+    That failed silently, which is the damaging part: `load_schema` returns
+    `({}, "seed")` for an unreadable seed, so `GET /schema` answered 200 with
+    zero modules and `POST /extract/document` extracted nothing at all, with
+    no error anywhere. The Dockerfile COPYs the file to `<WORKDIR>/docs/...`,
+    so cwd is the candidate that resolves in the image.
+    """
+    return _first_existing(
+        _REPO_ROOT / _SCHEMA_RELPATH,
+        Path.cwd() / _SCHEMA_RELPATH,
+    )
+
+
+class _EmptyIsUnsetEnvSource(EnvSettingsSource):
+    """Treat `FDI_FOO=""` as "not set" rather than as the value `""`.
+
+    `docker/compose.yml` passes every FDI_ variable through unconditionally
+    (`FDI_EMBED_DIM: ${FDI_EMBED_DIM}`), so a variable the operator never put in
+    their `.env` reaches the process as an empty string rather than being
+    absent. Nothing typed can parse that: `embed_dim` raises `unable to parse
+    string as an integer`, and a complex field like `cors_origins` fails even
+    earlier, inside the JSON decoder, as a `SettingsError` that names no fix.
+
+    The result was a stack that refused to boot over a dozen settings which all
+    have working defaults -- and the operator's only clue was a pydantic
+    traceback. Filtering here, in `_load_env_vars`, is what makes this work for
+    complex fields too: it runs BEFORE the JSON decode that would otherwise
+    raise.
+
+    Deliberately `== ""` and not `.strip() == ""`: a variable set to a single
+    space is someone doing something odd on purpose, and should still fail
+    loudly rather than be silently discarded.
+    """
+
+    def _load_env_vars(self) -> Mapping[str, str | None]:
+        return {k: v for k, v in super()._load_env_vars().items() if v != ""}
 
 
 class Settings(BaseSettings):
@@ -145,9 +209,28 @@ class Settings(BaseSettings):
     # above), not a bare repo-root-relative string -- see backend/
     # Dockerfile's COPY of this exact file into the image's WORKDIR for the
     # deployed-image side of making the default resolve.
-    extraction_schema_path: str = str(
-        _REPO_ROOT / "docs" / "architecture" / "field-extraction-schema.json"
-    )
+    extraction_schema_path: str = str(_default_schema_path())
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Swap the env source for one that reads `FOO=""` as unset.
+
+        Order is otherwise untouched, and `dotenv_settings` stays inert because
+        `env_file=None` -- see this class's model_config.
+        """
+        return (
+            init_settings,
+            _EmptyIsUnsetEnvSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     @model_validator(mode="after")
     def _reject_unknown_fdi_env_vars(self) -> "Settings":

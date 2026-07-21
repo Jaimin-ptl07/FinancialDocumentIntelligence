@@ -139,3 +139,79 @@ def test_cors_origins_from_environment_is_json(monkeypatch: pytest.MonkeyPatch) 
         "FDI_CORS_ORIGINS", '["http://localhost:3000", "https://fdi.example"]'
     )
     assert Settings().cors_origins == ["http://localhost:3000", "https://fdi.example"]
+
+
+def test_empty_env_value_falls_back_to_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An optional variable absent from .env must not kill the process.
+
+    docker/compose.yml passes every FDI_ variable through unconditionally, so a
+    variable the operator never set arrives as "". Typed fields cannot parse
+    that: embed_dim raises `unable to parse string as an integer`, and
+    cors_origins fails even earlier, inside the JSON decoder. The whole stack
+    then refuses to boot over settings that all have perfectly good defaults.
+    """
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FDI_EMBED_DIM", "")
+    monkeypatch.setenv("FDI_MAX_UPLOAD_MB", "")
+    monkeypatch.setenv("FDI_ENTITY_SIM_THRESHOLD", "")
+    monkeypatch.setenv("FDI_CORS_ORIGINS", "")
+    monkeypatch.setenv("FDI_AZURE_DI_ENDPOINT", "")
+
+    s = Settings()
+
+    assert s.embed_dim == 384
+    assert s.max_upload_mb == 50
+    assert s.entity_sim_threshold == 0.85
+    assert s.cors_origins == ["http://localhost:3000"]
+    assert s.azure_di_endpoint is None
+
+
+def test_a_set_env_value_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The empty-is-unset rule must not swallow a real value."""
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FDI_EMBED_DIM", "768")
+    monkeypatch.setenv("FDI_CORS_ORIGINS", '["https://fdi.example"]')
+
+    s = Settings()
+
+    assert s.embed_dim == 768
+    assert s.cors_origins == ["https://fdi.example"]
+
+
+def test_schema_path_default_resolves_to_a_file_that_exists() -> None:
+    """The default must point at the real seed, not merely at a plausible path.
+
+    It silently did not inside the built image: the package installs to
+    site-packages, so the repo-root arithmetic landed on `/app/.venv/lib`, and
+    an unreadable seed makes `load_schema` return `({}, "seed")` -- a 200 from
+    GET /schema with zero modules, and an extraction that finds nothing.
+    """
+    from fdi.platform.config import _default_schema_path
+
+    assert _default_schema_path().is_file()
+
+
+def test_schema_path_falls_back_when_the_repo_layout_is_absent(tmp_path) -> None:
+    """The image's layout: repo-root arithmetic misses, the WORKDIR copy hits."""
+    from fdi.platform.config import _SCHEMA_RELPATH, _first_existing
+
+    missing = tmp_path / "venv" / "lib" / _SCHEMA_RELPATH
+    present = tmp_path / "app" / _SCHEMA_RELPATH
+    present.parent.mkdir(parents=True)
+    present.write_text("{}", encoding="utf-8")
+
+    assert _first_existing(missing, present) == present
+
+
+def test_schema_path_reports_the_primary_candidate_when_nothing_exists(
+    tmp_path,
+) -> None:
+    """No candidate resolving must not crash Settings construction."""
+    from fdi.platform.config import _first_existing
+
+    first = tmp_path / "a.json"
+    assert _first_existing(first, tmp_path / "b.json") == first
