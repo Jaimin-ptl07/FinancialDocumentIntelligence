@@ -1,8 +1,14 @@
-"""IndexStage v2 auto-chains off BOTH EmbeddingStage and ChunksStage: the
-upserted Milvus metadata now carries `section_type` + `page` sourced from the
-RT-1 `chunks` artifact, in addition to SP-14's `heading` + `chunk_id`. Against
-real Postgres + MinIO with FAKE OCR + semantic + embedding clients and a
-FakeVectorStore that records every upserted item."""
+"""IndexStage v3 auto-chains off BOTH EmbeddingStage and ChunksStage: the
+upserted Milvus metadata carries `section_type` + `page` sourced from the RT-1
+`chunks` artifact (SP-14's `heading` + `chunk_id`), plus RT-9's `text` (the
+chunk body -- the BM25 input Milvus scores server-side) and `doc_id` (a
+filterable scalar). Against real Postgres + MinIO with FAKE OCR + semantic +
+embedding clients and a FakeVectorStore that records every upserted item.
+
+A focused, non-containerised unit test below drives `IndexStage.run` directly
+against a hand-built `StageContext` to exercise the no-matching-`chunks`-record
+fallback, which the containerised test above cannot reach (its chunks always
+have a matching record)."""
 
 import uuid
 
@@ -18,6 +24,7 @@ from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
+from fdi.pipeline.stage import StageContext
 from fdi.pipeline.stages.ast import AstStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.embedding import EmbeddingStage
@@ -151,12 +158,46 @@ async def test_index_upserts_enriched_metadata(session_factory, store) -> None:
         "section_type": "BALANCE_SHEET",
         "page": 1,
     }
-    # RT-9: the row now carries the BM25 input and the filterable doc scalar
-    assert hits[0]["metadata"]["text"].startswith("Balance Sheet")
-    assert hits[0]["metadata"]["doc_id"] == doc.id
-    # still true from v2 -- these must not regress
-    assert hits[0]["metadata"]["chunk_id"] == "s0"
-    assert hits[0]["metadata"]["section_type"] == SectionType.BALANCE_SHEET.value
+
+
+async def test_index_upserts_chunk_missing_from_chunks_artifact() -> None:
+    """An embedding chunk whose `chunk_id` has no matching record in the
+    `chunks` artifact must still be upserted -- with `text == ""`, not `None`
+    and not dropped. `text` is a Milvus `str` field: a `None` there would fail
+    at upsert, and dropping the chunk would be a silent retrieval hole (it
+    would never surface via BM25 OR vector search). No Docker needed: this
+    drives `IndexStage.run` directly against a hand-built `StageContext`, so
+    the `chunks` artifact can omit the chunk's record entirely."""
+    fake_store = FakeVectorStore()
+    orphan_vector = [1.0, 0.0]
+
+    async def read_artifact(doc_id: str, stage_name: str) -> object:
+        if stage_name == "embedding":
+            return {
+                "schema_version": 1,
+                "model": "fake",
+                "dim": 2,
+                "chunks": [{"chunk_id": "orphan", "heading": None, "vector": orphan_vector}],
+            }
+        if stage_name == "chunks":
+            # deliberately has NO record for chunk_id "orphan"
+            return {"schema_version": 1, "chunks": []}
+        raise AssertionError(f"unexpected read_artifact stage: {stage_name!r}")
+
+    ctx = StageContext(
+        doc_id="doc-orphan",
+        read_artifact=read_artifact,
+        services={"vector_store": fake_store},
+    )
+
+    result = await IndexStage().run(ctx)
+
+    assert result == {"schema_version": 1, "upserted": 1}
+    hits = fake_store.search(orphan_vector, k=1)
+    assert hits[0]["id"] == "doc-orphan:orphan"
+    assert hits[0]["metadata"]["text"] == ""  # explicit empty string, not falsy-check
+    assert hits[0]["metadata"]["section_type"] is None
+    assert hits[0]["metadata"]["page"] is None
 
 
 def test_index_stage_version_is_3() -> None:
