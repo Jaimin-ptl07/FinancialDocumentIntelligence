@@ -67,7 +67,14 @@ export function PdfCanvas({
         // A cancelled render is the expected outcome of changing page quickly;
         // it is not something to show the analyst.
         const message = (cause as Error).message ?? String(cause);
-        if (!cancelled && !/cancel/i.test(message)) setError(message);
+        if (cancelled || /cancel/i.test(message)) return;
+        // pdfjs reports a 404 as `Missing PDF "<url>"`, which tells an analyst
+        // nothing they can act on. Say what it means instead.
+        setError(
+          /missing pdf|unexpected server response \(404\)/i.test(message)
+            ? "No source PDF is stored for this filing."
+            : message,
+        );
       }
     })();
 

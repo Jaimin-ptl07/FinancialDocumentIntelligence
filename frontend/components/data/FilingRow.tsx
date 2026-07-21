@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { DocumentSummaryView } from "@/lib/types";
 import { formatBytes } from "@/lib/format";
 import { summarizeStageCounts } from "@/lib/stages";
+import { filingLabel, hasSourceFile } from "@/lib/documents";
 
 const cell = {
   padding: "var(--sp-3) var(--sp-4)",
@@ -13,16 +14,34 @@ const cell = {
 export function FilingRow({ document }: { document: DocumentSummaryView }) {
   const { done, failed, total } = summarizeStageCounts(document.stage_counts);
   const complete = failed === 0 && done >= total;
+  const sourceless = !hasSourceFile(document);
 
   return (
     <tr style={{ borderTop: "1px solid var(--rule-soft)" }}>
       <td style={cell}>
         <Link
           href={`/documents/${document.id}`}
-          style={{ fontWeight: 500, textDecoration: "underline", textUnderlineOffset: "3px" }}
+          style={{
+            fontWeight: 500,
+            textDecoration: "underline",
+            textUnderlineOffset: "3px",
+          }}
         >
-          {document.filename ?? document.doc_key ?? document.id}
+          {filingLabel(document)}
         </Link>
+        {sourceless ? (
+          <span
+            className="data"
+            style={{
+              marginLeft: "var(--sp-2)",
+              fontSize: "var(--text-2xs)",
+              color: "var(--ink-faint)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            no source PDF
+          </span>
+        ) : null}
       </td>
       <td className="data" style={{ ...cell, fontSize: "var(--text-sm)" }}>
         v{document.version ?? "—"}
