@@ -530,3 +530,17 @@ class DocumentRepository:
             await self._s.execute(select(Document).where(Document.id.in_(ids)))
         ).scalars().all()
         return {d.id: d for d in rows}
+
+    async def ids_for(self, *, doc_key: str | None, version: int | None) -> list[str]:
+        """Document ids matching a doc_key and/or version. Used to scope a
+        Milvus filter, which keys on doc_id (a Stage has no doc_key to write).
+
+        Both None -> every document id. Callers that mean "unscoped" must not
+        call this at all; `bm25_search`/`vector_search` guard on that before
+        reaching here."""
+        stmt = select(Document.id)
+        if doc_key is not None:
+            stmt = stmt.where(Document.doc_key == doc_key)
+        if version is not None:
+            stmt = stmt.where(Document.version == version)
+        return list((await self._s.execute(stmt)).scalars().all())
