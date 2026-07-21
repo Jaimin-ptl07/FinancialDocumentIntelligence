@@ -165,3 +165,46 @@ which ANDs EVERY term. Measured on the live corpus:
   the true 133) -- misleading aggregate, worth fixing.
 NEXT: fix keyword_search (websearch_to_tsquery / OR + ts_rank, or restore count-of-matching-terms). That is
 the single highest-value retrieval fix on the board, and it is independent of EX-1.
+
+## RT-9 BM25 keyword retrieval (plan 2026-07-21-rt9-bm25-keyword-retrieval.md, base 205d2e9)
+Pre-flight: fixed plan bug (bc5d304) -- Task 1's fake filter parser handled only `field == "value"` and RAISED on
+  anything else, but Task 5's _milvus_filter emits `doc_id in [...]`. Fake would have rejected the only shape
+  production emits, while Task 1 tested a shape production never emits.
+RT-9 Task 1: complete (commit 1bf47ba, review clean, 12 passed, ruff+mypy green; VectorStore.search_text + filter)
+  Minor (defer to final review): _matches_filter `in [...]` value split is comma-naive -- `doc_id in ["a,b"]` parses
+    as two values instead of one; not reachable from _milvus_filter (doc ids carry no commas)
+  Minor: task-1-report mislabels a NEW test as pre-existing; cosmetic, report only
+RT-9 Task 2: complete (commits 2adfacb + fix 508b579, re-review APPROVED, 7 unit / 594 fast passed, ruff+mypy green)
+  Reviewer caught Important coverage regression: the rewritten test asserted only schema field NAMES, so an
+  implementation hardcoding dim=384 instead of self._dim would have passed the entire suite. Fixed: store built with
+  dim=4 and the vector field's dim asserted. Also fixed an ILLUSORY ordering assertion -- the fake captured the schema
+  by reference, so "BM25 Function declared BEFORE create_collection" passed even if add_function ran after; the fake
+  now snapshots the count inside create_collection. Restored the dropped max_length=512 rationale.
+RT-9 Task 3: complete (commits e81b459 + fix 8ded8e4, re-review APPROVED, 4 integration / 594 fast passed)
+  Reviewer caught Important gap: the "no matching chunks record" fallback was implemented but UNTESTED. If it ever
+  emitted None instead of "", Milvus's str field would reject the upsert -- and a dropped chunk is a silent keyword
+  retrieval hole. Test now pins `text == ""` explicitly (a falsy check would also pass for None).
+PARALLEL WAVE: Tasks 4 and 8 dispatched concurrently (disjoint files; 8 worktreed from this commit because it needs
+  Task 2's schema and cannot branch from mainline). Task 5 is a hard chain after 4. Tasks 6+7 pair after 5.
+RT-9 Task 4: complete (commit d04cd4a, review clean, 16 unit / 591 fast passed, ruff+mypy green; build_vector_results
+  reads text off the hit, `resolved` dropped, `docs` kept). test_retrieval_fuse.py verified UNEDITED.
+  Minor (Task 5 closes both): vector_search still carries an unused `store` param; pipeline/retrieval.py module
+  docstring still claims RT-2 calls resolve_chunks.
+RT-9 Task 5: complete (bm25_search added, keyword_search/index_chunks_fts deleted; DocumentRepository.ids_for added;
+  15 unit (bm25+fuse) / 598 fast passed, ruff clean; test_retrieval_fuse.py verified UNEDITED byte-for-byte).
+  Unplanned but required: routes.py's top-level `from fdi.pipeline.retrieval import (... index_chunks_fts,
+  keyword_search ...)` is a hard ImportError once those names are deleted, and fdi.api.app imports routes.py at
+  module scope -- so tests/unit/test_cors.py (a genuinely fast test) would 500 the whole collection run without a
+  fix. Fixed: dropped the dead import, dropped `store=` from the two remaining vector_search/hybrid_search calls,
+  and deleted the two routes (`/documents/{id}/index_fts`, `/retrieve/keyword`) whose backing functions no longer
+  exist -- no 503 branch added, that redesign stays Task 6's job. Same ImportError problem pre-existed in four
+  integration test files that import the deleted names directly: test_keyword_search.py and
+  test_index_chunks_fts.py test ONLY the deleted functions (deleted outright, nothing salvageable); test_hybrid_
+  search.py and test_extract_document.py used index_chunks_fts merely to double-seed a Postgres `chunk` table
+  their real subject (hybrid_search / extract_document) no longer reads (IndexStage already seeds Milvus) --
+  trimmed that dead seeding step + the import, left the rest of both files (old `store=`/keyword-only-degrade
+  call shapes) for Task 6. extractor.py and agent_tools.py were NOT touched -- their broken `hybrid_search(store=...)`
+  calls are wrapped in try/except or only statically inspected by the fast suite, so they don't turn it red; left
+  for Task 6 as planned. mypy --strict src: 8 EXPECTED errors across exactly those 3 untouched files (call-arg on
+  `store`, arg-type on now-required embedder/vector_store) -- matches the plan's own sequencing note that this
+  interim state goes red in mypy/full-suite terms until Task 6.
