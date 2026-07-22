@@ -225,8 +225,17 @@ async def test_extract_document_pools_keyword_candidates_only(
             "source": {"page": None, "snippet": "Total assets 12,345",
                        "evidence_ids": [f"{doc.id}:t0r1"]},
             "confidence": 0.95}},
-        # The third field's unit has an empty pool -- extract_unit
-        # short-circuits BEFORE calling the client, so only 2 are consumed.
+        # RU_NOWHERE IS retrieved -- the vector channel always returns its
+        # k nearest neighbours, so a hybrid pool is never empty for a
+        # non-empty corpus (unlike the old plainto_tsquery channel, which
+        # returned nothing on a no-match query). Its unit reaches the client
+        # -- three calls, not two -- and the model returns null for context
+        # it cannot answer. This is why every one of the 18 production units
+        # always costs one LLM call.
+        {"Unmatchable field": {
+            "value": None,
+            "source": {"page": None, "snippet": None, "evidence_ids": []},
+            "confidence": 0.0}},
     ])
 
     async with session_factory() as s:
@@ -251,9 +260,11 @@ async def test_extract_document_pools_keyword_candidates_only(
     assert f2["field_name"] == "Unmatchable field"
     assert f2["value"] is None
     assert f2["confidence"] == 0.0
-    assert f2["source"] == {
-        "page": None, "snippet": None, "evidence_ids": [], "bounding_regions": [],
-    }
+    # The model cited nothing (evidence_ids stays the [] it returned), so
+    # there is nothing to highlight. page/snippet are NOT asserted None:
+    # with a non-empty pool, assemble_result's decision-8 fallback fills
+    # them from the top candidate.
+    assert f2["source"]["evidence_ids"] == []
 
     # B4: geometry rides along on `source`, joined from the provenance
     # (s{i} -> graph node -> OCR paragraph) and structure (t{i}r{j} ->
@@ -264,14 +275,14 @@ async def test_extract_document_pools_keyword_candidates_only(
     # [] rather than null, and never an exception (decision 10).
     assert f2["source"]["bounding_regions"] == []
 
-    # Exactly 2 real LLM calls (the third field never reaches the client);
-    # the numeric field's prompt carries the table row chunk's text --
-    # found by keyword_search over the chunk FTS index, no get_tables
-    # candidate (evidence_id would be "table:...") anywhere.
-    assert len(fake.calls) == 2
-    assert "table:" not in fake.calls[0][1]
-    assert "table:" not in fake.calls[1][1]
-    assert "12,345" in fake.calls[1][1]
+    # One LLM call per Retrieval Unit -- THREE, because the vector channel
+    # gives even RU_NOWHERE a pool. The numeric unit's prompt carries the
+    # table row chunk's text (found via the pool); no get_tables candidate
+    # (evidence_id would be "table:...") appears anywhere.
+    assert len(fake.calls) == 3
+    for _system, _user in fake.calls:
+        assert "table:" not in _user
+    assert any("12,345" in _user for _system, _user in fake.calls)
 
 
 async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
