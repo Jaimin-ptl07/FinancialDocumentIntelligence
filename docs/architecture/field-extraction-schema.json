@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema-descriptor",
   "title": "Financial Document Intelligence - RAG Field Extraction Spec (Retrieval-Oriented)",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Module-wise extraction schema for a company's annual report, organized for retrieval. Each module maps to one or more Retrieval Units - a single contiguous section of the report (a primary statement, a note, or a front/back-matter block). The retrieval layer locates and fetches a unit ONCE; every field in that unit is then answered by the LLM from that same shared context. This is the retrieve-once / extract-many pattern, so a full extraction run performs ~17 retrievals (one per unit) instead of one per field.",
   "reference_document": {
     "company": "Silver Touch Technologies Limited",
@@ -213,6 +213,7 @@
           "title": "Balance Sheet",
           "scope": "primary_statement",
           "statement_type": "BS",
+          "basis_preference": "standalone",
           "references": [
             "Other Equity / Reserves note"
           ],
