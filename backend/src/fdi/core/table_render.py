@@ -11,12 +11,32 @@ I/O, no config, no clock/RNG, no logging. (TR-1 P3.)
 import re
 from collections.abc import Mapping
 
-_DATE_DMY = re.compile(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}$")
-_DATE_YMD = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
-_YEAR = re.compile(r"^\d{4}$")
-_FY_TOKEN = re.compile(r"^FY-?\d{2,4}$", re.IGNORECASE)
-_FISCAL_RANGE_2 = re.compile(r"^\d{4}-\d{2}$")
-_FISCAL_RANGE_4 = re.compile(r"^\d{4}-\d{4}$")
+# Header cells carry PREFIXES ("As at 31-03-2024", "For the year ended
+# 31-03-2024") that a `^`-anchored pattern misses entirely -- only the
+# leading `^` is dropped (matched with `re.search`, not `re.match`/
+# `fullmatch`); the trailing `$` stays, since the period token is always the
+# last thing printed in a header cell.
+_DATE_DMY = re.compile(r"\d{1,2}[-/]\d{1,2}[-/]\d{4}$")
+_DATE_YMD = re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
+_YEAR = re.compile(r"\d{4}$")
+_FY_TOKEN = re.compile(r"FY-?\d{2,4}$", re.IGNORECASE)
+_FISCAL_RANGE_2 = re.compile(r"\d{4}-\d{2}$")
+_FISCAL_RANGE_4 = re.compile(r"\d{4}-\d{4}$")
+
+# Spelled-month dates ("31st March, 2024", "March 31, 2024") in either
+# day-month-year or month-day-year order, with an optional ordinal suffix on
+# the day and an optional comma before the year. No anchors -- `re.search`
+# finds the date wherever it sits in the cell.
+_MONTH_NAMES = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+)
+_SPELLED_MONTH_DAY_FIRST = re.compile(
+    rf"\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH_NAMES}\.?,?\s+\d{{4}}", re.IGNORECASE
+)
+_SPELLED_MONTH_MONTH_FIRST = re.compile(
+    rf"{_MONTH_NAMES}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{4}}", re.IGNORECASE
+)
 
 _YEAR_MIN = 2019
 _YEAR_MAX = 2099
@@ -35,16 +55,23 @@ def _as_list(value: object) -> list[object] | None:
 
 
 def _is_period(text: str) -> bool:
-    """True when `text` looks like a reporting period: a date, a bare year,
-    or a fiscal-year token (`FY24`, `FY2024`, `2023-24`, `2023-2024`)."""
-    if _DATE_DMY.match(text) or _DATE_YMD.match(text):
+    """True when `text` CONTAINS (not just equals) a reporting period: a
+    date -- numeric ("31-03-2024") or spelled-month ("31st March, 2024",
+    "March 31, 2024") -- a bare year, or a fiscal-year token (`FY24`,
+    `FY2024`, `2023-24`, `2023-2024`). Real header cells carry prefixes
+    ("As at 31-03-2024", "For the year ended 31 March 2024"), so every
+    pattern is searched, not fullmatched."""
+    if _DATE_DMY.search(text) or _DATE_YMD.search(text):
         return True
-    if _FY_TOKEN.match(text):
+    if _SPELLED_MONTH_DAY_FIRST.search(text) or _SPELLED_MONTH_MONTH_FIRST.search(text):
         return True
-    if _FISCAL_RANGE_2.match(text) or _FISCAL_RANGE_4.match(text):
+    if _FY_TOKEN.search(text):
         return True
-    if _YEAR.match(text):
-        return _YEAR_MIN <= int(text) <= _YEAR_MAX
+    if _FISCAL_RANGE_2.search(text) or _FISCAL_RANGE_4.search(text):
+        return True
+    year_match = _YEAR.search(text)
+    if year_match:
+        return _YEAR_MIN <= int(year_match.group()) <= _YEAR_MAX
     return False
 
 

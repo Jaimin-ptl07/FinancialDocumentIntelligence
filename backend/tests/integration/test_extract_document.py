@@ -45,6 +45,7 @@ from fdi.pipeline.stages.semantic import SemanticStage
 from fdi.pipeline.stages.structure import StructureStage
 from fdi.pipeline.vectorstore import FakeVectorStore
 from fdi.platform.db.engine import make_session_factory
+from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 pytestmark = pytest.mark.integration
@@ -279,17 +280,21 @@ async def test_extract_document_pools_keyword_candidates_only(
 
     # One LLM call per Retrieval Unit -- THREE, because the vector channel
     # gives even RU_NOWHERE a pool. The numeric unit's prompt carries the
-    # table CARD's text (found via the pool); no get_tables candidate
-    # (evidence_id would be "table:...") appears anywhere. TR-1 P2's card is a
-    # LOCATION summary ONLY -- identity + column headers + row labels, no cell
-    # VALUES ("12,345" is not expected in the prompt until P3 wires grid
-    # rendering back in) -- "Rows: Total assets" (the card's own row-labels
-    # line) is what proves the card itself reached the prompt, not just the
-    # field's own label= metadata (which also happens to read "Total assets").
+    # table CARD rendered as a MARKDOWN TABLE (TR-1 P3-wire): the ranked
+    # card's grid is fetched from the `structure` artifact and rendered with
+    # `render_table_markdown`/`repair_headers`, replacing the P2 LOCATION-
+    # summary text ("Columns: .../Rows: ...", no cell values) with real
+    # headers + real cell VALUES ("12,345" now reaches the prompt). No
+    # get_tables candidate (evidence_id would be "table:...") appears
+    # anywhere.
     assert len(fake.calls) == 3
     for _system, _user in fake.calls:
         assert "table:" not in _user
-    assert any("Rows: Total assets" in _user for _system, _user in fake.calls)
+    table_call_user = next(
+        _user for _system, _user in fake.calls if "| --- | --- |" in _user
+    )
+    assert "| Particulars | FY24 |" in table_call_user
+    assert "| Total assets | 12,345 |" in table_call_user
 
 
 async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
@@ -364,3 +369,155 @@ async def test_extract_document_makes_one_llm_call_per_unit(
     # input order preserved, NOT unit order
     assert [r["field_name"] for r in result["fields"]] == ["a", "b", "c", "d", "e"]
     assert [r["value"] for r in result["fields"]] == ["A", "B", "C", "D", "E"]
+
+
+async def test_extract_document_basis_filter_drops_consolidated_table_for_standalone_unit(
+    session_factory, store,
+) -> None:
+    """TR-1 P4b: a unit's DEFAULT `basis_preference` ("standalone") drops
+    table candidates the `basis` stage tags "consolidated" -- replacing the
+    old single-page `consolidated_start_page` cutoff with the labeled
+    basis-region model (design spec sec 6.2). Two SA-700 auditor's-report
+    anchors split this document into a standalone region (page 1) and a
+    consolidated region (page 50); a near-identical "Total assets" table
+    sits in each region with a DIFFERENT value (12,345 vs 99,999). The
+    standalone unit's (default basis_preference) prompt must carry the
+    standalone table's rendered value and must NEVER carry the consolidated
+    table's -- proving the basis filter, not just the render wiring."""
+    marker = uuid.uuid4().hex
+    reg = StageRegistry()
+    for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
+                  ProvenanceStage(), ChunksStage(), StructureStage(), BasisStage(),
+                  EmbeddingStage(), IndexStage()):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    embedder = FakeEmbeddingClient(dim=8)
+    vector_store = FakeVectorStore()
+
+    fake_ocr = FakeOcrClient({
+        "content": "ACME LTD",
+        "pages": [
+            {"pageNumber": 1, "lines": [], "words": []},
+            {"pageNumber": 50, "lines": [], "words": []},
+        ],
+        "paragraphs": [
+            {
+                "role": "sectionHeading",
+                "content": (
+                    "Independent Auditor's Report on the Standalone "
+                    "Financial Statements"
+                ),
+                "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}],
+            },
+            {
+                "content": f"ACME Ltd standalone commentary {marker}.",
+                "boundingRegions": [{"pageNumber": 1, "polygon": [0, 2, 1, 2, 1, 3, 0, 3]}],
+            },
+            {
+                "role": "sectionHeading",
+                "content": (
+                    "Independent Auditor's Report on the Consolidated "
+                    "Financial Statements"
+                ),
+                "boundingRegions": [{"pageNumber": 50, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}],
+            },
+            {
+                "content": f"ACME Ltd consolidated commentary {marker}.",
+                "boundingRegions": [{"pageNumber": 50, "polygon": [0, 2, 1, 2, 1, 3, 0, 3]}],
+            },
+        ],
+        "tables": [
+            {
+                "rowCount": 2, "columnCount": 2,
+                "spans": [{"offset": 20, "length": 60}],
+                "boundingRegions": [{"pageNumber": 1, "polygon": []}],
+                "cells": [
+                    {"rowIndex": 0, "columnIndex": 0, "kind": "columnHeader",
+                     "content": "Particulars"},
+                    {"rowIndex": 0, "columnIndex": 1, "kind": "columnHeader", "content": "FY24"},
+                    {"rowIndex": 1, "columnIndex": 0, "content": "Total assets"},
+                    {"rowIndex": 1, "columnIndex": 1, "content": "12,345"},
+                ],
+            },
+            {
+                "rowCount": 2, "columnCount": 2,
+                "spans": [{"offset": 200, "length": 60}],
+                "boundingRegions": [{"pageNumber": 50, "polygon": []}],
+                "cells": [
+                    {"rowIndex": 0, "columnIndex": 0, "kind": "columnHeader",
+                     "content": "Particulars"},
+                    {"rowIndex": 0, "columnIndex": 1, "kind": "columnHeader", "content": "FY24"},
+                    {"rowIndex": 1, "columnIndex": 0, "content": "Total assets"},
+                    {"rowIndex": 1, "columnIndex": 1, "content": "99,999"},
+                ],
+            },
+        ],
+    })
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(), filename="a.pdf",
+        doc_key=f"acme-basis-{marker}", content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    common = {"doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+              "store": store, "registry": reg, "resolver": resolver}
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="semantic", run_id=str(uuid.uuid4()),
+        services={"semantic": FakeSemanticClient({})}, **common,
+    )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="embedding", run_id=str(uuid.uuid4()),
+        services={"embedder": embedder}, **common,
+    )
+    await run_stage(
+        stage_name="index", run_id=str(uuid.uuid4()),
+        services={"vector_store": vector_store}, **common,
+    )
+
+    # Sanity: the basis stage actually split standalone/consolidated regions
+    # -- otherwise this test would pass for the wrong reason (nothing to
+    # filter).
+    async with session_factory() as s:
+        run = await RegistryRepository(s).latest_run(doc.id, "basis")
+        basis_body = await store.get_json(run.artifact_key)
+    regions = basis_body["regions"]
+    assert any(r["basis"] == "standalone" for r in regions)
+    assert any(r["basis"] == "consolidated" for r in regions)
+
+    field = FieldSpec(
+        field_name="Total assets", data_type="decimal",
+        retrieval_query="Total assets", keywords=("Total assets",),
+        extraction_prompt="Extract the total assets value.", enum_values=None,
+        module_id=1, module_name="Balance Sheet", unit_id="RU_BS", unit_title="Balance Sheet",
+        field_path="m.total_assets", locator_keywords=("total", "assets"),
+        # basis_preference omitted -> defaults to "standalone"
+    )
+    fake = FakeExtractorClient([
+        {"m.total_assets": {
+            "value": 12345.0,
+            "source": {"page": 1, "snippet": "Total assets 12,345", "evidence_ids": []},
+            "confidence": 0.95}},
+    ])
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        result = await extract_document(ctx=ctx, fields=[field], client=fake)
+
+    assert result["field_count"] == 1
+    assert len(fake.calls) == 1
+    _system, user = fake.calls[0]
+    assert "12,345" in user
+    assert "99,999" not in user

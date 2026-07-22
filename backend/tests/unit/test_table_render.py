@@ -78,6 +78,63 @@ def test_repair_headers_promotes_when_headers_collapse_to_duplicate_details() ->
     assert headers[2] == "FY23"
 
 
+def test_repair_headers_promotes_date_with_as_at_prefix() -> None:
+    """TR-1 P3-core hardening: real header cells carry prefixes ("As at
+    31-03-2024"), not the bare whole-cell token the original ^-anchored
+    regex required."""
+    g = _grid(
+        n_rows=2,
+        n_cols=3,
+        header_row_count=0,
+        column_headers=["", "", ""],
+        grid=[
+            ["Particulars", "As at 31-03-2024", "As at 31-03-2023"],
+            ["Total assets", "16,427.37", "14,213.08"],
+        ],
+    )
+    out = repair_headers(g)
+    headers = out["column_headers"]
+    assert isinstance(headers, list)
+    assert headers[1] == "As at 31-03-2024"
+    assert headers[2] == "As at 31-03-2023"
+
+
+def test_repair_headers_promotes_spelled_month_date_with_ordinal_and_comma() -> None:
+    g = _grid(
+        n_rows=2,
+        n_cols=3,
+        header_row_count=0,
+        column_headers=["", "", ""],
+        grid=[
+            ["Particulars", "31st March, 2024", "31st March, 2023"],
+            ["Total assets", "16,427.37", "14,213.08"],
+        ],
+    )
+    out = repair_headers(g)
+    headers = out["column_headers"]
+    assert isinstance(headers, list)
+    assert headers[1] == "31st March, 2024"
+    assert headers[2] == "31st March, 2023"
+
+
+def test_repair_headers_promotes_month_first_spelled_date() -> None:
+    g = _grid(
+        n_rows=2,
+        n_cols=3,
+        header_row_count=0,
+        column_headers=["", "", ""],
+        grid=[
+            ["Particulars", "For the year ended March 31, 2024", "March 31, 2023"],
+            ["Total assets", "16,427.37", "14,213.08"],
+        ],
+    )
+    out = repair_headers(g)
+    headers = out["column_headers"]
+    assert isinstance(headers, list)
+    assert headers[1] == "For the year ended March 31, 2024"
+    assert headers[2] == "March 31, 2023"
+
+
 def test_repair_headers_positional_fallback_when_no_period_pattern() -> None:
     g = _grid(
         n_rows=2,
