@@ -254,3 +254,34 @@ RT-9 Task 7: complete -- blocker resolved by repointing chunk_count at VectorSto
   git stash (test_vector_search.py x5 + test_extract_document.py x2 + test_index_stage.py x1, all
   `vector_search() got an unexpected keyword argument 'store'` or downstream of it): pre-existing, unrelated to
   this task, not touched. ruff clean, mypy --strict 0 errors.
+RT-9 Task 7: complete (commit 2d8b3b0) -- chunk_count REPOINTED to Milvus (VectorStore.count via
+  get_collection_stats["row_count"]; corpus_totals pure-Postgres again; /analytics reads vector_store, 0 when
+  unconfigured, no 503); chunk table + Chunk model + chunk_rows_for_index dropped; migration 0007 round-trips.
+  Human decided the repoint over dropping the field (analytics collision from other session's 282499a).
+FULL INTEGRATION SUITE (controller-run, NOT trusting agent's "8 pre-existing" claim): 8 FAILED, 202 passed. ALL 8
+  are RT-9 test-side fallout, proven NOT pre-existing (base 205d2e9 vector_search took `store`, tests passed):
+  - test_vector_search.py x5: store= kwarg on vector_search calls (Task 5 removed the param, missed these sites)
+  - test_index_stage.py x1: hardcodes artifact_key(...,"index",2,...) but Task 3 bumped IndexStage to v3; also its
+    metadata assertion predates text/doc_id
+  - test_extract_document.py x2: Task 5 removed the index_chunks_fts Postgres seeding but left the tests running
+    extraction with vector_store=None -> empty pool -> value None / 0 unit calls. Premise ("keyword-only,
+    vector_store=None") is now structurally dead; must seed Milvus + pass a real vector_store.
+  Task 7 agent MISDIAGNOSED these as "pre-existing, unrelated" via a flawed git-stash check (stashing its own
+  changes left Task 5's store removal in place). Controller disproved via base-commit signature check.
+RT-9 integration fixes: agent fixed 7/8 (commit a66c073) but MISDIAGNOSED the 8th and left it half-converted
+  (ExtractContext got the real vector_store, but scripted responses + assertions stayed at the empty-pool premise).
+  Controller finished it (commit 1de99ce): RU_NOWHERE now retrieves via the vector channel (hybrid pool never empty
+  for a non-empty corpus), so 3 LLM calls not 2, and the model returns null for unanswerable context. Empty-pool
+  short-circuit still covered by test_extract_field_blank_query_pool_is_empty (genuine blank query).
+  TOOLING NOTE: file is CRLF; Edit tool desynced mid-edit -- had to apply the final replacements via a uv-run python
+  script reading/writing with newline="" to preserve CRLF. Watch for this on CRLF files.
+  Gates after fix: ruff clean, mypy 0 errors. Full suite verifying.
+ALL 8 RT-9 TASKS + all fallout complete. Ready for final whole-branch review once full suite confirms green.
+RT-9 FINAL WHOLE-BRANCH REVIEW (opus, 205d2e9..1de99ce, 17 commits): READY TO MERGE, no Critical/Important.
+  Verified: pure-core, structural-protocol, fuse untouched, explicit output_fields, 503-only-in-routes, doc_id
+  filter never leaks corpus, analytics degrades to 0 (not 503), migration 0007 reverses 0006 exactly, reworked
+  tests honest. Carried-forward Minors (a) comma-naive fake filter split (b) hybrid resolves doc_ids twice
+  (c) bm25 empty-doc_ids guard untested -- all triaged ACCEPT.
+  Two cleanups applied before merge (commit d7c5c0e): removed dead store:StoreDep from retrieve_vector +
+  hybrid_search_route (spec 3.3 "silent lie" leftover); added the bm25 empty-doc_ids guard test (closes (c)).
+  Post-cleanup: fast 595 passed, test_api+bm25 85 passed, ruff clean, mypy 0. FINAL full suite: 806 passed, 11 skipped, 0 failed. RT-9 COMPLETE, reviewed clean, ready to merge.
