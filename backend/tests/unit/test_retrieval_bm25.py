@@ -64,6 +64,29 @@ async def test_bm25_search_empty_query_returns_empty() -> None:
     ) == []
 
 
+async def test_bm25_search_doc_key_filter_matching_nothing_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A doc_key/version filter that resolves to zero doc_ids must return []
+    -- NOT fall through to an unscoped whole-corpus search. `_milvus_filter([])`
+    returns "" (unscoped), so if this guard were ever deleted, the seeded
+    "revenue" chunk below would come back and this test would catch it."""
+
+    async def _fake_doc_ids_for(
+        session: object, *, doc_key: str | None, version: int | None
+    ) -> list[str]:
+        assert doc_key == "no-such-key"
+        return []
+
+    monkeypatch.setattr(r, "_doc_ids_for", _fake_doc_ids_for)
+
+    hits = await r.bm25_search(
+        session=None, vector_store=_store(), query="revenue from operations", k=5,
+        filters={"doc_key": "no-such-key", "version": None},
+    )
+    assert hits == []
+
+
 async def test_hybrid_search_fuses_both_channels() -> None:
     hits = await r.hybrid_search(
         session=None, embedder=_FakeEmbedder(), vector_store=_store(),

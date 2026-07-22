@@ -610,7 +610,6 @@ async def search(
 async def retrieve_vector(
     body: VectorSearchRequest,
     session: SessionDep,
-    store: StoreDep,
     embedder: EmbedderDep,
     vector_store: VectorStoreDep,
 ) -> VectorSearchResultsView:
@@ -774,7 +773,6 @@ async def keyword_search_route(
 async def hybrid_search_route(
     body: HybridSearchRequest,
     session: SessionDep,
-    store: StoreDep,
     embedder: EmbedderDep,
     vector_store: VectorStoreDep,
 ) -> HybridSearchResultsView:
