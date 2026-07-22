@@ -1,17 +1,24 @@
 """The extractor's orchestrator + ExtractorClient seam (design spec sec
 3.2): extract_unit pools context ONCE per Retrieval Unit via hybrid_search
 ALONE (dense BGE + keyword Postgres-FTS, RRF-fused -- table content already
-reaches this pool as chunks, since build_chunks emits t{i}/t{i}r{j} table
-chunks alongside s{i} section chunks and EmbeddingStage embeds all of them;
-a separate get_tables table-blob injection was measured to flood the rerank
-with same-scored whole-table renders and HURT top-20 recall, 78.8% ->
-88.1% once removed -- see docs/architecture/2026-07-19-ingestion-audit-
-and-improvement-plan.md), scopes the pool with fdi.core.extractor's two
-filters (drop candidates at/after the document's Consolidated-section
-boundary; drop whole-table chunks for units with no numeric/list field),
-reranks with an adaptive top_k (unit_top_k -- bigger units get a bigger
-pool so no field is starved), prompts the client ONCE with every field in
-the unit batched into a single call (schema v3.1's "Retrieve-once,
+reaches this pool as chunks, since build_chunks emits one table CARD
+(`t{i}`) per canonicalized table alongside `s{i}` section chunks and
+EmbeddingStage embeds all of them; a separate get_tables table-blob
+injection was measured to flood the rerank with same-scored whole-table
+renders and HURT top-20 recall, 78.8% -> 88.1% once removed -- see
+docs/architecture/2026-07-19-ingestion-audit-and-improvement-plan.md),
+scopes the pool with fdi.core.extractor's `filter_candidates` (drops
+whole-table chunks for units with no numeric/list field) plus TR-1 P4b's
+own `_filter_by_basis` (drops candidates whose basis is the OPPOSITE of the
+unit's `basis_preference` -- replacing the old single-cutoff "drop
+candidates at/after the Consolidated-section boundary" filter with a
+labeled-region model that also handles reverse-ordered and standalone-only
+filings; see docs/superpowers/specs/2026-07-22-table-representation-
+design.md sec 6.2), reranks with an adaptive top_k (unit_top_k -- bigger
+units get a bigger pool so no field is starved), renders each ranked TABLE
+CARD's grid to markdown (TR-1 P3-wire's `_render_table_candidate` -- a
+section-chunk candidate is untouched), prompts the client ONCE with every
+field in the unit batched into a single call (schema v3.1's "Retrieve-once,
 extract-many"), and assembles one output_contract record per field.
 extract_document groups fields into Retrieval Units (group_fields_by_unit)
 and runs one retrieval + one LLM call per unit, then restores the caller's
@@ -23,12 +30,17 @@ satisfies this protocol without importing it -- platform may not import
 pipeline. FakeExtractorClient lives here for tests: no live Azure OpenAI
 call anywhere in the default suite. extract_field (single-field pooling/
 prompting) is preserved unchanged for callers that hold one FieldSpec; it is
-NOT routed through extract_unit.
+NOT routed through extract_unit, and is neither basis-filtered nor
+table-rendered.
 
 Never raises (decision 10): extract_unit guards every I/O step (hybrid_
 search, client.extract) individually, so one UNIT's failure degrades that
 unit's fields to well-formed null records, never the whole document's batch
 -- extract_field does the same at field granularity for its own callers.
+The basis/render helpers below are pure guarded-total functions (never
+raise on any input shape), matching fdi.core's own posture even though they
+live in this pipeline module (they read the two artifacts extract_document
+already fetched, not fresh I/O of their own).
 
 ExtractContext carries doc_id AND doc_key AND version (resolved ONCE by the
 caller -- the /extract/document route, which already looks the document up
@@ -40,13 +52,15 @@ directly, with no per-field `DocumentRepository.get` lookup inside the loop
 resolving only doc_id would require."""
 
 import contextlib
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, cast, runtime_checkable
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.core.basis import page_basis
 from fdi.core.extractor import (
     EXTRACTION_RECORD_VERSION,
     Candidate,
@@ -58,16 +72,16 @@ from fdi.core.extractor import (
     build_extraction_record,
     build_unit_messages,
     filter_candidates,
-    find_consolidated_start_page,
     group_fields_by_unit,
     rerank_candidates,
     unit_needs_tables,
     unit_top_k,
 )
 from fdi.core.provenance import resolve_evidence_regions
+from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
-from fdi.pipeline.retrieval import hybrid_search, read_chunks
+from fdi.pipeline.retrieval import hybrid_search
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -154,12 +168,97 @@ async def _pool_for(
     ]
 
 
+def _basis_keep(cand_basis: str, preference: str) -> bool:
+    """True when a candidate tagged `cand_basis` should be kept for a unit
+    whose `basis_preference` is `preference` (TR-1 P4b, design spec sec 6.2).
+
+    `"both"` keeps everything. Otherwise a candidate is kept when its basis
+    MATCHES the preference or is `"unknown"` (front-matter/unrecognized
+    tables serve either basis) and dropped only when it is the OPPOSITE
+    basis. Pure string comparison: never raises."""
+    if preference == "both":
+        return True
+    return cand_basis == preference or cand_basis == "unknown"
+
+
+def _filter_by_basis(
+    candidates: Sequence[Candidate],
+    *,
+    basis_artifact: Mapping[str, object],
+    preference: str,
+) -> list[Candidate]:
+    """Drop candidates whose basis is the OPPOSITE of `preference`, replacing
+    the old `consolidated_start_page` single-cutoff filter with the labeled
+    basis-region model (TR-1 P4b). `page_basis` degrades a missing/malformed
+    `basis_artifact`, or a candidate with `page=None`, to `"unknown"` --
+    which `_basis_keep` always keeps -- so a missing basis artifact serves
+    every candidate rather than silently dropping half the document. Never
+    raises."""
+    return [
+        c for c in candidates
+        if _basis_keep(page_basis(basis_artifact, c.page), preference)
+    ]
+
+
+_TABLE_CARD_RE = re.compile(r"^t(\d+)$")
+
+
+def _card_identity(text: str) -> str:
+    """The table card's identity line (statement_type | basis=... | page),
+    reusing it verbatim rather than reconstructing one: a card's TEXT always
+    opens with `[...]` (see fdi.core.retrieval._table_chunks). Strips the
+    surrounding brackets when present; a malformed/bracket-less first line is
+    returned as-is. Total: never raises on any input shape (an empty `text`
+    yields "")."""
+    first_line = text.split("\n", 1)[0].strip()
+    if len(first_line) >= 2 and first_line.startswith("[") and first_line.endswith("]"):
+        return first_line[1:-1]
+    return first_line
+
+
+def _render_table_candidate(
+    candidate: Candidate, *, structure: Mapping[str, object]
+) -> Candidate:
+    """Render a TABLE CARD candidate's `text` as a markdown table fetched
+    from `structure["tables"][table_index]["grid"]` (TR-1 P3-wire, design
+    spec sec 5.3) -- `table_index` parsed out of its `t{i}` chunk_id
+    (evidence_id `f"{doc_id}:t{i}"`). A section-chunk candidate (`s{i}`), an
+    out-of-range/missing `table_index`, a missing/malformed grid, or an empty
+    render all leave `candidate` UNCHANGED -- the card's own LOCATION-summary
+    text still reaches the LLM rather than being lost. `Candidate` is frozen,
+    so a rendered candidate is a NEW instance via `dataclasses.replace`.
+    Total: never raises (decision 10)."""
+    chunk_id = candidate.evidence_id.split(":", 1)[1] if ":" in candidate.evidence_id else ""
+    match = _TABLE_CARD_RE.match(chunk_id)
+    if match is None:
+        return candidate
+
+    table_index = int(match.group(1))
+    tables_raw = structure.get("tables") if isinstance(structure, Mapping) else None
+    tables = tables_raw if isinstance(tables_raw, list) else []
+    if not (0 <= table_index < len(tables)):
+        return candidate
+
+    table = tables[table_index]
+    if not isinstance(table, Mapping):
+        return candidate
+    grid = table.get("grid")
+    if not isinstance(grid, Mapping):
+        return candidate
+
+    rendered = render_table_markdown(repair_headers(grid), identity=_card_identity(candidate.text))
+    if not rendered:
+        return candidate
+    return replace(candidate, text=rendered)
+
+
 async def extract_unit(
     *,
     ctx: ExtractContext,
     unit: UnitSpec,
     client: ExtractorClient,
-    consolidated_start_page: int | None = None,
+    basis_artifact: Mapping[str, object] | None = None,
+    structure: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """ONE retrieval + ONE LLM call for every field in `unit` -- schema v3.1's
     "Retrieve-once, extract-many". Returns one output_contract record per
@@ -170,15 +269,19 @@ async def extract_unit(
     pool = await _pool_for(ctx=ctx, query=unit.retrieval_query, k=top_k * _POOL_OVERFETCH)
 
     scoped = filter_candidates(
-        pool,
-        consolidated_start_page=consolidated_start_page,
-        needs_tables=unit_needs_tables(unit),
+        pool, consolidated_start_page=None, needs_tables=unit_needs_tables(unit),
+    )
+    scoped = _filter_by_basis(
+        scoped, basis_artifact=basis_artifact or {}, preference=unit.basis_preference,
     )
     ranked = rerank_candidates(scoped, unit.locator_keywords, top_k=top_k)
     if not ranked:
         return assemble_unit_results(unit, {}, ranked)
 
-    system, user = build_unit_messages(unit, ranked)
+    prompt_candidates = [
+        _render_table_candidate(c, structure=structure or {}) for c in ranked
+    ]
+    system, user = build_unit_messages(unit, prompt_candidates)
     raw: Mapping[str, object] = {}
     with contextlib.suppress(Exception):  # never raise (decision 10)
         raw = client.extract(system=system, user=user)
@@ -244,36 +347,26 @@ def _attach_regions(
     return record
 
 
-async def _consolidated_start_page(ctx: ExtractContext) -> int | None:
-    """Read this document's `chunks` artifact ONCE and derive the boundary.
-    Never raises: a missing/unreadable artifact yields None, so extraction
-    proceeds unscoped rather than failing -- logged here (pipeline layer;
-    fdi.core stays log-free) so a boundary of None is distinguishable from a
-    document that legitimately has no Consolidated section vs. one where the
-    chunks artifact was missing/unreadable and the whole scoping feature
-    silently no-opped."""
-    try:
-        chunks = await read_chunks(RegistryRepository(ctx.session), ctx.store, ctx.doc_id)
-    except Exception as exc:  # noqa: BLE001 -- never raise (decision 10)
-        log.warning(
-            "extractor.consolidated_boundary_suppressed_exception",
-            doc_id=ctx.doc_id, error=repr(exc),
-        )
-        return None
-    boundary = find_consolidated_start_page(chunks)
-    # `chunks` is logged on BOTH outcomes: read_chunks returns [] WITHOUT
-    # raising when the run or its artifact_key is absent, so chunks=0 with a
-    # None boundary means the scoping feature silently no-opped, while a
-    # non-zero count with a None boundary means the document genuinely has no
-    # Consolidated section. Without the count the two are indistinguishable.
-    if boundary is None:
-        log.info("extractor.consolidated_boundary_none", doc_id=ctx.doc_id, chunks=len(chunks))
-    else:
-        log.info(
-            "extractor.consolidated_boundary_found",
-            doc_id=ctx.doc_id, page=boundary, chunks=len(chunks),
-        )
-    return boundary
+async def _basis_artifact_for(ctx: ExtractContext) -> Mapping[str, object]:
+    """Read this document's `basis` artifact ONCE (TR-1 P4b). Never raises:
+    `_read_latest_artifact` already degrades a missing run/artifact_key/
+    unreadable body to `{}`, and `page_basis` treats an empty/malformed
+    artifact as 'every page is unknown' -- which `_basis_keep` always keeps,
+    so extraction proceeds unscoped by basis rather than failing. Logged
+    here (pipeline layer; fdi.core stays log-free) so an absent artifact is
+    distinguishable from one with `regions: []` (a document with no
+    standalone/consolidated anchors, legitimately unscoped)."""
+    basis = await _read_latest_artifact(ctx, "basis")
+    if not basis:
+        log.info("extractor.basis_artifact_missing", doc_id=ctx.doc_id)
+        return basis
+    regions = basis.get("regions")
+    log.info(
+        "extractor.basis_artifact_found",
+        doc_id=ctx.doc_id,
+        region_count=len(regions) if isinstance(regions, list) else 0,
+    )
+    return basis
 
 
 async def extract_document(
@@ -286,20 +379,21 @@ async def extract_document(
     Each record's `source` additionally carries `bounding_regions`: the
     geometry behind its cited chunks, joined by the pure
     fdi.core.provenance.resolve_evidence_regions. All THREE artifacts this
-    needs (provenance, structure, and chunks for the Consolidated boundary)
-    are read ONCE here, not per field or per unit -- the committed schema has
-    198 fields, so a per-field read would be hundreds of MinIO round trips
-    for one request."""
+    needs (provenance for geometry, structure for both geometry AND table-
+    card rendering, and basis for basis-aware retrieval) are read ONCE here,
+    not per field or per unit -- the committed schema has 198 fields, so a
+    per-field read would be hundreds of MinIO round trips for one request."""
     provenance = await _read_latest_artifact(ctx, "provenance")
     structure = await _read_latest_artifact(ctx, "structure")
-    boundary = await _consolidated_start_page(ctx)
+    basis_artifact = await _basis_artifact_for(ctx)
 
     units = group_fields_by_unit(fields)
     flat: list[dict[str, object]] = []
     for unit in units:
         flat.extend(
             await extract_unit(
-                ctx=ctx, unit=unit, client=client, consolidated_start_page=boundary,
+                ctx=ctx, unit=unit, client=client,
+                basis_artifact=basis_artifact, structure=structure,
             )
         )
 
