@@ -24,6 +24,7 @@ from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fdi.core.extractor import FieldSpec, parse_field_specs
+from fdi.pipeline.embeddings import FakeEmbeddingClient
 from fdi.pipeline.extractor import ExtractContext, FakeExtractorClient, extract_document
 from fdi.pipeline.intake import intake_document
 from fdi.pipeline.ocr import FakeOcrClient
@@ -33,12 +34,15 @@ from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
 from fdi.pipeline.stages.chunks import ChunksStage
+from fdi.pipeline.stages.embedding import EmbeddingStage
 from fdi.pipeline.stages.graph import GraphStage
+from fdi.pipeline.stages.index import IndexStage
 from fdi.pipeline.stages.normalize import NormalizeStage
 from fdi.pipeline.stages.ocr import OcrStage
 from fdi.pipeline.stages.provenance import ProvenanceStage
 from fdi.pipeline.stages.semantic import SemanticStage
 from fdi.pipeline.stages.structure import StructureStage
+from fdi.pipeline.vectorstore import FakeVectorStore
 from fdi.platform.db.engine import make_session_factory
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -126,17 +130,24 @@ def _schema(marker: str) -> dict[str, object]:
 
 @pytest.fixture
 async def processed_doc(session_factory, store):
-    """One fully-processed document: a text section (matched by keyword
-    search over its s{i} chunk) + a numeric table (matched by keyword
-    search over its t{i}/t{i}r{j} table chunks, indexed into chunk FTS
-    right alongside section chunks -- no get_tables involved). Returns
-    (doc, marker)."""
+    """One fully-processed document: a text section (matched by BM25/vector
+    search over its s{i} chunk) + a numeric table (matched by BM25/vector
+    search over its t{i}/t{i}r{j} table chunks, indexed into Milvus right
+    alongside section chunks -- no get_tables involved). RT-9: the pool now
+    comes from a REAL (fake) Milvus, so `embedding` and `index` are run too,
+    injecting a FakeEmbeddingClient/FakeVectorStore -- mirroring
+    test_index_enrichment.py's pattern -- and the fakes are returned so the
+    caller can build an ExtractContext with a populated store. Returns
+    (doc, marker, embedder, vector_store)."""
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-                  ProvenanceStage(), ChunksStage(), StructureStage()):
+                  ProvenanceStage(), ChunksStage(), StructureStage(),
+                  EmbeddingStage(), IndexStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
+    embedder = FakeEmbeddingClient(dim=8)
+    vector_store = FakeVectorStore()
     fake_ocr = FakeOcrClient({
         "content": "ACME LTD",
         "pages": [{"pageNumber": 1, "lines": [], "words": []}],
@@ -185,13 +196,21 @@ async def processed_doc(session_factory, store):
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
-    return doc, marker
+    await run_stage(
+        stage_name="embedding", run_id=str(uuid.uuid4()),
+        services={"embedder": embedder}, **common,
+    )
+    await run_stage(
+        stage_name="index", run_id=str(uuid.uuid4()),
+        services={"vector_store": vector_store}, **common,
+    )
+    return doc, marker, embedder, vector_store
 
 
 async def test_extract_document_pools_keyword_candidates_only(
     session_factory, store, processed_doc
 ) -> None:
-    doc, marker = processed_doc
+    doc, marker, embedder, vector_store = processed_doc
     fields = parse_field_specs(_schema(marker))
     assert len(fields) == 3  # both modules' fields, no module filter
 
@@ -212,7 +231,7 @@ async def test_extract_document_pools_keyword_candidates_only(
 
     async with session_factory() as s:
         ctx = ExtractContext(
-            session=s, store=store, embedder=None, vector_store=None,
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
             doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
         )
         result = await extract_document(ctx=ctx, fields=fields, client=fake)
@@ -266,7 +285,7 @@ async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
     from fdi.core.extractor import FieldSpec
     from fdi.pipeline.extractor import extract_field
 
-    doc, _ = processed_doc
+    doc, _, _, _ = processed_doc
     blank = FieldSpec(
         field_name="Blank query field", data_type="string", retrieval_query="   ",
         keywords=(), extraction_prompt="x", enum_values=None, module_id=9,
@@ -292,7 +311,7 @@ async def test_extract_document_makes_one_llm_call_per_unit(
 ) -> None:
     """THE batching regression: 5 fields across 2 units must produce 2
     client.extract calls, not 5 -- and come back in INPUT order."""
-    doc, marker = processed_doc
+    doc, marker, embedder, vector_store = processed_doc
 
     def _f(name: str, unit_id: str) -> FieldSpec:
         return FieldSpec(
@@ -317,7 +336,7 @@ async def test_extract_document_makes_one_llm_call_per_unit(
 
     async with session_factory() as s:
         ctx = ExtractContext(
-            session=s, store=store, embedder=None, vector_store=None,
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
             doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
         )
         result = await extract_document(ctx=ctx, fields=fields, client=fake)

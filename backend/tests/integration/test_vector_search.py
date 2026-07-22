@@ -43,9 +43,11 @@ class _SpyVectorStore(FakeVectorStore):
         super().__init__()
         self.search_k_calls: list[int] = []
 
-    def search(self, vector: list[float], k: int) -> list[dict[str, object]]:
+    def search(
+        self, vector: list[float], k: int, *, filter: str = ""
+    ) -> list[dict[str, object]]:
         self.search_k_calls.append(k)
-        return super().search(vector, k)
+        return super().search(vector, k, filter=filter)
 
 
 @pytest.fixture
@@ -156,7 +158,7 @@ async def test_vector_search_no_filters_returns_both_docs(session_factory, store
     docs, embedder, vector_store = two_docs
     async with session_factory() as s:
         out = await vector_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query="Balance Sheet\nTotal Assets 100", k=5, filters=None,
         )
     doc_ids = {r["doc_id"] for r in out}
@@ -172,7 +174,7 @@ async def test_vector_search_section_type_filter(session_factory, store, two_doc
     docs, embedder, vector_store = two_docs
     async with session_factory() as s:
         out = await vector_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query="assets and notes", k=5, filters={"section_type": "NOTES"},
         )
     assert out
@@ -185,7 +187,7 @@ async def test_vector_search_doc_key_filter(session_factory, store, two_docs) ->
     _docs, embedder, vector_store = two_docs
     async with session_factory() as s:
         out = await vector_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query="assets and notes", k=5, filters={"doc_key": "alpha"},
         )
     assert out
@@ -198,7 +200,7 @@ async def test_vector_search_filter_matching_nothing_returns_empty(
     _docs, embedder, vector_store = two_docs
     async with session_factory() as s:
         out = await vector_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query="assets and notes", k=5, filters={"doc_key": "no-such-doc-key"},
         )
     assert out == []
@@ -211,11 +213,11 @@ async def test_vector_search_overfetches_only_when_filtered(session_factory, sto
     spy = _SpyVectorStore()
     async with session_factory() as s:
         await vector_search(
-            session=s, store=store, embedder=embedder, vector_store=spy,
+            session=s, embedder=embedder, vector_store=spy,
             query="q", k=3, filters=None,
         )
         await vector_search(
-            session=s, store=store, embedder=embedder, vector_store=spy,
+            session=s, embedder=embedder, vector_store=spy,
             query="q", k=3, filters={"section_type": "NOTES"},
         )
     assert spy.search_k_calls == [3, 15]
