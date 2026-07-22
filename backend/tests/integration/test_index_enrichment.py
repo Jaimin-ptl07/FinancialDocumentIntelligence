@@ -26,6 +26,7 @@ from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stage import StageContext
 from fdi.pipeline.stages.ast import AstStage
+from fdi.pipeline.stages.basis import BasisStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.embedding import EmbeddingStage
 from fdi.pipeline.stages.graph import GraphStage
@@ -63,6 +64,7 @@ def _registry() -> StageRegistry:
     reg.register(GraphStage())
     reg.register(ProvenanceStage())
     reg.register(StructureStage())
+    reg.register(BasisStage())
     reg.register(ChunksStage())
     reg.register(EmbeddingStage())
     reg.register(IndexStage())
@@ -133,6 +135,7 @@ async def test_index_upserts_enriched_metadata(session_factory, store) -> None:
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(
         stage_name="embedding",

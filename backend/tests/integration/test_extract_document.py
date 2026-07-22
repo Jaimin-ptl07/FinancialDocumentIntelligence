@@ -3,7 +3,7 @@ FakeSemantic + FakeExtractorClient -- NO embedder/vector_store configured
 (hybrid_search degrades to keyword-only, RT-4) and NO Azure OpenAI call
 anywhere in this file. Proves: a text field's pool comes from
 keyword_search over the section chunk's FTS row; a numeric field's pool
-ALSO comes from keyword_search alone -- via the table-row chunk (t{i}r{j})
+ALSO comes from keyword_search alone -- via the table CARD (`t{i}`, TR-1 P2)
 that build_chunks emits from the `structure` artifact's tables and
 index_chunks_fts indexes right alongside section chunks, no separate
 get_tables injection (a get_tables table-blob candidate was measured to
@@ -33,6 +33,7 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
+from fdi.pipeline.stages.basis import BasisStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.embedding import EmbeddingStage
 from fdi.pipeline.stages.graph import GraphStage
@@ -132,17 +133,17 @@ def _schema(marker: str) -> dict[str, object]:
 async def processed_doc(session_factory, store):
     """One fully-processed document: a text section (matched by BM25/vector
     search over its s{i} chunk) + a numeric table (matched by BM25/vector
-    search over its t{i}/t{i}r{j} table chunks, indexed into Milvus right
-    alongside section chunks -- no get_tables involved). RT-9: the pool now
-    comes from a REAL (fake) Milvus, so `embedding` and `index` are run too,
-    injecting a FakeEmbeddingClient/FakeVectorStore -- mirroring
+    search over its t{i} table CARD, indexed into Milvus right alongside
+    section chunks -- no get_tables involved). RT-9: the pool now comes from
+    a REAL (fake) Milvus, so `embedding` and `index` are run too, injecting a
+    FakeEmbeddingClient/FakeVectorStore -- mirroring
     test_index_enrichment.py's pattern -- and the fakes are returned so the
     caller can build an ExtractContext with a populated store. Returns
     (doc, marker, embedder, vector_store)."""
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-                  ProvenanceStage(), ChunksStage(), StructureStage(),
+                  ProvenanceStage(), ChunksStage(), StructureStage(), BasisStage(),
                   EmbeddingStage(), IndexStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
@@ -195,6 +196,7 @@ async def processed_doc(session_factory, store):
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(
         stage_name="embedding", run_id=str(uuid.uuid4()),
@@ -223,7 +225,7 @@ async def test_extract_document_pools_keyword_candidates_only(
         {"Total assets": {
             "value": 12345.0,
             "source": {"page": None, "snippet": "Total assets 12,345",
-                       "evidence_ids": [f"{doc.id}:t0r1"]},
+                       "evidence_ids": [f"{doc.id}:t0"]},
             "confidence": 0.95}},
         # RU_NOWHERE IS retrieved -- the vector channel always returns its
         # k nearest neighbours, so a hybrid pool is never empty for a
@@ -255,7 +257,7 @@ async def test_extract_document_pools_keyword_candidates_only(
 
     assert f1["field_name"] == "Total assets"
     assert f1["value"] == 12345.0
-    assert f1["source"]["evidence_ids"] == [f"{doc.id}:t0r1"]
+    assert f1["source"]["evidence_ids"] == [f"{doc.id}:t0"]
 
     assert f2["field_name"] == "Unmatchable field"
     assert f2["value"] is None
@@ -267,8 +269,8 @@ async def test_extract_document_pools_keyword_candidates_only(
     assert f2["source"]["evidence_ids"] == []
 
     # B4: geometry rides along on `source`, joined from the provenance
-    # (s{i} -> graph node -> OCR paragraph) and structure (t{i}r{j} ->
-    # per-cell regions, falling back to the whole table) artifacts.
+    # (s{i} -> graph node -> OCR paragraph) and structure (t{i} -> the
+    # whole table's bounding region) artifacts.
     assert isinstance(f0["source"]["bounding_regions"], list)
     assert f1["source"]["bounding_regions"] == [{"page_number": 1, "polygon": []}]
     # The unmatchable field cited nothing, so there is nothing to highlight --
@@ -277,12 +279,17 @@ async def test_extract_document_pools_keyword_candidates_only(
 
     # One LLM call per Retrieval Unit -- THREE, because the vector channel
     # gives even RU_NOWHERE a pool. The numeric unit's prompt carries the
-    # table row chunk's text (found via the pool); no get_tables candidate
-    # (evidence_id would be "table:...") appears anywhere.
+    # table CARD's text (found via the pool); no get_tables candidate
+    # (evidence_id would be "table:...") appears anywhere. TR-1 P2's card is a
+    # LOCATION summary ONLY -- identity + column headers + row labels, no cell
+    # VALUES ("12,345" is not expected in the prompt until P3 wires grid
+    # rendering back in) -- "Rows: Total assets" (the card's own row-labels
+    # line) is what proves the card itself reached the prompt, not just the
+    # field's own label= metadata (which also happens to read "Total assets").
     assert len(fake.calls) == 3
     for _system, _user in fake.calls:
         assert "table:" not in _user
-    assert any("12,345" in _user for _system, _user in fake.calls)
+    assert any("Rows: Total assets" in _user for _system, _user in fake.calls)
 
 
 async def test_extract_field_blank_query_pool_is_empty_and_well_formed(

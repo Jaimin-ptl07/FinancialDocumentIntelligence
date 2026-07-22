@@ -3,17 +3,23 @@
 build_chunks joins a document's `ast` (section body text), `semantic`
 (section_type), and `provenance` (page) into one per-document `chunks` record --
 one chunk per AST section, under the shared identity `s{i}` that EmbeddingStage/
-IndexStage/Milvus already use. Phase 3a additionally derives table chunks from
-`structure` (below). build_vector_results (RT-2) is a pure filter/join/truncate
-of an already-fetched vector-store hit list; as of RT-9 the hit itself carries
-its text and citation metadata (Milvus stores them), so build_vector_results no
+IndexStage/Milvus already use. TR-1 P2 replaced the Phase 3a per-row `t{i}r{r}`
+table chunks with ONE table CARD per table (`t{i}`, unchanged id) derived from
+`structure` + the `basis` artifact (below) -- a LOCATION summary (identity +
+resolved column headers + row labels, no values) rather than a flattened
+row-by-row blob, so the reranker sees one candidate per table instead of one
+per row. build_vector_results (RT-2) is a pure filter/join/truncate of an
+already-fetched vector-store hit list; as of RT-9 the hit itself carries its
+text and citation metadata (Milvus stores them), so build_vector_results no
 longer consumes a resolve_chunks() result -- there is no per-search artifact
 read behind it any more. fuse (RT-4) is the second consumer of this hit shape:
 pure Reciprocal Rank Fusion over RT-2's vector_search and RT-3's keyword_search
 hit lists. Reads inputs as plain Mappings -- no import of
-fdi.core.ast/semantic/provenance, no import of fdi.platform.*/fdi.pipeline.*.
+fdi.core.ast/semantic/provenance, no import of fdi.platform.*/fdi.pipeline.*
+(fdi.core.basis's pure, total `page_basis` lookup is the one exception, per
+the TR-1 design: basis is a first-class dimension tagged onto every card).
 Never raises: malformed/partial input degrades per-field (section_type/page ->
-None).
+None, basis -> "unknown").
 
 RT-9 retired chunk_rows_for_index along with the Postgres `chunk` table and
 index_chunks_fts/keyword_search: keyword search is now Milvus-native BM25
@@ -21,9 +27,26 @@ over the same collection vector_search already reads, so there is no
 Postgres row-building step left in this module.
 """
 
+import re
 from collections.abc import Mapping, Sequence
 
-_WHOLE_TABLE_MAX_CHARS = 4000
+from fdi.core.basis import page_basis
+
+_STATEMENT_TYPE_ANCHORS: tuple[tuple[str, str], ...] = (
+    ("balance sheet", "BS"),
+    ("statement of profit and loss", "PL"),
+    ("profit and loss", "PL"),
+    ("cash flow", "CF"),
+)
+
+_UNIT_ANCHORS: tuple[tuple[str, str], ...] = (
+    ("lakh", "Rs Lakhs"),
+    ("crore", "Rs Crore"),
+    ("million", "Rs Million"),
+)
+
+_NOTE_LEADING_RE = re.compile(r"^\s*note\s+(\d+)", re.IGNORECASE)
+_NUMBER_LEADING_RE = re.compile(r"^\s*(\d+)\.")
 
 
 def _int_or_none(value: object) -> int | None:
@@ -54,33 +77,89 @@ def _table_page(table: Mapping[str, object]) -> int | None:
     return None
 
 
-def _row_label_and_pairs(
-    row: Sequence[object], column_headers: Sequence[object]
-) -> tuple[str, str]:
-    """`row[0]` is the row label (column 0); columns 1..N are rendered
-    "{header}={value}", blank cells (empty after `.strip()`) omitted
-    entirely -- never rendered as `header=`."""
+def _table_caption_text(table: Mapping[str, object]) -> str:
+    """The table's raw `caption.content`, or `""` if absent/malformed -- the
+    text `statement_type`/`note_no`/`units` detection runs against (distinct
+    from `_table_context`'s `f"Table {i}"` DISPLAY fallback, which must never
+    leak into these best-effort detectors)."""
+    caption = table.get("caption")
+    if isinstance(caption, Mapping):
+        content = caption.get("content")
+        if isinstance(content, str):
+            return content
+    return ""
+
+
+def _statement_type(caption_text: str) -> str:
+    """Best-effort primary-statement classification from the table's caption
+    text: `"BS"`/`"PL"`/`"CF"` on a matching anchor phrase, else `"unknown"`
+    -- never blocks, `"unknown"` is a valid, expected outcome."""
+    casefolded = caption_text.casefold()
+    for anchor, statement_type in _STATEMENT_TYPE_ANCHORS:
+        if anchor in casefolded:
+            return statement_type
+    return "unknown"
+
+
+def _note_no(caption_text: str) -> str:
+    """A leading `"Note <n>"` or `"<n>."` in the caption -> `str(n)`, else
+    `""` (never blocks note-less tables, e.g. primary statements)."""
+    match = _NOTE_LEADING_RE.match(caption_text)
+    if match:
+        return match.group(1)
+    match = _NUMBER_LEADING_RE.match(caption_text)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def _units(caption_text: str) -> str:
+    """Best-effort units label from the caption text (`"lakh"`/`"crore"`/
+    `"million"` -> `"Rs Lakhs"`/`"Rs Crore"`/`"Rs Million"`), else `""`."""
+    casefolded = caption_text.casefold()
+    for anchor, units in _UNIT_ANCHORS:
+        if anchor in casefolded:
+            return units
+    return ""
+
+
+def _table_grid_rows(
+    structure_table: Mapping[str, object],
+) -> tuple[int, int, list[object], list[object]]:
+    """`(n_rows, header_row_count, rows, column_headers)` from a table's
+    `grid`, each degrading to `0`/`0`/`[]`/`[]` on malformed input."""
+    grid_obj = structure_table.get("grid")
+    grid_map = grid_obj if isinstance(grid_obj, Mapping) else {}
+    n_rows_raw = grid_map.get("n_rows")
+    n_rows = n_rows_raw if isinstance(n_rows_raw, int) else 0
+    header_row_count_raw = grid_map.get("header_row_count")
+    header_row_count = (
+        header_row_count_raw if isinstance(header_row_count_raw, int) else 0
+    )
+    rows_raw = grid_map.get("grid")
+    rows = rows_raw if isinstance(rows_raw, list) else []
+    headers_raw = grid_map.get("column_headers")
+    column_headers = headers_raw if isinstance(headers_raw, list) else []
+    return n_rows, header_row_count, rows, column_headers
+
+
+def _row_label(row: Sequence[object]) -> str:
     label_raw = row[0] if row else ""
-    label = label_raw if isinstance(label_raw, str) else ""
-    pairs: list[str] = []
-    for c in range(1, len(row)):
-        val_raw = row[c]
-        val = val_raw if isinstance(val_raw, str) else ""
-        if not val.strip():
-            continue
-        header_raw = column_headers[c] if c < len(column_headers) else ""
-        header = header_raw if isinstance(header_raw, str) else ""
-        pairs.append(f"{header}={val}")
-    return label, ", ".join(pairs)
+    return label_raw if isinstance(label_raw, str) else ""
 
 
-def _table_chunks(structure: Mapping[str, object]) -> list[dict[str, object]]:
-    """One chunk per DATA row (`chunk_id=f"t{i}r{r}"`, `r` the row's absolute
-    index into `grid["grid"]` -- the same integer `core.tables.find_concept_rows`
-    iterates with -- NOT a data-row-relative counter) plus one capped
-    whole-table chunk (`chunk_id=f"t{i}"`) per table, `i` the table's position
-    in `structure["tables"]`. A `structure` with no/malformed `tables` list
-    emits nothing (degrades, never raises)."""
+def _table_chunks(
+    structure: Mapping[str, object], basis: Mapping[str, object]
+) -> list[dict[str, object]]:
+    """ONE card per table (`chunk_id=f"t{i}"`, `i` the table's position in
+    `structure["tables"]` -- TR-1 P2 replaces the old per-row `t{i}r{r}`
+    chunks + capped whole-table blob with this single LOCATION-summary card:
+    identity line (statement type, basis, note, units, page) + resolved
+    column headers + data-row labels -- no cell VALUES, so the card is
+    findable/basis-searchable without flooding the reranker the way the old
+    per-row fragments did. A `structure` with no/malformed `tables` list
+    emits nothing (degrades, never raises); a malformed/missing `basis`
+    artifact degrades every card's basis to `"unknown"` via `page_basis`."""
     tables_raw = structure.get("tables")
     tables = tables_raw if isinstance(tables_raw, list) else []
 
@@ -90,46 +169,40 @@ def _table_chunks(structure: Mapping[str, object]) -> list[dict[str, object]]:
             continue
         context = _table_context(table_raw, i)
         page = _table_page(table_raw)
+        basis_str = page_basis(basis, page)
 
-        grid_obj = table_raw.get("grid")
-        grid_map = grid_obj if isinstance(grid_obj, Mapping) else {}
-        n_rows_raw = grid_map.get("n_rows")
-        n_rows = n_rows_raw if isinstance(n_rows_raw, int) else 0
-        header_row_count_raw = grid_map.get("header_row_count")
-        header_row_count = (
-            header_row_count_raw if isinstance(header_row_count_raw, int) else 0
+        caption_text = _table_caption_text(table_raw)
+        statement_type = _statement_type(caption_text)
+        note_no = _note_no(caption_text)
+        units = _units(caption_text)
+
+        n_rows, header_row_count, rows, column_headers = _table_grid_rows(table_raw)
+
+        col_headers_joined = " | ".join(
+            h for h in column_headers[1:] if isinstance(h, str) and h
         )
-        rows_raw = grid_map.get("grid")
-        rows = rows_raw if isinstance(rows_raw, list) else []
-        headers_raw = grid_map.get("column_headers")
-        column_headers = headers_raw if isinstance(headers_raw, list) else []
 
-        table_lines: list[str] = []
+        row_labels: list[str] = []
         for r in range(header_row_count, n_rows):
             row_obj = rows[r] if r < len(rows) else []
             row = row_obj if isinstance(row_obj, list) else []
-            label, pairs_str = _row_label_and_pairs(row, column_headers)
-            row_text = f"{label}: {pairs_str}"
-            table_lines.append(row_text)
-            out.append({
-                "chunk_id": f"t{i}r{r}",
-                "heading": context,
-                "text": f"{context} | {row_text}",
-                "section_type": None,
-                "page": page,
-                "para_count": None,
-            })
+            row_labels.append(_row_label(row))
+        row_labels_joined = "; ".join(row_labels)
 
-        header_line = ", ".join(
-            h for h in column_headers[1:] if isinstance(h, str) and h
+        note_part = f" | note {note_no}" if note_no else ""
+        units_part = f" | {units}" if units else ""
+
+        text = (
+            f"[{context} | {statement_type} | basis={basis_str}"
+            f"{note_part}{units_part} | page {page}]\n"
+            f"Columns: {col_headers_joined}\n"
+            f"Rows: {row_labels_joined}"
         )
-        whole_text = "\n".join([context, header_line, *table_lines])[
-            :_WHOLE_TABLE_MAX_CHARS
-        ]
+
         out.append({
             "chunk_id": f"t{i}",
             "heading": context,
-            "text": whole_text,
+            "text": text,
             "section_type": None,
             "page": page,
             "para_count": None,
@@ -159,6 +232,7 @@ def build_chunks(
     semantic: Mapping[str, object],
     provenance: Mapping[str, object],
     structure: Mapping[str, object],
+    basis: Mapping[str, object],
 ) -> dict[str, object]:
     page_by_node: dict[str, int] = {}
     node_prov = provenance.get("node_provenance")
@@ -208,7 +282,7 @@ def build_chunks(
         })
         k += 1
 
-    table_chunks = _table_chunks(structure)
+    table_chunks = _table_chunks(structure, basis)
     return {"schema_version": 1, "chunks": _dedup_by_text(chunks + table_chunks)}
 
 

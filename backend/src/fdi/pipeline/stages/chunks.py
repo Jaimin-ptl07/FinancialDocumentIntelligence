@@ -1,18 +1,20 @@
 """ChunksStage: the RT-1 retrieval foundation. A DERIVED stage joining `ast`,
-`semantic`, `provenance`, and (Phase 3a) `structure` into a per-document `chunks`
-artifact -- one record per AST section (text + section_type + page) under the
-shared `s{i}` identity, PLUS one record per table data row (`t{i}r{j}`) and one
-capped whole-table record (`t{i}`) per canonicalized table in `structure`. No
-injected service, no external call: a pure function of four cached artifacts.
+`semantic`, `provenance`, `structure`, and (TR-1 P2) `basis` into a per-document
+`chunks` artifact -- one record per AST section (text + section_type + page)
+under the shared `s{i}` identity, PLUS one table CARD (`t{i}`) per
+canonicalized table in `structure`, tagged with its standalone/consolidated
+`basis`. No injected service, no external call: a pure function of five
+cached artifacts.
 
 Pre-check finding: SemanticStage emits one `sections` entry per counted AST
 section in AST order (see stages/semantic.py), so build_chunks' positional
 section_type alignment holds; the None fallback covers any drift.
 
-version=2: Phase 3a adds `structure` as a dep and table-derived chunks (SP
-2026-07-19 ph3-table-chunks-design.md, subset scoped to build_chunks/ChunksStage/
-EmbeddingStage -- table<->AST-section linking (`table_refs`) and the raw<->
-structure table-index bridge are deferred to Phase 3b).
+version=3: TR-1 P2 adds `basis` as a dep and replaces the Phase 3a per-row
+`t{i}r{r}` chunks + capped whole-table blob with ONE table card per table
+(`docs/superpowers/specs/2026-07-22-table-representation-design.md` sec 4,
+subset scoped to build_chunks/ChunksStage -- grid rendering and basis-aware
+retrieval filtering are deferred to P3/P4b).
 """
 
 from collections.abc import Mapping
@@ -25,15 +27,16 @@ from fdi.pipeline.stage import StageContext
 
 class ChunksStage:
     name = "chunks"
-    version = 2
-    deps: tuple[str, ...] = ("ast", "semantic", "provenance", "structure")
+    version = 3
+    deps: tuple[str, ...] = ("ast", "semantic", "provenance", "structure", "basis")
 
     async def run(self, ctx: StageContext) -> object:
         ast = cast(Mapping[str, object], await ctx.read("ast"))
         semantic = cast(Mapping[str, object], await ctx.read("semantic"))
         provenance = cast(Mapping[str, object], await ctx.read("provenance"))
         structure = cast(Mapping[str, object], await ctx.read("structure"))
-        return build_chunks(ast, semantic, provenance, structure)
+        basis = cast(Mapping[str, object], await ctx.read("basis"))
+        return build_chunks(ast, semantic, provenance, structure, basis)
 
 
 REGISTRY.register(ChunksStage())
