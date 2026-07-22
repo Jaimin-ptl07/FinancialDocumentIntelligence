@@ -165,3 +165,138 @@ which ANDs EVERY term. Measured on the live corpus:
   the true 133) -- misleading aggregate, worth fixing.
 NEXT: fix keyword_search (websearch_to_tsquery / OR + ts_rank, or restore count-of-matching-terms). That is
 the single highest-value retrieval fix on the board, and it is independent of EX-1.
+
+## RT-9 BM25 keyword retrieval (plan 2026-07-21-rt9-bm25-keyword-retrieval.md, base 205d2e9)
+Pre-flight: fixed plan bug (bc5d304) -- Task 1's fake filter parser handled only `field == "value"` and RAISED on
+  anything else, but Task 5's _milvus_filter emits `doc_id in [...]`. Fake would have rejected the only shape
+  production emits, while Task 1 tested a shape production never emits.
+RT-9 Task 1: complete (commit 1bf47ba, review clean, 12 passed, ruff+mypy green; VectorStore.search_text + filter)
+  Minor (defer to final review): _matches_filter `in [...]` value split is comma-naive -- `doc_id in ["a,b"]` parses
+    as two values instead of one; not reachable from _milvus_filter (doc ids carry no commas)
+  Minor: task-1-report mislabels a NEW test as pre-existing; cosmetic, report only
+RT-9 Task 2: complete (commits 2adfacb + fix 508b579, re-review APPROVED, 7 unit / 594 fast passed, ruff+mypy green)
+  Reviewer caught Important coverage regression: the rewritten test asserted only schema field NAMES, so an
+  implementation hardcoding dim=384 instead of self._dim would have passed the entire suite. Fixed: store built with
+  dim=4 and the vector field's dim asserted. Also fixed an ILLUSORY ordering assertion -- the fake captured the schema
+  by reference, so "BM25 Function declared BEFORE create_collection" passed even if add_function ran after; the fake
+  now snapshots the count inside create_collection. Restored the dropped max_length=512 rationale.
+RT-9 Task 3: complete (commits e81b459 + fix 8ded8e4, re-review APPROVED, 4 integration / 594 fast passed)
+  Reviewer caught Important gap: the "no matching chunks record" fallback was implemented but UNTESTED. If it ever
+  emitted None instead of "", Milvus's str field would reject the upsert -- and a dropped chunk is a silent keyword
+  retrieval hole. Test now pins `text == ""` explicitly (a falsy check would also pass for None).
+PARALLEL WAVE: Tasks 4 and 8 dispatched concurrently (disjoint files; 8 worktreed from this commit because it needs
+  Task 2's schema and cannot branch from mainline). Task 5 is a hard chain after 4. Tasks 6+7 pair after 5.
+RT-9 Task 4: complete (commit d04cd4a, review clean, 16 unit / 591 fast passed, ruff+mypy green; build_vector_results
+  reads text off the hit, `resolved` dropped, `docs` kept). test_retrieval_fuse.py verified UNEDITED.
+  Minor (Task 5 closes both): vector_search still carries an unused `store` param; pipeline/retrieval.py module
+  docstring still claims RT-2 calls resolve_chunks.
+RT-9 Task 5: complete (bm25_search added, keyword_search/index_chunks_fts deleted; DocumentRepository.ids_for added;
+  15 unit (bm25+fuse) / 598 fast passed, ruff clean; test_retrieval_fuse.py verified UNEDITED byte-for-byte).
+  Unplanned but required: routes.py's top-level `from fdi.pipeline.retrieval import (... index_chunks_fts,
+  keyword_search ...)` is a hard ImportError once those names are deleted, and fdi.api.app imports routes.py at
+  module scope -- so tests/unit/test_cors.py (a genuinely fast test) would 500 the whole collection run without a
+  fix. Fixed: dropped the dead import, dropped `store=` from the two remaining vector_search/hybrid_search calls,
+  and deleted the two routes (`/documents/{id}/index_fts`, `/retrieve/keyword`) whose backing functions no longer
+  exist -- no 503 branch added, that redesign stays Task 6's job. Same ImportError problem pre-existed in four
+  integration test files that import the deleted names directly: test_keyword_search.py and
+  test_index_chunks_fts.py test ONLY the deleted functions (deleted outright, nothing salvageable); test_hybrid_
+  search.py and test_extract_document.py used index_chunks_fts merely to double-seed a Postgres `chunk` table
+  their real subject (hybrid_search / extract_document) no longer reads (IndexStage already seeds Milvus) --
+  trimmed that dead seeding step + the import, left the rest of both files (old `store=`/keyword-only-degrade
+  call shapes) for Task 6. extractor.py and agent_tools.py were NOT touched -- their broken `hybrid_search(store=...)`
+  calls are wrapped in try/except or only statically inspected by the fast suite, so they don't turn it red; left
+  for Task 6 as planned. mypy --strict src: 8 EXPECTED errors across exactly those 3 untouched files (call-arg on
+  `store`, arg-type on now-required embedder/vector_store) -- matches the plan's own sequencing note that this
+  interim state goes red in mypy/full-suite terms until Task 6.
+RT-9 Task 8: complete (commit d9aadfc, merged 837295e). Agent HUNG before committing; controller verified and landed it.
+  LIVE MILVUS VERIFIED by controller: query "revenue from operations" -> d1:s0 score=1.9426 (3-term match),
+  d1:s1 score=0.6028 (1-term), d1:s2 ABSENT (zero overlap). 3.2x separation. THE premise of RT-9 holds.
+  Also added MilvusVectorStore.upsert flush -- Milvus writes are not immediately readable; without it the first
+  search after ingestion silently returns nothing.
+RT-9 Task 5: commits 0086c1d + fb8d846 + a4af688. Review found CRITICAL, fix pending:
+  CRITICAL: tests/integration/test_hybrid_search.py still passes store= to hybrid_search at 5 call sites (lines
+    179/194/209/224/237) -> TypeError, whole file red under -m integration. Escaped because only the FAST suite was
+    run. Line 209 additionally tests "degrade to keyword-only when embedder/vector_store are None", which RT-4
+    decision 2's supersession makes invalid.
+  Minor: hybrid_search resolves doc_ids TWICE (bm25_search and vector_search each call _doc_ids_for for the same
+    doc_key/version) -- two Postgres round trips where one would do.
+  Minor: the empty-doc_ids guard (filter requested but resolves to zero docs -> return [], NOT unscoped) is present
+    and correct in both functions but has NO test.
+  Adjudicated OK: deleting test_keyword_search.py/test_index_chunks_fts.py (tested only deleted functions); the
+    routes.py edit was genuinely forced (ImportError crashed fast-suite collection via test_cors -> create_app).
+RT-9 Task 6: complete (commit 834306a, mypy 0 errors (was 8), test_api 79 / fast 598 passed)
+RT-9 Task 5 CRITICAL fixed (commit f9d0ba6): test_hybrid_search.py was 5-failed/0-passed -- store= removed from all
+  hybrid_search calls; deleted the degrade-to-keyword-only test (contract superseded, 503 coverage confirmed to exist
+  at test_api.py::test_retrieve_hybrid_503s_when_vector_store_unconfigured); also fixed a SECOND latent bug the
+  reviewer did not see -- _SpyVectorStore.search had a stale signature missing the `filter` kwarg, which only
+  surfaced once the store= failures cleared. Now 4 passed. RRF both-channels assertion survives and passes.
+RT-9 Task 7: BLOCKED -- SPEC GAP found by implementer, escalated correctly without touching code.
+  GET /analytics's chunk_count reads the `chunk` table (repository.py:508 corpus_totals -> schemas.py:556 ->
+  routes.py:1129), and frontend/app/analytics/page.tsx:85 RENDERS it. The RT-9 spec's "delete the chunk table"
+  never accounted for this because analytics landed in 282499a -- one of the OTHER session's 10 commits merged into
+  mainline AFTER the spec was written. Genuine concurrent-work collision, not an oversight in review.
+  Keeping the table as an analytics-only counter is NOT viable: index_chunks_fts is already deleted, so nothing
+  writes to it and chunk_count would silently report 0 forever.
+RT-9 Task 7: complete -- blocker resolved by repointing chunk_count at VectorStore.count() before dropping the
+  table, per the human's dispatch. Added VectorStore.count()/FakeVectorStore.count() (pipeline/vectorstore.py) and
+  MilvusVectorStore.count() (platform/vectorstore.py, get_collection_stats()["row_count"], 0 when no collection
+  yet). corpus_totals/CorpusTotals no longer reference Chunk at all -- pure Postgres again. routes.py's analytics
+  handler now takes VectorStoreDep and computes chunk_count = vector_store.count() if not None else 0 (0 on an
+  unconfigured store, matching the empty-corpus-is-200-with-zeros contract; no 503). test_analytics.py reworked to
+  drive chunk_count through a FakeVectorStore override on app.state (no shared-Postgres-delta problem since each
+  create_app() starts a fresh in-memory store). Then dropped chunk_rows_for_index, the Chunk model, and wrote
+  migration 0007 (mirrors 0006 exactly, inverted); alembic upgrade/downgrade/upgrade all succeed. Also updated
+  test_migrations.py (3 chunk-table tests -> one to_regclass('chunk') IS NULL check; alembic_version now asserts
+  "0007"), which the brief did not call out but which referenced the dropped table directly.
+  grep -rn "Chunk\b" backend/src: zero model consumers (one unrelated docstring hit in core/provenance.py, "Chunk
+  resolution", not the ORM class).
+  Full suite: 797 passed, 11 skipped, 8 failed -- same 8 failures reproduced against the pre-Task-7 baseline via
+  git stash (test_vector_search.py x5 + test_extract_document.py x2 + test_index_stage.py x1, all
+  `vector_search() got an unexpected keyword argument 'store'` or downstream of it): pre-existing, unrelated to
+  this task, not touched. ruff clean, mypy --strict 0 errors.
+RT-9 Task 7: complete (commit 2d8b3b0) -- chunk_count REPOINTED to Milvus (VectorStore.count via
+  get_collection_stats["row_count"]; corpus_totals pure-Postgres again; /analytics reads vector_store, 0 when
+  unconfigured, no 503); chunk table + Chunk model + chunk_rows_for_index dropped; migration 0007 round-trips.
+  Human decided the repoint over dropping the field (analytics collision from other session's 282499a).
+FULL INTEGRATION SUITE (controller-run, NOT trusting agent's "8 pre-existing" claim): 8 FAILED, 202 passed. ALL 8
+  are RT-9 test-side fallout, proven NOT pre-existing (base 205d2e9 vector_search took `store`, tests passed):
+  - test_vector_search.py x5: store= kwarg on vector_search calls (Task 5 removed the param, missed these sites)
+  - test_index_stage.py x1: hardcodes artifact_key(...,"index",2,...) but Task 3 bumped IndexStage to v3; also its
+    metadata assertion predates text/doc_id
+  - test_extract_document.py x2: Task 5 removed the index_chunks_fts Postgres seeding but left the tests running
+    extraction with vector_store=None -> empty pool -> value None / 0 unit calls. Premise ("keyword-only,
+    vector_store=None") is now structurally dead; must seed Milvus + pass a real vector_store.
+  Task 7 agent MISDIAGNOSED these as "pre-existing, unrelated" via a flawed git-stash check (stashing its own
+  changes left Task 5's store removal in place). Controller disproved via base-commit signature check.
+RT-9 integration fixes: agent fixed 7/8 (commit a66c073) but MISDIAGNOSED the 8th and left it half-converted
+  (ExtractContext got the real vector_store, but scripted responses + assertions stayed at the empty-pool premise).
+  Controller finished it (commit 1de99ce): RU_NOWHERE now retrieves via the vector channel (hybrid pool never empty
+  for a non-empty corpus), so 3 LLM calls not 2, and the model returns null for unanswerable context. Empty-pool
+  short-circuit still covered by test_extract_field_blank_query_pool_is_empty (genuine blank query).
+  TOOLING NOTE: file is CRLF; Edit tool desynced mid-edit -- had to apply the final replacements via a uv-run python
+  script reading/writing with newline="" to preserve CRLF. Watch for this on CRLF files.
+  Gates after fix: ruff clean, mypy 0 errors. Full suite verifying.
+ALL 8 RT-9 TASKS + all fallout complete. Ready for final whole-branch review once full suite confirms green.
+RT-9 FINAL WHOLE-BRANCH REVIEW (opus, 205d2e9..1de99ce, 17 commits): READY TO MERGE, no Critical/Important.
+  Verified: pure-core, structural-protocol, fuse untouched, explicit output_fields, 503-only-in-routes, doc_id
+  filter never leaks corpus, analytics degrades to 0 (not 503), migration 0007 reverses 0006 exactly, reworked
+  tests honest. Carried-forward Minors (a) comma-naive fake filter split (b) hybrid resolves doc_ids twice
+  (c) bm25 empty-doc_ids guard untested -- all triaged ACCEPT.
+  Two cleanups applied before merge (commit d7c5c0e): removed dead store:StoreDep from retrieve_vector +
+  hybrid_search_route (spec 3.3 "silent lie" leftover); added the bm25 empty-doc_ids guard test (closes (c)).
+  Post-cleanup: fast 595 passed, test_api+bm25 85 passed, ruff clean, mypy 0. FINAL full suite: 806 passed, 11 skipped, 0 failed. RT-9 COMPLETE, reviewed clean, ready to merge.
+
+RT-9 END-TO-END VERIFICATION (2026-07-22):
+  Azure OpenAI endpoint is DOWN (APITimeoutError on a trivial 1-token call, 17.7s) -- environmental, NOT RT-9.
+  The e2e extraction returned all-null because extract_unit's contextlib.suppress swallowed the timing-out
+  client.extract calls; retrieval demonstrably WORKED (all 198 fields had populated pools + evidence_ids).
+  So field-accuracy (LLM extraction) is UNMEASURABLE until Azure recovers.
+  PIVOTED to the LLM-FREE measurement that isolates what RT-9 actually changed -- answer-in-context recall,
+  A/B with BM25 toggled, real Milvus:
+    vector-only (BM25 off): 138/196 = 70.4%   (matches the prior e2e's 133 populated -> baseline confirmed)
+    hybrid (BM25 + dense):  179/196 = 91.3%
+    BM25 DELTA: +41 fields
+    RU_COMPANY recovered 0/9 -> 7/9 (the exact predicted failure case).
+  RT-9 DELIVERED: retrieval recall +20.9 points, entirely attributable to the revived keyword channel.
+  The LLM's job is now strictly easier (answer in context 91% vs 70%); the field-accuracy confirmation is
+  bottlenecked ONLY on the LLM, which is down. Merge gate cleared on the retrieval dimension.

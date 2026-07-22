@@ -1,7 +1,9 @@
-"""hybrid_search: RRF fusion of vector_search (RT-2) + keyword_search (RT-3)
-over the SAME corpus, indexed into BOTH FakeVectorStore and the `chunk`
-table. Against real Postgres + MinIO with FAKE OCR/semantic/embedding/
-vector-store clients -- no BGE/Milvus in the default suite."""
+"""hybrid_search: RRF fusion of vector_search (RT-2) + bm25_search (RT-9)
+over the SAME corpus, indexed once into a FakeVectorStore (both channels now
+share that one seam -- see fdi.pipeline.stages.index's v3 `text` field).
+Against real Postgres + MinIO with FAKE OCR/semantic/embedding/vector-store
+clients -- no BGE/Milvus in the default suite. `session`/Postgres are still
+required: hybrid_search resolves doc_key/version filters to doc_ids there."""
 
 import uuid
 
@@ -15,7 +17,7 @@ from fdi.pipeline.intake import intake_document
 from fdi.pipeline.ocr import FakeOcrClient
 from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
-from fdi.pipeline.retrieval import hybrid_search, index_chunks_fts
+from fdi.pipeline.retrieval import hybrid_search
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
@@ -43,9 +45,11 @@ class _SpyVectorStore(FakeVectorStore):
         super().__init__()
         self.search_k_calls: list[int] = []
 
-    def search(self, vector: list[float], k: int) -> list[dict[str, object]]:
+    def search(
+        self, vector: list[float], k: int, *, filter: str = ""
+    ) -> list[dict[str, object]]:
         self.search_k_calls.append(k)
-        return super().search(vector, k)
+        return super().search(vector, k, filter=filter)
 
 
 @pytest.fixture
@@ -75,23 +79,22 @@ def _fake_ocr(title_paras: list[dict[str, object]]) -> FakeOcrClient:
 async def hybrid_corpus(
     session_factory, store
 ) -> tuple[dict[str, dict[str, str]], FakeEmbeddingClient, FakeVectorStore, str]:
-    """Two fully-processed, DOUBLY-indexed documents (Milvus fake AND the
-    Postgres `chunk` table):
-    - "bs" (doc_key "alpha"): "Balance Sheet\\nTotal Assets 100 {marker}"
-      (BALANCE_SHEET). `marker` is a fresh uuid4 hex token embedded in the
-      OCR text so a query built around it matches ONLY this fixture's chunk
-      under plainto_tsquery's AND-of-lexemes semantics -- the `chunk` table
-      is session-scoped across the WHOLE integration suite, and several
-      other fixtures already use the literal, unmarked "Balance Sheet" /
-      "Total Assets 100" text.
-    - "notes" (doc_key "beta"): "Notes\\nSee appendix" (NOTES) -- shares no
-      vocabulary with the marked query, so it can never satisfy the marked
-      keyword query's AND clause; it exists to prove vector-only /
-      section_type-filtered behavior.
+    """Two fully-processed documents, indexed into a fresh, per-fixture
+    FakeVectorStore that now carries BOTH the vector and the BM25
+    (search_text term-overlap) channels:
+    - "bs" (doc_key "alpha-{marker}"): "Balance Sheet\\nTotal Assets 100
+      {marker}" (BALANCE_SHEET). `marker` is a fresh uuid4 hex token embedded
+      in the OCR text, kept for doc_key uniqueness (Postgres' `document`
+      table is session-scoped across the WHOLE integration suite, and
+      intake_document allocates the NEXT version per doc_key -- a shared
+      literal doc_key here would collide with other fixtures' expected
+      version==1 slot). The FakeVectorStore instance itself is fresh per
+      fixture, so it carries no cross-test collision risk on its own.
+    - "notes" (doc_key "beta-{marker}"): "Notes\\nSee appendix" (NOTES) --
+      shares no vocabulary with the marked query, so bm25_search's
+      zero-overlap-is-omitted semantics can never return it for that query;
+      it exists to prove vector-only / section_type-filtered behavior.
     Returns ({"bs": {...}, "notes": {...}}, embedder, vector_store, marker).
-    The FakeVectorStore is a fresh, per-fixture instance -- unlike Postgres,
-    it carries NO cross-test collision risk, so only the keyword side needs
-    the marker treatment.
     """
     reg = StageRegistry()
     for stage in (
@@ -164,9 +167,6 @@ async def hybrid_corpus(
             stage_name="index", run_id=str(uuid.uuid4()),
             services={"vector_store": vector_store}, **common,
         )
-        async with session_factory() as s:
-            await index_chunks_fts(session=s, store=store, doc_id=doc.id)
-            await s.commit()
         out[key] = {"doc_id": doc.id, "doc_key": doc_key}
 
     return out, embedder, vector_store, marker
@@ -179,7 +179,7 @@ async def test_hybrid_search_ranks_chunk_found_by_both_tools_first(
     query = f"Balance Sheet\nTotal Assets 100 {marker}"
     async with session_factory() as s:
         out = await hybrid_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query=query, k=2, filters=None,
         )
     assert out
@@ -194,27 +194,12 @@ async def test_hybrid_search_section_type_filter_applies_to_both_tools(
     query = f"Balance Sheet\nTotal Assets 100 {marker}"
     async with session_factory() as s:
         out = await hybrid_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query=query, k=5, filters={"section_type": "NOTES"},
         )
     assert out
     assert all(r["section_type"] == "NOTES" for r in out)
     assert all(r["doc_id"] != docs["bs"]["doc_id"] for r in out)
-
-
-async def test_hybrid_search_degrades_to_keyword_only_when_vector_unconfigured(
-    session_factory, store, hybrid_corpus
-) -> None:
-    docs, _embedder, _vector_store, marker = hybrid_corpus
-    query = f"Total Assets 100 {marker}"
-    async with session_factory() as s:
-        out = await hybrid_search(
-            session=s, store=store, embedder=None, vector_store=None,
-            query=query, k=5, filters=None,
-        )
-    assert out
-    assert out[0]["doc_id"] == docs["bs"]["doc_id"] and out[0]["chunk_id"] == "s0"
-    assert out[0]["score"] == pytest.approx(1 / 61)
 
 
 async def test_hybrid_search_overfetches_by_the_fuse_factor(session_factory, store) -> None:
@@ -224,7 +209,7 @@ async def test_hybrid_search_overfetches_by_the_fuse_factor(session_factory, sto
     spy = _SpyVectorStore()
     async with session_factory() as s:
         await hybrid_search(
-            session=s, store=store, embedder=embedder, vector_store=spy,
+            session=s, embedder=embedder, vector_store=spy,
             query="q", k=4, filters=None,
         )
     assert spy.search_k_calls == [12]
@@ -237,7 +222,7 @@ async def test_hybrid_search_empty_query_over_empty_corpus_returns_empty(
     vector_store = FakeVectorStore()
     async with session_factory() as s:
         out = await hybrid_search(
-            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            session=s, embedder=embedder, vector_store=vector_store,
             query="", k=5, filters=None,
         )
     assert out == []

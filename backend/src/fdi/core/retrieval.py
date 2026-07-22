@@ -4,14 +4,21 @@ build_chunks joins a document's `ast` (section body text), `semantic`
 (section_type), and `provenance` (page) into one per-document `chunks` record --
 one chunk per AST section, under the shared identity `s{i}` that EmbeddingStage/
 IndexStage/Milvus already use. Phase 3a additionally derives table chunks from
-`structure` (below). Every text-returning retrieval tool resolves a hit id back
-to text via this record. build_vector_results (RT-2) is the first such
-consumer: pure filter/join/truncate of an already-fetched vector-store hit list.
-fuse (RT-4) is the second: pure Reciprocal Rank Fusion over RT-2's vector_search
-and RT-3's keyword_search hit lists. Reads inputs as plain Mappings -- no import
-of fdi.core.ast/semantic/provenance, no import of fdi.platform.*/fdi.pipeline.*.
+`structure` (below). build_vector_results (RT-2) is a pure filter/join/truncate
+of an already-fetched vector-store hit list; as of RT-9 the hit itself carries
+its text and citation metadata (Milvus stores them), so build_vector_results no
+longer consumes a resolve_chunks() result -- there is no per-search artifact
+read behind it any more. fuse (RT-4) is the second consumer of this hit shape:
+pure Reciprocal Rank Fusion over RT-2's vector_search and RT-3's keyword_search
+hit lists. Reads inputs as plain Mappings -- no import of
+fdi.core.ast/semantic/provenance, no import of fdi.platform.*/fdi.pipeline.*.
 Never raises: malformed/partial input degrades per-field (section_type/page ->
 None).
+
+RT-9 retired chunk_rows_for_index along with the Postgres `chunk` table and
+index_chunks_fts/keyword_search: keyword search is now Milvus-native BM25
+over the same collection vector_search already reads, so there is no
+Postgres row-building step left in this module.
 """
 
 from collections.abc import Mapping, Sequence
@@ -207,7 +214,6 @@ def build_chunks(
 
 def build_vector_results(
     hits: list[Mapping[str, object]],
-    resolved: Mapping[str, Mapping[str, object]],
     docs: Mapping[str, Mapping[str, object]],
     *,
     section_type: str | None,
@@ -215,25 +221,23 @@ def build_vector_results(
     version: int | None,
     k: int,
 ) -> list[dict[str, object]]:
-    """Pure post-processing of an ALREADY-FETCHED vector-store hit list (RT-2).
-    `hits` is VectorStore.search's shape ({id, score, metadata}, best-match-
-    first); `resolved` is a resolve_chunks() result; `docs` is a plain
-    {doc_id: {"doc_key": ..., "version": ...}} dict the caller already read
-    from Postgres -- no ORM type crosses into core. Filters, joins citations,
-    truncates to k WITHOUT re-sorting (output order is a sub-sequence of the
-    input order). A hit is dropped, not erred, when: section_type is set and
-    doesn't match; doc_key/version is set and the hit's Document row is
-    missing or doesn't match; or its chunk id is absent from `resolved`. No I/O.
-    """
+    """Pure post-processing of an already-fetched vector-store hit list.
+
+    RT-9: the hit now CARRIES its own text and citation metadata (the Milvus
+    collection stores them), so there is no `resolved` chunk-record map any
+    more and no artifact read behind it. `docs` remains: the collection is
+    filtered on `doc_id` because a Stage has no `doc_key`/`version` to write,
+    so the doc_key/version citation is still joined here from a map the
+    caller read from Postgres. Filters, joins, truncates to k WITHOUT
+    re-sorting. Never raises."""
     results: list[dict[str, object]] = []
     for hit in hits:
         full_id = str(hit.get("id"))
+        meta_raw = hit.get("metadata")
+        meta = meta_raw if isinstance(meta_raw, Mapping) else {}
 
-        if section_type is not None:
-            meta = hit.get("metadata")
-            hit_type = meta.get("section_type") if isinstance(meta, Mapping) else None
-            if hit_type != section_type:
-                continue
+        if section_type is not None and meta.get("section_type") != section_type:
+            continue
 
         doc_id = full_id.split(":", 1)[0] if ":" in full_id else full_id
         doc = docs.get(doc_id)
@@ -242,59 +246,24 @@ def build_vector_results(
         if version is not None and (doc is None or doc.get("version") != version):
             continue
 
-        rec = resolved.get(full_id)
-        if rec is None:
-            continue
-
+        chunk_id = meta.get("chunk_id")
         score = hit.get("score")
         results.append({
-            "doc_id": rec.get("doc_id"),
+            "doc_id": doc_id,
             "doc_key": doc.get("doc_key") if doc is not None else None,
             "version": doc.get("version") if doc is not None else None,
-            "chunk_id": rec.get("chunk_id"),
-            "heading": rec.get("heading"),
-            "page": rec.get("page"),
-            "section_type": rec.get("section_type"),
-            "text": rec.get("text"),
+            "chunk_id": chunk_id if isinstance(chunk_id, str)
+            else (full_id.split(":", 1)[1] if ":" in full_id else ""),
+            "heading": meta.get("heading"),
+            "page": _int_or_none(meta.get("page")),
+            "section_type": meta.get("section_type"),
+            "text": meta.get("text") if isinstance(meta.get("text"), str) else "",
             "score": float(score) if isinstance(score, int | float) else 0.0,
         })
         if len(results) >= k:
             break
 
     return results
-
-
-def chunk_rows_for_index(
-    *,
-    doc_id: str,
-    doc_key: str | None,
-    version: int | None,
-    chunks: Sequence[Mapping[str, object]],
-) -> list[dict[str, object]]:
-    """From RT-1's `chunks` artifact records, build the flat rows
-    `index_chunks_fts` upserts into the `chunk` table. Pure; skips a record
-    with a missing/non-str/empty chunk_id, degrades heading/section_type/page
-    to None and text to "" on a malformed value. Never raises."""
-    rows: list[dict[str, object]] = []
-    for c in chunks:
-        chunk_id = c.get("chunk_id")
-        if not isinstance(chunk_id, str) or not chunk_id:
-            continue
-        heading = c.get("heading")
-        text = c.get("text")
-        section_type = c.get("section_type")
-        rows.append({
-            "id": f"{doc_id}:{chunk_id}",
-            "doc_id": doc_id,
-            "chunk_id": chunk_id,
-            "doc_key": doc_key,
-            "version": version,
-            "heading": heading if isinstance(heading, str) else None,
-            "text": text if isinstance(text, str) else "",
-            "section_type": section_type if isinstance(section_type, str) else None,
-            "page": _int_or_none(c.get("page")),
-        })
-    return rows
 
 
 _RRF_K = 60

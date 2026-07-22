@@ -131,7 +131,7 @@ async def test_index_stage_chains_off_embedding_and_chunks_and_caches(
     key = artifact_key(
         doc.id,
         "index",
-        2,
+        3,
         derived_input_hash([facts["embedding"].output_hash, facts["chunks"].output_hash]),
     )
     body = await store.get_json(key)
@@ -141,6 +141,8 @@ async def test_index_stage_chains_off_embedding_and_chunks_and_caches(
     hits = fake_store.search(query_vector, k=1)
     assert hits[0]["id"] == f"{doc.id}:s0"
     assert hits[0]["metadata"] == {
+        "text": "Balance Sheet\nAssets 100",
+        "doc_id": doc.id,
         "heading": "Balance Sheet",
         "chunk_id": "s0",
         "section_type": "BALANCE_SHEET",

@@ -94,13 +94,35 @@ def test_fake_search_text_empty_query_returns_nothing() -> None:
 
 
 def test_fake_search_text_filter_scopes_by_doc_id() -> None:
+    """The `in [...]` form is the ONLY filter production emits (see
+    `_milvus_filter` in Task 5). The fake must parse exactly that."""
     store = FakeVectorStore()
     store.upsert([
         _item("a:s1", [1.0, 0.0], text="revenue", doc_id="a"),
         _item("b:s1", [0.0, 1.0], text="revenue", doc_id="b"),
     ])
-    hits = store.search_text("revenue", 10, filter='doc_id == "a"')
+    hits = store.search_text("revenue", 10, filter='doc_id in ["a"]')
     assert [h["id"] for h in hits] == ["a:s1"]
+
+
+def test_fake_filter_accepts_multiple_doc_ids() -> None:
+    store = FakeVectorStore()
+    store.upsert([
+        _item("a:s1", [1.0, 0.0], text="revenue", doc_id="a"),
+        _item("b:s1", [0.0, 1.0], text="revenue", doc_id="b"),
+        _item("c:s1", [0.0, 1.0], text="revenue", doc_id="c"),
+    ])
+    hits = store.search_text("revenue", 10, filter='doc_id in ["a", "c"]')
+    assert sorted(h["id"] for h in hits) == ["a:s1", "c:s1"]
+
+
+def test_fake_filter_rejects_a_shape_it_cannot_parse() -> None:
+    """A fake that silently matched everything on an unrecognised filter would
+    make a broken filter look like a passing test."""
+    store = FakeVectorStore()
+    store.upsert([_item("a:s1", [1.0, 0.0], text="revenue", doc_id="a")])
+    with pytest.raises(ValueError):
+        store.search_text("revenue", 10, filter="page > 5")
 
 
 def test_fake_search_filter_scopes_vector_search_too() -> None:
@@ -109,7 +131,7 @@ def test_fake_search_filter_scopes_vector_search_too() -> None:
         _item("a:s1", [1.0, 0.0], doc_id="a"),
         _item("b:s1", [1.0, 0.0], doc_id="b"),
     ])
-    hits = store.search([1.0, 0.0], 10, filter='doc_id == "b"')
+    hits = store.search([1.0, 0.0], 10, filter='doc_id in ["b"]')
     assert [h["id"] for h in hits] == ["b:s1"]
 
 
@@ -150,19 +172,33 @@ class VectorStore(Protocol):
 Add the fake's filter helper and `search_text`, and thread `filter` through `search`:
 
 ```python
+_FILTER_IN_RE = re.compile(r'\s*(\w+)\s+in\s+\[(.*)\]\s*')
+_FILTER_EQ_RE = re.compile(r'\s*(\w+)\s*==\s*"([^"]*)"\s*')
+
+
 def _matches_filter(metadata: Mapping[str, object], filter: str) -> bool:
-    """Understands ONLY the one expression shape this codebase emits:
-    `field == "value"` joined by ` and `. This is a test double, not a query
-    engine -- anything else raises, loudly, rather than silently matching
-    everything and making a broken filter look like a passing test."""
+    """Understands ONLY the expression shapes this codebase emits:
+    `field in ["a", "b"]` (what `_milvus_filter` produces) and
+    `field == "value"`, joined by ` and `.
+
+    This is a test double, not a query engine -- an unrecognised shape raises,
+    loudly. A fake that silently matched everything on a filter it did not
+    understand would make a BROKEN filter look like a passing test, which is
+    the failure mode this whole sub-project exists to correct."""
     if not filter.strip():
         return True
     for clause in filter.split(" and "):
-        m = re.fullmatch(r'\s*(\w+)\s*==\s*"?([^"]*)"?\s*', clause)
-        if m is None:
+        m_in = _FILTER_IN_RE.fullmatch(clause)
+        if m_in is not None:
+            field = m_in.group(1)
+            wanted = {v.strip().strip('"') for v in m_in.group(2).split(",") if v.strip()}
+            if str(metadata.get(field)) not in wanted:
+                return False
+            continue
+        m_eq = _FILTER_EQ_RE.fullmatch(clause)
+        if m_eq is None:
             raise ValueError(f"FakeVectorStore cannot parse filter clause: {clause!r}")
-        field, value = m.group(1), m.group(2)
-        if str(metadata.get(field)) != value:
+        if str(metadata.get(m_eq.group(1))) != m_eq.group(2):
             return False
     return True
 

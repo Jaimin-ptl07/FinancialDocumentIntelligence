@@ -684,153 +684,6 @@ async def test_trigger_graph_load_unknown_document_is_404(
 
 
 # --------------------------------------------------------------------------
-# RT-3: POST /documents/{id}/index_fts + POST /retrieve/keyword
-# --------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def rt3_indexed_doc(session_factory, store) -> tuple[str, str]:
-    """One document run through ocr -> ... -> chunks DIRECTLY (run_stage, not
-    the queued HTTP triggers -- nothing in this suite runs a worker, same
-    posture as resolved_corpus_via_api above). Returns (doc_id, doc_key)."""
-    from fdi.core.semantic import SectionType
-    from fdi.pipeline.intake import intake_document
-    from fdi.pipeline.ocr import FakeOcrClient
-    from fdi.pipeline.registry import StageRegistry
-    from fdi.pipeline.resolver import DagResolver
-    from fdi.pipeline.run import run_stage
-    from fdi.pipeline.semantic import FakeSemanticClient
-    from fdi.pipeline.stages.ast import AstStage
-    from fdi.pipeline.stages.chunks import ChunksStage
-    from fdi.pipeline.stages.graph import GraphStage
-    from fdi.pipeline.stages.normalize import NormalizeStage
-    from fdi.pipeline.stages.ocr import OcrStage
-    from fdi.pipeline.stages.provenance import ProvenanceStage
-    from fdi.pipeline.stages.semantic import SemanticStage
-    from fdi.pipeline.stages.structure import StructureStage
-
-    doc_key = f"rt3-{uuid.uuid4()}"
-    doc = await intake_document(
-        pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
-        filename="a.pdf", doc_key=doc_key, content_type="application/pdf",
-        session_factory=session_factory, store=store,
-    )
-    fake_ocr = FakeOcrClient(
-        {
-            "content": "ACME",
-            "pages": [{"pageNumber": 1, "lines": [], "words": []}],
-            "paragraphs": [
-                {"role": "title", "content": "ACME LTD",
-                 "boundingRegions": [{"pageNumber": 1, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
-                {"role": "sectionHeading", "content": "Balance Sheet",
-                 "boundingRegions": [{"pageNumber": 1, "polygon": [0, 1, 1, 1, 1, 2, 0, 2]}]},
-                {"content": "Total Assets 100",
-                 "boundingRegions": [{"pageNumber": 1, "polygon": [0, 2, 1, 2, 1, 3, 0, 3]}]},
-                {"role": "sectionHeading", "content": "Directors' Report",
-                 "boundingRegions": [{"pageNumber": 2, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}]},
-                {"content": "The board is pleased.",
-                 "boundingRegions": [{"pageNumber": 2, "polygon": [0, 1, 1, 1, 1, 2, 0, 2]}]},
-            ],
-            "tables": [],
-        }
-    )
-    fake_semantic = FakeSemanticClient(
-        {
-            "Balance Sheet": SectionType.BALANCE_SHEET.value,
-            "Directors' Report": SectionType.DIRECTORS_REPORT.value,
-        }
-    )
-    reg = StageRegistry()
-    for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(),
-                  GraphStage(), ProvenanceStage(), StructureStage(), ChunksStage()):
-        reg.register(stage)
-    resolver = DagResolver(reg.all())
-    common = {
-        "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
-        "store": store, "registry": reg, "resolver": resolver,
-    }
-    await run_stage(
-        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
-    )
-    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="semantic", run_id=str(uuid.uuid4()),
-                     services={"semantic": fake_semantic}, **common)
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
-    return doc.id, doc_key
-
-
-async def test_trigger_index_fts_on_a_document(
-    client: AsyncClient, _alembic_applied, rt3_indexed_doc
-) -> None:
-    doc_id, _ = rt3_indexed_doc
-    r = await client.post(f"/documents/{doc_id}/index_fts")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["doc_id"] == doc_id
-    assert body["chunks_indexed"] == 2
-
-
-async def test_trigger_index_fts_unknown_document_is_404(
-    client: AsyncClient, _alembic_applied
-) -> None:
-    r = await client.post("/documents/00000000-0000-0000-0000-000000000000/index_fts")
-    assert r.status_code == 404
-
-
-async def test_trigger_index_fts_no_chunks_artifact_returns_zero(
-    client: AsyncClient, _alembic_applied
-) -> None:
-    pdf = f"PDF-NOCHUNKS-{uuid.uuid4()}".encode()
-    up = await client.post("/documents", files={"file": ("a.pdf", pdf, "application/pdf")})
-    doc_id = up.json()["id"]
-    r = await client.post(f"/documents/{doc_id}/index_fts")
-    assert r.status_code == 200
-    assert r.json()["chunks_indexed"] == 0
-
-
-async def test_keyword_search_route_returns_hits(
-    client: AsyncClient, _alembic_applied, rt3_indexed_doc
-) -> None:
-    doc_id, doc_key = rt3_indexed_doc
-    await client.post(f"/documents/{doc_id}/index_fts")
-    r = await client.post("/retrieve/keyword", json={"query": "Balance Sheet", "k": 5})
-    assert r.status_code == 200
-    ours = [h for h in r.json()["results"] if h["doc_id"] == doc_id]
-    assert ours and ours[0]["chunk_id"] == "s0"
-    assert ours[0]["doc_key"] == doc_key
-    assert ours[0]["score"] > 0.0
-
-
-async def test_keyword_search_route_filters_by_section_type(
-    client: AsyncClient, _alembic_applied, rt3_indexed_doc
-) -> None:
-    doc_id, _ = rt3_indexed_doc
-    await client.post(f"/documents/{doc_id}/index_fts")
-    r = await client.post(
-        "/retrieve/keyword",
-        json={"query": "board", "k": 5, "section_type": "BALANCE_SHEET"},
-    )
-    assert r.status_code == 200
-    assert all(
-        not (h["doc_id"] == doc_id and h["chunk_id"] == "s1") for h in r.json()["results"]
-    )
-
-
-async def test_keyword_search_route_no_match_returns_empty_results(
-    client: AsyncClient, _alembic_applied
-) -> None:
-    r = await client.post(
-        "/retrieve/keyword", json={"query": "zzzznonexistenttoken9999"}
-    )
-    assert r.status_code == 200
-    assert r.json()["results"] == []
-
-
-# --------------------------------------------------------------------------
 # Task 1 (SP-18): GET /documents/{id}/stages + GET /documents/{id}/artifacts/{stage}
 # --------------------------------------------------------------------------
 
@@ -1022,7 +875,8 @@ async def test_retrieve_vector_returns_text_and_citation(
         "id": f"{seeded['doc_id']}:s0",
         "vector": fake_embedder.embed(["Balance Sheet\nTotal Assets 100"])[0],
         "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
-                      "section_type": "BALANCE_SHEET", "page": 1},
+                      "section_type": "BALANCE_SHEET", "page": 1,
+                      "text": "Balance Sheet\nTotal Assets 100"},
     }])
 
     async with make_client(
@@ -1090,179 +944,37 @@ async def test_retrieve_vector_section_type_filter(
 
 
 # --------------------------------------------------------------------------
-# RT-4: POST /retrieve -- hybrid (RRF) retrieval. Unlike /retrieve/vector,
-# NEVER 503s: degrades to keyword-only when embedder/vector_store are
-# unconfigured (design spec sec 2 decision 2).
+# RT-9: POST /retrieve -- hybrid (RRF) retrieval over RT-2's vector_search +
+# RT-9's bm25_search (Milvus-native BM25). POST /documents/{id}/index_fts and
+# the Postgres-backed /retrieve/keyword are GONE; /retrieve/keyword is kept
+# and repointed at bm25_search instead. Supersedes RT-4 decision 2: with both
+# channels sharing one Milvus VectorStore seam there is nothing left to
+# degrade to, so an unconfigured vector_store now 503s on /retrieve and
+# /retrieve/keyword, matching /retrieve/vector -- NOT the keyword-only
+# degrade this section used to test.
 # --------------------------------------------------------------------------
 
 
-async def _seed_hybrid_doc(session_factory, store, *, marker: str) -> dict[str, object]:
-    """One fully-processed, FTS-indexed document whose body text embeds a
-    fresh, globally-unique `marker` token -- Postgres' `chunk` table is
-    session-scoped across the WHOLE integration suite, and several other
-    fixtures in this file already use the literal, unmarked "Balance
-    Sheet"/"Total Assets 100" text; without a marker a keyword query for
-    that phrase would non-deterministically compete with unrelated rows for
-    a place inside hybrid_search's over-fetch window."""
-    from fdi.core.semantic import SectionType
-    from fdi.pipeline.intake import intake_document
-    from fdi.pipeline.ocr import FakeOcrClient
-    from fdi.pipeline.registry import StageRegistry
-    from fdi.pipeline.resolver import DagResolver
-    from fdi.pipeline.retrieval import index_chunks_fts
-    from fdi.pipeline.run import run_stage
-    from fdi.pipeline.semantic import FakeSemanticClient
-    from fdi.pipeline.stages.ast import AstStage
-    from fdi.pipeline.stages.chunks import ChunksStage
-    from fdi.pipeline.stages.graph import GraphStage
-    from fdi.pipeline.stages.normalize import NormalizeStage
-    from fdi.pipeline.stages.ocr import OcrStage
-    from fdi.pipeline.stages.provenance import ProvenanceStage
-    from fdi.pipeline.stages.semantic import SemanticStage
-    from fdi.pipeline.stages.structure import StructureStage
-
-    doc_key = f"hybrid-{uuid.uuid4()}"
-    doc = await intake_document(
-        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
-        filename="a.pdf", doc_key=doc_key, content_type="application/pdf",
-        session_factory=session_factory, store=store,
-    )
-    fake_ocr = FakeOcrClient({
-        "content": "ACME",
-        "pages": [{"pageNumber": 1, "lines": [], "words": []}],
-        "paragraphs": [
-            {"role": "sectionHeading", "content": "Balance Sheet"},
-            {"content": f"Total Assets 100 {marker}"},
-        ],
-        "tables": [],
-    })
-    fake_semantic = FakeSemanticClient({"Balance Sheet": SectionType.BALANCE_SHEET.value})
-
-    reg = StageRegistry()
-    for stage in (
-        OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-        ProvenanceStage(), StructureStage(), ChunksStage(),
-    ):
-        reg.register(stage)
-    resolver = DagResolver(reg.all())
-    common = {
-        "doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
-        "store": store, "registry": reg, "resolver": resolver,
-    }
-    await run_stage(
-        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
-    )
-    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(
-        stage_name="semantic", run_id=str(uuid.uuid4()),
-        services={"semantic": fake_semantic}, **common,
-    )
-    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
-    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
-
-    async with session_factory() as s:
-        await index_chunks_fts(session=s, store=store, doc_id=doc.id)
-        await s.commit()
-    return {"doc_id": doc.id, "doc_key": doc_key}
+async def test_retrieve_hybrid_503s_when_vector_store_unconfigured(make_client) -> None:
+    """RT-4 decision 2 is superseded: with both channels in Milvus there is
+    nothing to degrade to, so an unconfigured Milvus is a configuration error
+    and says so -- rather than returning a confident empty list."""
+    async with make_client() as client:
+        r = await client.post("/retrieve", json={"query": "revenue", "k": 5})
+    assert r.status_code == 503
+    assert "not configured" in r.json()["detail"]
 
 
-async def test_hybrid_route_never_503s_without_vector_configured(
-    client: AsyncClient, _alembic_applied, session_factory, store
-) -> None:
-    marker = uuid.uuid4().hex
-    seeded = await _seed_hybrid_doc(session_factory, store, marker=marker)
-    r = await client.post(
-        "/retrieve", json={"query": f"Total Assets 100 {marker}", "k": 5}
-    )
-    assert r.status_code == 200, r.text
-    ours = [h for h in r.json()["results"] if h["doc_id"] == seeded["doc_id"]]
-    assert ours and ours[0]["chunk_id"] == "s0"
-    assert ours[0]["score"] == pytest.approx(1 / 61)  # keyword-only: sole rank-1 match
+async def test_retrieve_keyword_503s_when_vector_store_unconfigured(make_client) -> None:
+    async with make_client() as client:
+        r = await client.post("/retrieve/keyword", json={"query": "revenue", "k": 5})
+    assert r.status_code == 503
 
 
-async def test_hybrid_route_returns_empty_results_for_no_match(
-    client: AsyncClient, _alembic_applied
-) -> None:
-    r = await client.post("/retrieve", json={"query": "zzzznonexistenttoken9999", "k": 5})
-    assert r.status_code == 200
-    assert r.json()["results"] == []
-
-
-async def test_hybrid_route_fuses_vector_and_keyword_results(
-    make_client, _alembic_applied, session_factory, store
-) -> None:
-    from fdi.api.deps import get_embedder, get_vector_store
-    from fdi.pipeline.embeddings import FakeEmbeddingClient
-    from fdi.pipeline.vectorstore import FakeVectorStore
-
-    marker = uuid.uuid4().hex
-    seeded = await _seed_hybrid_doc(session_factory, store, marker=marker)
-    query = f"Balance Sheet\nTotal Assets 100 {marker}"
-    fake_embedder = FakeEmbeddingClient(dim=8)
-    fake_store = FakeVectorStore()
-    fake_store.upsert([{
-        "id": f"{seeded['doc_id']}:s0",
-        "vector": fake_embedder.embed([query])[0],
-        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
-                      "section_type": "BALANCE_SHEET", "page": 1},
-    }])
-
-    async with make_client(
-        dependency_overrides={
-            get_embedder: lambda: fake_embedder,
-            get_vector_store: lambda: fake_store,
-        }
-    ) as client:
-        r = await client.post("/retrieve", json={"query": query, "k": 5})
-
-    assert r.status_code == 200, r.text
-    ours = [h for h in r.json()["results"] if h["doc_id"] == seeded["doc_id"]]
-    assert ours
-    assert ours[0]["chunk_id"] == "s0"
-    assert ours[0]["doc_key"] == seeded["doc_key"]
-    # found by BOTH tools -> fused score is the sum of two RRF terms, > keyword-only alone
-    assert ours[0]["score"] > 1 / 61
-
-
-async def test_hybrid_route_section_type_filter_reaches_both_tools(
-    make_client, _alembic_applied, session_factory, store
-) -> None:
-    from fdi.api.deps import get_embedder, get_vector_store
-    from fdi.pipeline.embeddings import FakeEmbeddingClient
-    from fdi.pipeline.vectorstore import FakeVectorStore
-
-    marker = uuid.uuid4().hex
-    seeded = await _seed_hybrid_doc(session_factory, store, marker=marker)
-    query = f"Balance Sheet\nTotal Assets 100 {marker}"
-    fake_embedder = FakeEmbeddingClient(dim=8)
-    fake_store = FakeVectorStore()
-    fake_store.upsert([{
-        "id": f"{seeded['doc_id']}:s0",
-        "vector": fake_embedder.embed([query])[0],
-        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
-                      "section_type": "BALANCE_SHEET", "page": 1},
-    }])
-
-    async with make_client(
-        dependency_overrides={
-            get_embedder: lambda: fake_embedder,
-            get_vector_store: lambda: fake_store,
-        }
-    ) as client:
-        r = await client.post(
-            "/retrieve",
-            json={"query": query, "k": 5, "filters": {"section_type": "NOTES"}},
-        )
-
-    assert r.status_code == 200
-    # Only ONE vector is indexed in this test (the BALANCE_SHEET chunk), and
-    # the marker guarantees no other row anywhere in the shared Postgres
-    # session can match the keyword query -- a NOTES filter must therefore
-    # empty BOTH lists, not merely exclude our doc_id from a nonempty result.
-    assert r.json()["results"] == []
+async def test_index_fts_route_is_gone(make_client) -> None:
+    async with make_client() as client:
+        r = await client.post("/documents/whatever/index_fts")
+    assert r.status_code == 404
 
 
 # --------------------------------------------------------------------------
@@ -1863,14 +1575,14 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
 ) -> None:
     import uuid
 
-    from fdi.api.deps import get_agent_client
+    from fdi.api.deps import get_agent_client, get_embedder, get_vector_store
     from fdi.core.agent import AgentResponse, ToolCall
     from fdi.pipeline.agent import FakeAgentClient
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
     from fdi.pipeline.intake import intake_document
     from fdi.pipeline.ocr import FakeOcrClient
     from fdi.pipeline.registry import StageRegistry
     from fdi.pipeline.resolver import DagResolver
-    from fdi.pipeline.retrieval import index_chunks_fts
     from fdi.pipeline.run import run_stage
     from fdi.pipeline.semantic import FakeSemanticClient
     from fdi.pipeline.stages.ast import AstStage
@@ -1881,6 +1593,7 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
     from fdi.pipeline.stages.structure import StructureStage
+    from fdi.pipeline.vectorstore import FakeVectorStore
 
     marker = uuid.uuid4().hex
     reg = StageRegistry()
@@ -1917,9 +1630,20 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
-    async with session_factory() as s:
-        await index_chunks_fts(session=s, store=store, doc_id=doc.id)
-        await s.commit()
+
+    # RT-9: the `search` tool's hybrid_search now requires a configured
+    # embedder/vector_store (no more Postgres-FTS-only degrade), so this
+    # override supplies a Fake pair with the chunk pre-indexed -- exactly
+    # what IndexStage would have written into Milvus.
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_vector_store = FakeVectorStore()
+    fake_vector_store.upsert([{
+        "id": f"{doc.id}:s0",
+        "vector": fake_embedder.embed([f"Total Assets 100 {marker}"])[0],
+        "metadata": {"heading": "Balance Sheet", "chunk_id": "s0",
+                      "section_type": "BALANCE_SHEET", "page": 1,
+                      "text": f"Total Assets 100 {marker}"},
+    }])
 
     fake = FakeAgentClient([
         AgentResponse(tool_calls=[ToolCall(
@@ -1929,7 +1653,11 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
     ])
 
     async with make_client(
-        dependency_overrides={get_agent_client: lambda: fake}
+        dependency_overrides={
+            get_agent_client: lambda: fake,
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_vector_store,
+        }
     ) as client:
         r = await client.post("/ask", json={"question": f"total assets, marker {marker}?"})
     assert r.status_code == 200
@@ -1969,13 +1697,18 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     import json
     import uuid
 
-    from fdi.api.deps import get_extraction_schema_path, get_extractor_client
+    from fdi.api.deps import (
+        get_embedder,
+        get_extraction_schema_path,
+        get_extractor_client,
+        get_vector_store,
+    )
+    from fdi.pipeline.embeddings import FakeEmbeddingClient
     from fdi.pipeline.extractor import FakeExtractorClient
     from fdi.pipeline.intake import intake_document
     from fdi.pipeline.ocr import FakeOcrClient
     from fdi.pipeline.registry import StageRegistry
     from fdi.pipeline.resolver import DagResolver
-    from fdi.pipeline.retrieval import index_chunks_fts
     from fdi.pipeline.run import run_stage
     from fdi.pipeline.semantic import FakeSemanticClient
     from fdi.pipeline.stages.ast import AstStage
@@ -1986,6 +1719,7 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     from fdi.pipeline.stages.provenance import ProvenanceStage
     from fdi.pipeline.stages.semantic import SemanticStage
     from fdi.pipeline.stages.structure import StructureStage
+    from fdi.pipeline.vectorstore import FakeVectorStore
 
     marker = uuid.uuid4().hex
     reg = StageRegistry()
@@ -2022,9 +1756,6 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
-    async with session_factory() as s:
-        await index_chunks_fts(session=s, store=store, doc_id=doc.id)
-        await s.commit()
 
     schema = {
         "version": "3.1.0",
@@ -2046,6 +1777,21 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     schema_path = tmp_path / "schema.json"
     schema_path.write_text(json.dumps(schema), encoding="utf-8")
 
+    # RT-9: _pool_for's hybrid_search now requires a configured embedder/
+    # vector_store (no more Postgres-FTS-only degrade) -- without it the pool
+    # is empty, extract_unit short-circuits on `if not ranked`, and the
+    # scripted FakeExtractorClient response is never even requested. This
+    # override supplies a Fake pair with the chunk pre-indexed, exactly what
+    # IndexStage would have written into Milvus.
+    fake_embedder = FakeEmbeddingClient(dim=8)
+    fake_vector_store = FakeVectorStore()
+    fake_vector_store.upsert([{
+        "id": f"{doc.id}:s0",
+        "vector": fake_embedder.embed([f"ACME is a manufacturer {marker}."])[0],
+        "metadata": {"doc_id": doc.id, "heading": "Overview", "chunk_id": "s0", "page": 1,
+                      "text": f"ACME is a manufacturer {marker}."},
+    }])
+
     # One call per Retrieval Unit, not per field: the response is keyed by
     # field_path, falling back to field_name when the schema omits it (as
     # this one does).
@@ -2061,6 +1807,8 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
         dependency_overrides={
             get_extractor_client: lambda: fake,
             get_extraction_schema_path: lambda: str(schema_path),
+            get_embedder: lambda: fake_embedder,
+            get_vector_store: lambda: fake_vector_store,
         }
     ) as client:
         r = await client.post("/extract/document", json={"doc_key": f"acme-{marker}"})
