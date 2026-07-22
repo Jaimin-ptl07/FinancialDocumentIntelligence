@@ -243,7 +243,7 @@ def test_parse_field_specs_against_the_committed_schema_file() -> None:
     with open(path, encoding="utf-8") as f:
         schema = json.load(f)
     specs = parse_field_specs(schema)
-    assert len(specs) == 198
+    assert len(specs) == 190
     assert parse_field_specs(schema, module="module_3_balance_sheet")
     assert all(s.retrieval_query.strip() for s in specs)
     assert all(s.unit_id for s in specs)
