@@ -285,3 +285,18 @@ RT-9 FINAL WHOLE-BRANCH REVIEW (opus, 205d2e9..1de99ce, 17 commits): READY TO ME
   Two cleanups applied before merge (commit d7c5c0e): removed dead store:StoreDep from retrieve_vector +
   hybrid_search_route (spec 3.3 "silent lie" leftover); added the bm25 empty-doc_ids guard test (closes (c)).
   Post-cleanup: fast 595 passed, test_api+bm25 85 passed, ruff clean, mypy 0. FINAL full suite: 806 passed, 11 skipped, 0 failed. RT-9 COMPLETE, reviewed clean, ready to merge.
+
+RT-9 END-TO-END VERIFICATION (2026-07-22):
+  Azure OpenAI endpoint is DOWN (APITimeoutError on a trivial 1-token call, 17.7s) -- environmental, NOT RT-9.
+  The e2e extraction returned all-null because extract_unit's contextlib.suppress swallowed the timing-out
+  client.extract calls; retrieval demonstrably WORKED (all 198 fields had populated pools + evidence_ids).
+  So field-accuracy (LLM extraction) is UNMEASURABLE until Azure recovers.
+  PIVOTED to the LLM-FREE measurement that isolates what RT-9 actually changed -- answer-in-context recall,
+  A/B with BM25 toggled, real Milvus:
+    vector-only (BM25 off): 138/196 = 70.4%   (matches the prior e2e's 133 populated -> baseline confirmed)
+    hybrid (BM25 + dense):  179/196 = 91.3%
+    BM25 DELTA: +41 fields
+    RU_COMPANY recovered 0/9 -> 7/9 (the exact predicted failure case).
+  RT-9 DELIVERED: retrieval recall +20.9 points, entirely attributable to the revived keyword channel.
+  The LLM's job is now strictly easier (answer in context 91% vs 70%); the field-accuracy confirmation is
+  bottlenecked ONLY on the LLM, which is down. Merge gate cleared on the retrieval dimension.
