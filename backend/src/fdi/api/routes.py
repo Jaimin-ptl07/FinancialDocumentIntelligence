@@ -1089,7 +1089,7 @@ async def validate_schema_route(body: SchemaValidateRequest) -> SchemaValidation
 
 
 @router.get("/analytics", response_model=AnalyticsView)
-async def analytics(session: SessionDep) -> AnalyticsView:
+async def analytics(session: SessionDep, vector_store: VectorStoreDep) -> AnalyticsView:
     """Corpus totals and per-stage pipeline throughput, over everything.
 
     Deliberately unpaginated and unfiltered: the screen that reads this
@@ -1101,11 +1101,19 @@ async def analytics(session: SessionDep) -> AnalyticsView:
     An empty corpus is a 200 with zeros and an empty `stages` list, not a
     404: "no documents yet" is the answer to the question, not an absence of
     the resource, and the UI renders it as an empty state.
+
+    `chunk_count` comes from the injected `VectorStore` (RT-9: the Postgres
+    `chunk` table is gone; Milvus is now the only place a chunk count
+    lives), NOT from `DocumentRepository.corpus_totals` any more. An
+    unconfigured `vector_store` reports 0, deliberately -- this route keeps
+    its own "empty corpus is a 200 with zeros" contract even when Milvus is
+    down, unlike /search or /retrieve/*, which 503 outright.
     """
     totals = await DocumentRepository(session).corpus_totals()
     registry = RegistryRepository(session)
     stages = await registry.stage_throughput()
     outcomes = await registry.document_outcome_counts()
+    chunk_count = vector_store.count() if vector_store is not None else 0
     return AnalyticsView(
         corpus=CorpusTotalsView(
             document_count=totals["document_count"],
@@ -1126,5 +1134,5 @@ async def analytics(session: SessionDep) -> AnalyticsView:
         ],
         documents_complete=outcomes["complete"],
         documents_failed=outcomes["failed"],
-        chunk_count=totals["chunk_count"],
+        chunk_count=chunk_count,
     )

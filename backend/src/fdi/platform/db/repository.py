@@ -12,19 +12,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
-from fdi.platform.db.models import Chunk, Document, EvalCaseResult, EvalRun, StageRun
+from fdi.platform.db.models import Document, EvalCaseResult, EvalRun, StageRun
 
 
 class CorpusTotals(TypedDict):
     """Whole-corpus figures for `GET /analytics`. A TypedDict, not a bare
     `dict[str, object]`, so the route can read `totals["total_bytes"]` as an
-    `int` without a cast and mypy still checks the key names."""
+    `int` without a cast and mypy still checks the key names.
+
+    `chunk_count` does NOT live here (RT-9): the Postgres `chunk` table is
+    gone, and this repository is pure-Postgres -- the route reads that
+    figure from the injected `VectorStore` instead (`VectorStore.count()`)."""
 
     document_count: int
     doc_key_count: int
     total_bytes: int
     latest_ingested_at: datetime | None
-    chunk_count: int
 
 
 class StageThroughput(TypedDict):
@@ -494,9 +497,10 @@ class DocumentRepository:
         SUM itself: the inner one stops a single NULL-sized row from being
         silently skipped, the outer one turns the empty-corpus `sum() -> NULL`
         into the 0 the response contract requires. `count()` and `max()` need
-        no such help -- they already return 0 and NULL. `chunk_count` rides
-        along as a scalar subquery (it correlates with nothing, so it costs
-        one extra scan, not one per document) rather than a second await.
+        no such help -- they already return 0 and NULL.
+
+        No `chunk_count` here (RT-9): that figure now comes from the
+        injected `VectorStore`, not this pure-Postgres repository.
         """
         totals = (
             await self._s.execute(
@@ -505,7 +509,6 @@ class DocumentRepository:
                     func.count(distinct(func.coalesce(Document.doc_key, Document.id))),
                     func.coalesce(func.sum(func.coalesce(Document.byte_size, 0)), 0),
                     func.max(Document.created_at),
-                    select(func.count()).select_from(Chunk).scalar_subquery(),
                 ).select_from(Document)
             )
         ).one()
@@ -514,7 +517,6 @@ class DocumentRepository:
             doc_key_count=int(totals[1]),
             total_bytes=int(totals[2]),
             latest_ingested_at=totals[3],
-            chunk_count=int(totals[4]),
         )
 
     async def get_many(self, ids: list[str]) -> dict[str, Document]:

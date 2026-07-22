@@ -1,5 +1,7 @@
-"""The VectorStore seam: `upsert(items) -> {"upserted": int}` and
-`search(vector, k) -> [{"id", "score", "metadata"}, ...]` (best match first).
+"""The VectorStore seam: `upsert(items) -> {"upserted": int}`,
+`search(vector, k) -> [{"id", "score", "metadata"}, ...]` (best match first),
+and `count() -> int` (RT-9: whole-collection row count, backing `GET
+/analytics`'s `chunk_count` now that the Postgres `chunk` table is gone).
 
 `MilvusVectorStore` (platform, does I/O) structurally satisfies this without
 importing it -- `platform` may not import `pipeline`. `FakeVectorStore` lives
@@ -22,6 +24,8 @@ class VectorStore(Protocol):
     def search_text(
         self, query: str, k: int, *, filter: str = ""
     ) -> list[dict[str, object]]: ...
+
+    def count(self) -> int: ...
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -120,3 +124,6 @@ class FakeVectorStore:
             scored.append({"id": item_id, "score": float(overlap), "metadata": metadata})
         scored.sort(key=lambda r: cast(float, r["score"]), reverse=True)
         return scored[:k]
+
+    def count(self) -> int:
+        return len(self._items)

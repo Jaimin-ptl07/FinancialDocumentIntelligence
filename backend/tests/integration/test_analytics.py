@@ -1,19 +1,27 @@
 """GET /analytics -- corpus totals and per-stage throughput.
 
-Two things make this file look the way it does.
+Three things make this file look the way it does.
 
 **The route is corpus-global and the container database is shared.** Every
 other integration test in this session has already written documents and
 stage_runs into the same Postgres, so an absolute assertion like
-`document_count == 4` would pass or fail on collection order. Every figure
-here is therefore asserted as a DELTA against a baseline read taken before
-seeding -- exact arithmetic, immune to whatever else the suite left behind.
+`document_count == 4` would pass or fail on collection order. Every
+Postgres-backed figure here is therefore asserted as a DELTA against a
+baseline read taken before seeding -- exact arithmetic, immune to whatever
+else the suite left behind.
 
 **The one figure that cannot be asserted as a delta is the empty corpus.**
 `test_empty_corpus_...` deletes every row inside a transaction it never
 commits, reads the aggregates through that same session, and rolls back. It
 is the only way to observe the empty-corpus SQL (zeros, no NULL leaking into
 an int field, no division by zero) without a second database.
+
+**`chunk_count` is NOT a Postgres figure any more (RT-9).** The `chunk`
+table is gone; the route now reads `VectorStore.count()`, which each
+`create_app()` call starts fresh (no shared, cross-test accumulation the
+way Postgres has) -- so `chunk_count` is asserted directly rather than as a
+delta, by overriding `app.state.vector_store` with a `FakeVectorStore` the
+test controls.
 """
 
 import uuid
@@ -24,6 +32,7 @@ import pytest
 import sqlalchemy
 from httpx import ASGITransport, AsyncClient
 
+from fdi.pipeline.vectorstore import FakeVectorStore
 from fdi.platform.config import get_settings
 
 pytestmark = pytest.mark.integration
@@ -32,7 +41,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
     @asynccontextmanager
-    async def _make():
+    async def _make(vector_store=None):
         env = {
             "FDI_DATABASE_URL": postgres_url,
             "FDI_BROKER_URL": amqp_url,
@@ -49,6 +58,13 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
 
         app = create_app()
         async with app.router.lifespan_context(app):
+            # No FDI_MILVUS_URI above -> lifespan already set
+            # app.state.vector_store = None; overriding it here (AFTER
+            # lifespan, so nothing in startup clobbers it) is what lets a
+            # test control what GET /analytics's chunk_count reads without
+            # a live Milvus instance.
+            if vector_store is not None:
+                app.state.vector_store = vector_store
             transport = ASGITransport(app=app, raise_app_exceptions=True)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 yield client
@@ -116,9 +132,9 @@ async def _seed_runs(session_factory, stage: str, doc_ids: list[str]) -> None:
     counted every run the median would be 15.0; if it took the median over
     all latest runs regardless of status it would be 30.0.
     """
-    from fdi.platform.db.models import Chunk, StageRun
+    from fdi.platform.db.models import StageRun
 
-    doc0, doc1, doc2, doc3 = doc_ids
+    doc0, doc1, doc2, _doc3 = doc_ids
     rows = [
         (doc0, stage, "done", _at(0), _at(10)),
         (doc1, stage, "done", _at(0), _at(30)),
@@ -138,15 +154,6 @@ async def _seed_runs(session_factory, stage: str, doc_ids: list[str]) -> None:
                     status=status,
                     created_at=created,
                     updated_at=updated,
-                )
-            )
-        for i in range(2):
-            s.add(
-                Chunk(
-                    id=f"{doc3}:c{i}",
-                    doc_id=doc3,
-                    chunk_id=f"c{i}",
-                    text=f"chunk {i}",
                 )
             )
         await s.commit()
@@ -175,7 +182,6 @@ async def test_analytics_reports_corpus_totals_and_stage_throughput(
     # 10 + 20 + 30 + NULL-as-0.
     assert after["corpus"]["total_bytes"] - before["corpus"]["total_bytes"] == 60
     assert after["corpus"]["latest_ingested_at"] is not None
-    assert after["chunk_count"] - before["chunk_count"] == 2
 
     # doc0's latest `index` run is done.
     assert after["documents_complete"] - before["documents_complete"] == 1
@@ -227,6 +233,27 @@ async def test_analytics_reports_null_median_for_a_stage_with_no_done_runs(
     assert probe["median_seconds"] is None
 
 
+async def test_analytics_chunk_count_reads_the_vector_store_not_postgres(make_client) -> None:
+    """RT-9: the `chunk` table is gone; `chunk_count` now reads
+    `VectorStore.count()`. No `FDI_MILVUS_URI` in `make_client`'s env means
+    `app.state.vector_store` is None absent an override -- exercised first,
+    then overridden with a `FakeVectorStore` holding a known number of rows.
+    """
+    async with make_client() as client:
+        body = (await client.get("/analytics")).json()
+    assert body["chunk_count"] == 0
+
+    fake = FakeVectorStore()
+    fake.upsert([
+        {"id": "d1:s0", "vector": [1.0, 0.0], "metadata": {}},
+        {"id": "d1:s1", "vector": [0.0, 1.0], "metadata": {}},
+        {"id": "d2:s0", "vector": [1.0, 1.0], "metadata": {}},
+    ])
+    async with make_client(vector_store=fake) as client:
+        body = (await client.get("/analytics")).json()
+    assert body["chunk_count"] == 3
+
+
 async def test_empty_corpus_returns_zeros_not_nulls(session_factory) -> None:
     """The aggregates on an empty corpus, read inside an uncommitted delete.
 
@@ -234,12 +261,12 @@ async def test_empty_corpus_returns_zeros_not_nulls(session_factory) -> None:
     but for the length of this transaction the session genuinely sees zero
     rows, which is the only way to reach this branch of the SQL.
     """
-    from fdi.platform.db.models import Chunk, Document, StageRun
+    from fdi.platform.db.models import Document, StageRun
     from fdi.platform.db.repository import DocumentRepository, RegistryRepository
 
     async with session_factory() as s:
-        # chunk and stage_run both FK to document, so they go first.
-        for model in (Chunk, StageRun, Document):
+        # stage_run FKs to document, so it goes first.
+        for model in (StageRun, Document):
             await s.execute(sqlalchemy.delete(model))
 
         totals = await DocumentRepository(s).corpus_totals()
@@ -248,7 +275,6 @@ async def test_empty_corpus_returns_zeros_not_nulls(session_factory) -> None:
             "doc_key_count": 0,
             "total_bytes": 0,
             "latest_ingested_at": None,
-            "chunk_count": 0,
         }
         registry = RegistryRepository(s)
         assert await registry.stage_throughput() == []

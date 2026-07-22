@@ -14,6 +14,11 @@ hit lists. Reads inputs as plain Mappings -- no import of
 fdi.core.ast/semantic/provenance, no import of fdi.platform.*/fdi.pipeline.*.
 Never raises: malformed/partial input degrades per-field (section_type/page ->
 None).
+
+RT-9 retired chunk_rows_for_index along with the Postgres `chunk` table and
+index_chunks_fts/keyword_search: keyword search is now Milvus-native BM25
+over the same collection vector_search already reads, so there is no
+Postgres row-building step left in this module.
 """
 
 from collections.abc import Mapping, Sequence
@@ -259,39 +264,6 @@ def build_vector_results(
             break
 
     return results
-
-
-def chunk_rows_for_index(
-    *,
-    doc_id: str,
-    doc_key: str | None,
-    version: int | None,
-    chunks: Sequence[Mapping[str, object]],
-) -> list[dict[str, object]]:
-    """From RT-1's `chunks` artifact records, build the flat rows
-    `index_chunks_fts` upserts into the `chunk` table. Pure; skips a record
-    with a missing/non-str/empty chunk_id, degrades heading/section_type/page
-    to None and text to "" on a malformed value. Never raises."""
-    rows: list[dict[str, object]] = []
-    for c in chunks:
-        chunk_id = c.get("chunk_id")
-        if not isinstance(chunk_id, str) or not chunk_id:
-            continue
-        heading = c.get("heading")
-        text = c.get("text")
-        section_type = c.get("section_type")
-        rows.append({
-            "id": f"{doc_id}:{chunk_id}",
-            "doc_id": doc_id,
-            "chunk_id": chunk_id,
-            "doc_key": doc_key,
-            "version": version,
-            "heading": heading if isinstance(heading, str) else None,
-            "text": text if isinstance(text, str) else "",
-            "section_type": section_type if isinstance(section_type, str) else None,
-            "page": _int_or_none(c.get("page")),
-        })
-    return rows
 
 
 _RRF_K = 60

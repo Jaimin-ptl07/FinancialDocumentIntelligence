@@ -157,6 +157,24 @@ class MilvusVectorStore:
             output_fields=_OUTPUT_FIELDS,
         ))
 
+    def count(self) -> int:
+        """Whole-collection row count, backing `GET /analytics`'s
+        `chunk_count` (RT-9: the Postgres `chunk` table is gone; Milvus is
+        now the only place a chunk count lives). No collection yet -> 0,
+        the same "nothing indexed" state `search`/`search_text` already
+        represent as an empty list rather than an error.
+
+        `get_collection_stats` returns an untyped `Dict` keyed by stat name
+        (pymilvus ships no py.typed marker, so this whole call is `Any` to
+        mypy) -- `"row_count"` is the key pymilvus itself uses. The
+        `int(...)` wrapper is what turns that `Any` into a statically-typed
+        `int` for mypy --strict's `warn_return_any`, not a runtime no-op.
+        """
+        if not self._client.has_collection(self._collection):
+            return 0
+        stats = self._client.get_collection_stats(self._collection)
+        return int(stats["row_count"])
+
     @staticmethod
     def from_settings(settings: "Settings") -> "MilvusVectorStore | None":
         if not settings.milvus_uri:

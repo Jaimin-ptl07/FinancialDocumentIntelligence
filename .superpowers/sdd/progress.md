@@ -208,3 +208,49 @@ RT-9 Task 5: complete (bm25_search added, keyword_search/index_chunks_fts delete
   for Task 6 as planned. mypy --strict src: 8 EXPECTED errors across exactly those 3 untouched files (call-arg on
   `store`, arg-type on now-required embedder/vector_store) -- matches the plan's own sequencing note that this
   interim state goes red in mypy/full-suite terms until Task 6.
+RT-9 Task 8: complete (commit d9aadfc, merged 837295e). Agent HUNG before committing; controller verified and landed it.
+  LIVE MILVUS VERIFIED by controller: query "revenue from operations" -> d1:s0 score=1.9426 (3-term match),
+  d1:s1 score=0.6028 (1-term), d1:s2 ABSENT (zero overlap). 3.2x separation. THE premise of RT-9 holds.
+  Also added MilvusVectorStore.upsert flush -- Milvus writes are not immediately readable; without it the first
+  search after ingestion silently returns nothing.
+RT-9 Task 5: commits 0086c1d + fb8d846 + a4af688. Review found CRITICAL, fix pending:
+  CRITICAL: tests/integration/test_hybrid_search.py still passes store= to hybrid_search at 5 call sites (lines
+    179/194/209/224/237) -> TypeError, whole file red under -m integration. Escaped because only the FAST suite was
+    run. Line 209 additionally tests "degrade to keyword-only when embedder/vector_store are None", which RT-4
+    decision 2's supersession makes invalid.
+  Minor: hybrid_search resolves doc_ids TWICE (bm25_search and vector_search each call _doc_ids_for for the same
+    doc_key/version) -- two Postgres round trips where one would do.
+  Minor: the empty-doc_ids guard (filter requested but resolves to zero docs -> return [], NOT unscoped) is present
+    and correct in both functions but has NO test.
+  Adjudicated OK: deleting test_keyword_search.py/test_index_chunks_fts.py (tested only deleted functions); the
+    routes.py edit was genuinely forced (ImportError crashed fast-suite collection via test_cors -> create_app).
+RT-9 Task 6: complete (commit 834306a, mypy 0 errors (was 8), test_api 79 / fast 598 passed)
+RT-9 Task 5 CRITICAL fixed (commit f9d0ba6): test_hybrid_search.py was 5-failed/0-passed -- store= removed from all
+  hybrid_search calls; deleted the degrade-to-keyword-only test (contract superseded, 503 coverage confirmed to exist
+  at test_api.py::test_retrieve_hybrid_503s_when_vector_store_unconfigured); also fixed a SECOND latent bug the
+  reviewer did not see -- _SpyVectorStore.search had a stale signature missing the `filter` kwarg, which only
+  surfaced once the store= failures cleared. Now 4 passed. RRF both-channels assertion survives and passes.
+RT-9 Task 7: BLOCKED -- SPEC GAP found by implementer, escalated correctly without touching code.
+  GET /analytics's chunk_count reads the `chunk` table (repository.py:508 corpus_totals -> schemas.py:556 ->
+  routes.py:1129), and frontend/app/analytics/page.tsx:85 RENDERS it. The RT-9 spec's "delete the chunk table"
+  never accounted for this because analytics landed in 282499a -- one of the OTHER session's 10 commits merged into
+  mainline AFTER the spec was written. Genuine concurrent-work collision, not an oversight in review.
+  Keeping the table as an analytics-only counter is NOT viable: index_chunks_fts is already deleted, so nothing
+  writes to it and chunk_count would silently report 0 forever.
+RT-9 Task 7: complete -- blocker resolved by repointing chunk_count at VectorStore.count() before dropping the
+  table, per the human's dispatch. Added VectorStore.count()/FakeVectorStore.count() (pipeline/vectorstore.py) and
+  MilvusVectorStore.count() (platform/vectorstore.py, get_collection_stats()["row_count"], 0 when no collection
+  yet). corpus_totals/CorpusTotals no longer reference Chunk at all -- pure Postgres again. routes.py's analytics
+  handler now takes VectorStoreDep and computes chunk_count = vector_store.count() if not None else 0 (0 on an
+  unconfigured store, matching the empty-corpus-is-200-with-zeros contract; no 503). test_analytics.py reworked to
+  drive chunk_count through a FakeVectorStore override on app.state (no shared-Postgres-delta problem since each
+  create_app() starts a fresh in-memory store). Then dropped chunk_rows_for_index, the Chunk model, and wrote
+  migration 0007 (mirrors 0006 exactly, inverted); alembic upgrade/downgrade/upgrade all succeed. Also updated
+  test_migrations.py (3 chunk-table tests -> one to_regclass('chunk') IS NULL check; alembic_version now asserts
+  "0007"), which the brief did not call out but which referenced the dropped table directly.
+  grep -rn "Chunk\b" backend/src: zero model consumers (one unrelated docstring hit in core/provenance.py, "Chunk
+  resolution", not the ORM class).
+  Full suite: 797 passed, 11 skipped, 8 failed -- same 8 failures reproduced against the pre-Task-7 baseline via
+  git stash (test_vector_search.py x5 + test_extract_document.py x2 + test_index_stage.py x1, all
+  `vector_search() got an unexpected keyword argument 'store'` or downstream of it): pre-existing, unrelated to
+  this task, not touched. ruff clean, mypy --strict 0 errors.
