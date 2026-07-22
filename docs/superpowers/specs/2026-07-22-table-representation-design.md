@@ -70,7 +70,7 @@ deletes half the report.
 A pure, deterministic stage:
 
 ```
-basis  (deps: ast, structure)  ->  basis artifact
+basis  (deps: ast, provenance)  ->  basis artifact
   { schema_version: 1,
     regions: [{start_page, end_page, basis}],   # sorted, non-overlapping
     default_basis }                              # basis for pages in no region
