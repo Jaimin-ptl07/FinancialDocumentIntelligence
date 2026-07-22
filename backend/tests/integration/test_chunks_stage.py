@@ -1,9 +1,9 @@
-"""ChunksStage auto-chains off AstStage, SemanticStage, ProvenanceStage, AND (Phase
-3a) StructureStage: `chunks` is the RT-1 retrieval foundation, joining a document's
-section text (ast), section type (semantic), page (provenance), and table-derived
-row/whole-table chunks (structure) into one per-document `chunks` record under the
-shared `s{i}`/`t{i}`/`t{i}r{j}` chunk identities. Against real Postgres + MinIO with
-FAKE OCR + semantic clients."""
+"""ChunksStage auto-chains off AstStage, SemanticStage, ProvenanceStage, StructureStage,
+AND (TR-1 P2) BasisStage: `chunks` is the RT-1 retrieval foundation, joining a
+document's section text (ast), section type (semantic), page (provenance), and
+one table CARD per table (structure + basis) into one per-document `chunks`
+record under the shared `s{i}`/`t{i}` chunk identities. Against real Postgres +
+MinIO with FAKE OCR + semantic clients."""
 
 import uuid
 
@@ -20,6 +20,7 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
+from fdi.pipeline.stages.basis import BasisStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.graph import GraphStage
 from fdi.pipeline.stages.normalize import NormalizeStage
@@ -123,6 +124,7 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     reg.register(GraphStage())
     reg.register(ProvenanceStage())
     reg.register(StructureStage())
+    reg.register(BasisStage())
     reg.register(ChunksStage())
     resolver = DagResolver(reg.all())
 
@@ -148,6 +150,7 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
 
     async with session_factory() as s:
@@ -156,13 +159,14 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     chunks_key = artifact_key(
         doc.id,
         "chunks",
-        2,
+        3,
         derived_input_hash(
             [
                 facts["ast"].output_hash,
                 facts["semantic"].output_hash,
                 facts["provenance"].output_hash,
                 facts["structure"].output_hash,
+                facts["basis"].output_hash,
             ]
         ),
     )
@@ -187,17 +191,13 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
                 "para_count": 1,
             },
             {
-                "chunk_id": "t0r1",
-                "heading": "Balance Sheet",
-                "text": "Balance Sheet | Cash: Value=100",
-                "section_type": None,
-                "page": 1,
-                "para_count": None,
-            },
-            {
                 "chunk_id": "t0",
                 "heading": "Balance Sheet",
-                "text": "Balance Sheet\nValue\nCash: Value=100",
+                "text": (
+                    "[Balance Sheet | BS | basis=unknown | page 1]\n"
+                    "Columns: Value\n"
+                    "Rows: Cash"
+                ),
                 "section_type": None,
                 "page": 1,
                 "para_count": None,
@@ -206,7 +206,7 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     }
 
 
-async def test_chunks_is_successor_of_all_four_deps() -> None:
+async def test_chunks_is_successor_of_all_five_deps() -> None:
     import fdi.pipeline.stages  # noqa: F401 - registers built-ins
     from fdi.pipeline.registry import REGISTRY
     from fdi.pipeline.resolver import DagResolver as _DagResolver
@@ -216,3 +216,4 @@ async def test_chunks_is_successor_of_all_four_deps() -> None:
     assert "chunks" in resolver.successors("semantic")
     assert "chunks" in resolver.successors("provenance")
     assert "chunks" in resolver.successors("structure")
+    assert "chunks" in resolver.successors("basis")

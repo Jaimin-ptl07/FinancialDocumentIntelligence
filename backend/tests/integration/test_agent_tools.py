@@ -22,6 +22,7 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
+from fdi.pipeline.stages.basis import BasisStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.embedding import EmbeddingStage
 from fdi.pipeline.stages.graph import GraphStage
@@ -143,8 +144,8 @@ async def test_search_happy_path(session_factory, store) -> None:
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
-                  ProvenanceStage(), StructureStage(), ChunksStage(), EmbeddingStage(),
-                  IndexStage()):
+                  ProvenanceStage(), StructureStage(), BasisStage(), ChunksStage(),
+                  EmbeddingStage(), IndexStage()):
         reg.register(stage)
     resolver = DagResolver(reg.all())
     embedder = FakeEmbeddingClient(dim=8)
@@ -180,6 +181,7 @@ async def test_search_happy_path(session_factory, store) -> None:
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(
         stage_name="embedding", run_id=str(uuid.uuid4()),

@@ -26,7 +26,7 @@ def test_build_chunks_joins_text_type_page() -> None:
     provenance = {"node_provenance": [
         {"node_id": "s0", "page": 3}, {"node_id": "s1", "page": 7},
     ]}
-    out = build_chunks(ast, semantic, provenance, {})
+    out = build_chunks(ast, semantic, provenance, {}, {})
     assert out["schema_version"] == 1
     assert out["chunks"] == [
         {"chunk_id": "s0", "heading": "Balance Sheet",
@@ -41,7 +41,7 @@ def test_text_matches_embedding_construction() -> None:
     # byte-identical to EmbeddingStage: heading + "\n" + "\n".join(paragraphs)
     heading, paragraphs = "H", ["a", "b"]
     ast = _ast([{"heading": heading, "paragraphs": paragraphs}])
-    out = build_chunks(ast, {}, {}, {})
+    out = build_chunks(ast, {}, {}, {}, {})
     assert out["chunks"][0]["text"] == heading + "\n" + "\n".join(paragraphs)
 
 
@@ -52,113 +52,181 @@ def test_chunk_id_mirrors_enumerate_skip() -> None:
         "not-a-dict",
         {"heading": "C", "paragraphs": []},
     ])
-    out = build_chunks(ast, {}, {}, {})
+    out = build_chunks(ast, {}, {}, {}, {})
     assert [c["chunk_id"] for c in out["chunks"]] == ["s0", "s2"]
 
 
 def test_section_type_degrades_to_none() -> None:
     ast = _ast([{"heading": "A", "paragraphs": []}, {"heading": "B", "paragraphs": []}])
     semantic = {"sections": [{"type": 123}]}  # non-str type, and only one entry
-    out = build_chunks(ast, semantic, {}, {})
+    out = build_chunks(ast, semantic, {}, {}, {})
     assert [c["section_type"] for c in out["chunks"]] == [None, None]
 
 
 def test_page_degrades_to_none_when_provenance_missing() -> None:
     ast = _ast([{"heading": "A", "paragraphs": []}, {"heading": "B", "paragraphs": []}])
     provenance = {"node_provenance": [{"node_id": "s0", "page": 5}]}  # s1 absent
-    out = build_chunks(ast, {}, provenance, {})
+    out = build_chunks(ast, {}, provenance, {}, {})
     assert [c["page"] for c in out["chunks"]] == [5, None]
 
 
 def test_empty_inputs() -> None:
-    assert build_chunks({}, {}, {}, {}) == {"schema_version": 1, "chunks": []}
+    assert build_chunks({}, {}, {}, {}, {}) == {"schema_version": 1, "chunks": []}
 
 
 def test_none_heading_kept_as_none_but_text_uses_empty() -> None:
     ast = _ast([{"heading": None, "paragraphs": ["x"]}])
-    out = build_chunks(ast, {}, {}, {})
+    out = build_chunks(ast, {}, {}, {}, {})
     assert out["chunks"][0]["heading"] is None
     assert out["chunks"][0]["text"] == "\nx"
 
 
 def test_structure_without_tables_key_emits_only_section_chunks() -> None:
     ast = _ast([{"heading": "A", "paragraphs": ["x"]}])
-    out = build_chunks(ast, {}, {}, {"blocks": []})
+    out = build_chunks(ast, {}, {}, {"blocks": []}, {})
     assert [c["chunk_id"] for c in out["chunks"]] == ["s0"]
 
 
-def test_table_row_chunks_emitted_with_correct_id_text_page() -> None:
+def test_table_card_emitted_once_per_table_with_identity_columns_rows() -> None:
+    """TR-1 P2: ONE card per table (`t{i}`) -- no `t{i}r{j}` row chunks at
+    all. The card's text is the identity line (statement type / basis / page)
+    + resolved column headers + data-row labels, no values."""
     table = {
-        "caption": {"content": "Balance Sheet Table"},
+        "caption": {"content": "Balance Sheet"},
         "bounding_regions": [{"page_number": 5, "polygon": []}],
         "grid": _grid(
-            rows=[["Item", "Value"], ["Cash", "100"], ["Debt", ""]],
-            column_headers=["Item", "Value"],
+            rows=[
+                ["Particulars", "As at 31-03-2024", "As at 31-03-2023"],
+                ["Property, plant and equipment", "2,126.88", "2,016.80"],
+                ["Total assets", "16,427.37", "14,213.08"],
+            ],
+            column_headers=["Particulars", "As at 31-03-2024", "As at 31-03-2023"],
             header_row_count=1,
         ),
     }
     structure = {"tables": [table]}
-    out = build_chunks({}, {}, {}, structure)
+    out = build_chunks({}, {}, {}, structure, {})
 
-    row_chunks = {c["chunk_id"]: c for c in out["chunks"] if c["chunk_id"] in ("t0r1", "t0r2")}
-    assert set(row_chunks) == {"t0r1", "t0r2"}
+    # zero t0r* row chunks survive
+    assert not any(
+        isinstance(c["chunk_id"], str) and c["chunk_id"].startswith("t0r")
+        for c in out["chunks"]
+    )
 
-    assert row_chunks["t0r1"] == {
-        "chunk_id": "t0r1",
-        "heading": "Balance Sheet Table",
-        "text": "Balance Sheet Table | Cash: Value=100",
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert card == {
+        "chunk_id": "t0",
+        "heading": "Balance Sheet",
+        "text": (
+            "[Balance Sheet | BS | basis=unknown | page 5]\n"
+            "Columns: As at 31-03-2024 | As at 31-03-2023\n"
+            "Rows: Property, plant and equipment; Total assets"
+        ),
         "section_type": None,
         "page": 5,
         "para_count": None,
     }
-    # blank cell ("Debt", "") is omitted from the col=val pair list entirely
-    assert row_chunks["t0r2"] == {
-        "chunk_id": "t0r2",
-        "heading": "Balance Sheet Table",
-        "text": "Balance Sheet Table | Debt: ",
-        "section_type": None,
-        "page": 5,
-        "para_count": None,
-    }
 
 
-def test_whole_table_chunk_emitted_per_table() -> None:
+def test_table_card_basis_reflects_page_basis_consolidated() -> None:
     table = {
-        "caption": {"content": "Balance Sheet Table"},
-        "bounding_regions": [{"page_number": 5, "polygon": []}],
+        "caption": {"content": "Consolidated Balance Sheet"},
+        "bounding_regions": [{"page_number": 91, "polygon": []}],
         "grid": _grid(
-            rows=[["Item", "Value"], ["Cash", "100"], ["Debt", ""]],
-            column_headers=["Item", "Value"],
+            rows=[["Particulars", "FY24"], ["Total assets", "500"]],
+            column_headers=["Particulars", "FY24"],
             header_row_count=1,
         ),
     }
     structure = {"tables": [table]}
-    out = build_chunks({}, {}, {}, structure)
+    basis = {
+        "schema_version": 1,
+        "regions": [{"start_page": 90, "end_page": 95, "basis": "consolidated"}],
+        "default_basis": "unknown",
+    }
+    out = build_chunks({}, {}, {}, structure, basis)
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert "basis=consolidated" in card["text"]
+    assert card["text"].startswith("[Consolidated Balance Sheet | BS | basis=consolidated")
 
-    whole = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
-    assert whole["heading"] == "Balance Sheet Table"
-    assert whole["section_type"] is None
-    assert whole["page"] == 5
-    assert whole["para_count"] is None
-    assert whole["text"] == (
-        "Balance Sheet Table\nValue\nCash: Value=100\nDebt: "
+
+def test_table_card_basis_unknown_when_no_region_covers_the_page() -> None:
+    table = {
+        "caption": {"content": "Balance Sheet"},
+        "bounding_regions": [{"page_number": 5, "polygon": []}],
+        "grid": _grid(
+            rows=[["Particulars", "FY24"], ["Total assets", "500"]],
+            column_headers=["Particulars", "FY24"],
+            header_row_count=1,
+        ),
+    }
+    structure = {"tables": [table]}
+    # a region exists, but it does not cover page 5 -> falls back to default_basis
+    basis = {
+        "schema_version": 1,
+        "regions": [{"start_page": 90, "end_page": 95, "basis": "consolidated"}],
+        "default_basis": "unknown",
+    }
+    out = build_chunks({}, {}, {}, structure, basis)
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert "basis=unknown" in card["text"]
+
+
+def test_table_card_statement_type_note_units_best_effort_detection() -> None:
+    table = {
+        "caption": {"content": "Note 24 Statement of Profit and Loss (Rs in Crore)"},
+        "bounding_regions": [{"page_number": 12, "polygon": []}],
+        "grid": _grid(
+            rows=[["Particulars", "FY24"], ["Revenue", "1,000"]],
+            column_headers=["Particulars", "FY24"],
+            header_row_count=1,
+        ),
+    }
+    structure = {"tables": [table]}
+    out = build_chunks({}, {}, {}, structure, {})
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert card["text"] == (
+        "[Note 24 Statement of Profit and Loss (Rs in Crore) | PL | "
+        "basis=unknown | note 24 | Rs Crore | page 12]\n"
+        "Columns: FY24\n"
+        "Rows: Revenue"
     )
 
 
-def test_whole_table_chunk_capped_at_max_chars() -> None:
-    long_value = "X" * 5000
+def test_table_card_cash_flow_and_lakh_units_detected() -> None:
     table = {
+        "caption": {"content": "3. Cash Flow Statement (Rs in Lakhs)"},
         "grid": _grid(
-            rows=[["Item", "Value"], ["Cash", long_value]],
-            column_headers=["Item", "Value"],
+            rows=[["Particulars", "FY24"], ["Net cash", "10"]],
+            column_headers=["Particulars", "FY24"],
             header_row_count=1,
         ),
     }
     structure = {"tables": [table]}
-    out = build_chunks({}, {}, {}, structure)
+    out = build_chunks({}, {}, {}, structure, {})
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert "CF" in card["text"]
+    assert "note 3" in card["text"]
+    assert "Rs Lakhs" in card["text"]
 
-    whole = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
-    assert len(whole["text"]) == 4000
+
+def test_table_card_statement_type_note_units_default_when_undetectable() -> None:
+    table = {
+        "caption": {"content": "Property, Plant and Equipment"},
+        "grid": _grid(
+            rows=[["Particulars", "FY24"], ["Gross block", "10"]],
+            column_headers=["Particulars", "FY24"],
+            header_row_count=1,
+        ),
+    }
+    structure = {"tables": [table]}
+    out = build_chunks({}, {}, {}, structure, {})
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert card["text"] == (
+        "[Property, Plant and Equipment | unknown | basis=unknown | page None]\n"
+        "Columns: FY24\n"
+        "Rows: Gross block"
+    )
 
 
 def test_table_context_falls_back_to_caption_then_table_index() -> None:
@@ -170,11 +238,15 @@ def test_table_context_falls_back_to_caption_then_table_index() -> None:
         ),
     }
     structure = {"tables": [{}, table_no_caption]}
-    out = build_chunks({}, {}, {}, structure)
+    out = build_chunks({}, {}, {}, structure, {})
 
-    row = next(c for c in out["chunks"] if c["chunk_id"] == "t1r1")
-    assert row["heading"] == "Table 1"
-    assert row["text"] == "Table 1 | Cash: Value=1"
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t1")
+    assert card["heading"] == "Table 1"
+    assert card["text"] == (
+        "[Table 1 | unknown | basis=unknown | page None]\n"
+        "Columns: Value\n"
+        "Rows: Cash"
+    )
 
 
 def test_table_page_none_when_no_bounding_regions() -> None:
@@ -186,12 +258,12 @@ def test_table_page_none_when_no_bounding_regions() -> None:
         ),
     }
     structure = {"tables": [table]}
-    out = build_chunks({}, {}, {}, structure)
-    row = next(c for c in out["chunks"] if c["chunk_id"] == "t0r1")
-    assert row["page"] is None
+    out = build_chunks({}, {}, {}, structure, {})
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert card["page"] is None
 
 
-def test_dedup_removes_exact_duplicate_table_chunks() -> None:
+def test_dedup_removes_exact_duplicate_table_cards() -> None:
     table = {
         "caption": {"content": "Same Caption"},
         "grid": _grid(
@@ -201,31 +273,31 @@ def test_dedup_removes_exact_duplicate_table_chunks() -> None:
         ),
     }
     structure = {"tables": [table, dict(table)]}
-    out = build_chunks({}, {}, {}, structure)
+    out = build_chunks({}, {}, {}, structure, {})
     ids = [c["chunk_id"] for c in out["chunks"]]
-    # first table's row + whole-table chunks survive; second table's are byte-identical
-    # duplicates and are dropped, WITHOUT renumbering the survivors
-    assert ids == ["t0r1", "t0"]
+    # first table's card survives; second table's is a byte-identical
+    # duplicate (same caption, grid, page, basis) and is dropped, WITHOUT
+    # renumbering the survivor
+    assert ids == ["t0"]
 
 
-def test_dedup_collapses_section_and_table_chunk_with_identical_text() -> None:
-    # Crafted so the SECTION chunk's text ("H\nV\nCash: V=5") is byte-identical to the
-    # table's WHOLE-TABLE chunk text (context "H" + header line "V" + row line
-    # "Cash: V=5", newline-joined) -- proves the dedup pass runs over the combined
-    # section+table list (decision 9), not just within one group. The section chunk,
-    # emitted first, survives; the later-emitted whole-table chunk ("t0") is dropped.
-    # The row chunk ("t0r1", text "H | Cash: V=5") is NOT a duplicate of anything and
-    # survives untouched, with its id gap intact (no renumbering).
-    ast = _ast([{"heading": "H", "paragraphs": ["V", "Cash: V=5"]}])
+def test_dedup_collapses_section_and_table_card_with_identical_text() -> None:
+    # Crafted so the SECTION chunk's text is byte-identical to the table
+    # card's text -- proves the dedup pass runs over the combined
+    # section+table list, not just within one group. The section chunk,
+    # emitted first, survives; the later-emitted table card ("t0") is dropped.
+    ast = _ast([{
+        "heading": "[Table 0 | unknown | basis=unknown | page None]",
+        "paragraphs": ["Columns: ", "Rows: Cash"],
+    }])
     table = {
-        "caption": {"content": "H"},
         "grid": _grid(
-            rows=[["Item", "V"], ["Cash", "5"]],
-            column_headers=["Item", "V"],
+            rows=[["Item"], ["Cash"]],
+            column_headers=["Item"],
             header_row_count=1,
         ),
     }
     structure = {"tables": [table]}
-    out = build_chunks(ast, {}, {}, structure)
+    out = build_chunks(ast, {}, {}, structure, {})
     ids = [c["chunk_id"] for c in out["chunks"]]
-    assert ids == ["s0", "t0r1"]
+    assert ids == ["s0"]
