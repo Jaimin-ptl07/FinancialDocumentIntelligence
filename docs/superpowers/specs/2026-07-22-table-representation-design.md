@@ -42,7 +42,7 @@ flattened LOCATE representation.
 - P1 — a `basis` stage: standalone/consolidated region segmentation → a basis
   map; generalizes the EX-1 page-boundary filter.
 - P2 — table cards: `chunks` emits one card per table (replacing `t{i}r{r}`
-  row chunks); `index` stores basis/statement metadata.
+  row chunks), carrying basis/statement/note in the card text (no Milvus schema change).
 - P3 — grid → markdown rendering with resolved headers, units, identity;
   header-repair for collapsed Azure-DI headers; wired into extraction.
 - P4 — schema v3.2 per-unit `basis_preference`; basis-aware retrieval.
@@ -137,20 +137,33 @@ Rows: Property plant and equipment; Capital work-in-progress;
   the reranker (the reason table injection was removed pre-EX-1). Cards locate
   at table granularity; the full grid is fetched on hit, so a value is still
   reached via its row label. Fewer Milvus rows, no flooding.
-- The card carries `table_id`, `basis`, `statement_type` (from caption/section
-  when derivable, else `unknown`), `note_no` (parsed from caption when
-  present), `page` as metadata.
+- `table_id` is the card's `chunk_id` (`f"t{i}"`) — already the Milvus row id.
+  `basis`, `statement_type` (from caption/section when derivable, else
+  `unknown`), `note_no`, and units are written INTO the card's `text` identity
+  line, not as separate Milvus scalar fields.
 - `statement_type` heuristic: match the caption/owning-section heading against
   the primary-statement anchors (`balance sheet`, `statement of profit and
   loss`, `cash flow`); else `unknown`. Never blocks — `unknown` is valid.
 
-### 4.3 `index` stage v4 — card metadata
+### 4.3 No Milvus schema change (design decision, revised from the original)
 
-The Milvus row for a card gains `table_id`, `basis`, `statement_type`,
-`note_no` alongside the existing `text`/`doc_id`/`chunk_id`/`heading`/`page`.
-`section_type` stays `None` for cards. Version bump re-runs index (DAG is
-content-addressed); embeddings for section chunks are reused, cards are
-newly embedded (their text is new).
+**Decision (P2 implementation):** cards carry basis/statement/note/units in
+their `text`, reusing the existing `fdi_chunks_v2` Milvus schema
+(`text`/`doc_id`/`chunk_id`/`heading`/`page`/`section_type`). The `index`
+stage is **unchanged** — it indexes cards like any chunk. This avoids a third
+collection (`fdi_chunks_v3`) and the migration it would require. `section_type`
+stays `None` for cards; `page` is the table's page.
+
+The trade this makes: **basis is not a Milvus filter scalar**, so basis-aware
+retrieval (P4b) filters at the retrieval layer instead — it computes each
+candidate card's basis with `page_basis(basis_artifact, card.page)` and drops
+the opposite basis after fetching, rather than pushing the filter into Milvus.
+For a single-document corpus this is a non-issue; at scale a Milvus scalar
+would be more efficient and is a clean future migration (`fdi_chunks_v3`),
+tracked as a follow-up, not owed by P2.
+
+The chunks-stage version bump (v3) still re-runs `index` (DAG is
+content-addressed); all chunks re-embed since the `chunks` artifact changed.
 
 ## 5. Rendering + header-repair (P3)
 
@@ -234,7 +247,7 @@ rather than a hardcoded page.
 ocr → structure (grid) → ast
                        ↘ basis (regions)         [P1]
 chunks v3: section chunks + table cards(basis,stmt,note)   [P2]
-index v4: cards → Milvus (+ basis/stmt/note metadata)      [P2]
+index (unchanged): cards -> Milvus; basis is in card TEXT [P2]
 
 extract_unit(field, basis_preference):                     [P3,P4]
   pool = hybrid_search(cards + sections, filter basis)     [P4]
@@ -264,7 +277,7 @@ Each phase is its own implementation plan. Dependencies drive the waves:
 | **P1** | `basis` stage + `page_basis` | — | 1 (parallel) |
 | **P3-core** | `repair_headers` + `render_table_markdown` (new `core/table_render.py`, pure) | — | 1 (parallel) |
 | **P4a** | schema v3.2 `basis_preference` + parse | — | 1 (parallel) |
-| **P2** | `chunks` v3 cards + `index` v4 metadata | P1 | 2 |
+| **P2** | `chunks` v3 cards (basis in card text) | P1 | 2 |
 | **P3-wire + P4b** | extraction render + basis-aware retrieval | P1, P2, P3-core, P4a | 3 |
 
 Wave 1's three pieces are **file-disjoint** (new `core/basis.py`+`stages/
