@@ -18,7 +18,10 @@ from collections.abc import Mapping
 # last thing printed in a header cell.
 _DATE_DMY = re.compile(r"\d{1,2}[-/]\d{1,2}[-/]\d{4}$")
 _DATE_YMD = re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
-_YEAR = re.compile(r"\d{4}$")
+# `(?<!\d)` so the four digits are a standalone year, NOT the trailing run of
+# a longer unformatted number ("342024" must not read as the year 2024). A
+# comma-grouped amount ("12,34,024") is already safe (the comma breaks \d{4}$).
+_YEAR = re.compile(r"(?<!\d)\d{4}$")
 _FY_TOKEN = re.compile(r"FY-?\d{2,4}$", re.IGNORECASE)
 _FISCAL_RANGE_2 = re.compile(r"\d{4}-\d{2}$")
 _FISCAL_RANGE_4 = re.compile(r"\d{4}-\d{4}$")

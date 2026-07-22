@@ -154,6 +154,40 @@ def test_repair_headers_positional_fallback_when_no_period_pattern() -> None:
     assert headers[2] == "Column 2 (prior)"
 
 
+def test_repair_headers_unformatted_number_not_mistaken_for_a_year() -> None:
+    """A bare 4-digit YEAR is a period header, but the trailing 4 digits of a
+    longer unformatted number (`342024` -> `2024`) must NOT be -- else a real
+    data cell gets promoted to a header in the collapsed-header fallback."""
+    g = _grid(
+        n_rows=2,
+        n_cols=3,
+        header_row_count=0,
+        column_headers=["", "", ""],
+        grid=[
+            ["Particulars", "342024", "199999"],   # unformatted amounts, end in-range
+            ["Total assets", "16,427", "14,213"],
+        ],
+    )
+    out = repair_headers(g)
+    headers = out["column_headers"]
+    assert isinstance(headers, list)
+    # NOT promoted to "342024"/"199999" -- positional fallback instead
+    assert headers[1] == "Column 1 (most recent)"
+    assert headers[2] == "Column 2 (prior)"
+
+
+def test_repair_headers_bare_year_is_a_period_header() -> None:
+    g = _grid(
+        n_rows=2, n_cols=3, header_row_count=0,
+        column_headers=["", "", ""],
+        grid=[["Particulars", "As at 2024", "2023"],
+              ["Total assets", "16,427", "14,213"]],
+    )
+    headers = repair_headers(g)["column_headers"]
+    assert headers[1] == "As at 2024"
+    assert headers[2] == "2023"
+
+
 def test_repair_headers_positional_fallback_column_3_and_beyond() -> None:
     g = _grid(
         n_rows=2,
