@@ -192,12 +192,19 @@ def _filter_by_basis(
     basis-region model (TR-1 P4b). `page_basis` degrades a missing/malformed
     `basis_artifact`, or a candidate with `page=None`, to `"unknown"` --
     which `_basis_keep` always keeps -- so a missing basis artifact serves
-    every candidate rather than silently dropping half the document. Never
-    raises."""
-    return [
+    every candidate rather than silently dropping half the document.
+
+    GRACEFUL FALLBACK: if filtering to `preference` would drop EVERY candidate
+    -- the preferred basis is entirely absent from the pool, e.g. a
+    consolidated-only integrated report (Reliance) against the default
+    `standalone` preference -- keep the unfiltered candidates instead of
+    starving the unit. Extracting from the only basis present beats returning
+    nothing. Never raises."""
+    kept = [
         c for c in candidates
         if _basis_keep(page_basis(basis_artifact, c.page), preference)
     ]
+    return kept if kept else list(candidates)
 
 
 _TABLE_CARD_RE = re.compile(r"^t(\d+)$")

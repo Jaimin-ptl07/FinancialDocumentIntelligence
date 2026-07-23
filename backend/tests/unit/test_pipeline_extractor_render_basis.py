@@ -148,3 +148,37 @@ def test_render_table_candidate_evidence_id_without_colon_is_unchanged() -> None
                       source_tool="hybrid")
     out = _render_table_candidate(card, structure=structure)
     assert out is card
+
+
+# ---------------------------------------------------------------------------
+# _filter_by_basis -- graceful fallback when preferred basis is absent
+# ---------------------------------------------------------------------------
+
+from fdi.pipeline.extractor import _filter_by_basis  # noqa: E402
+
+
+def _pc(eid: str, page: int) -> Candidate:
+    return Candidate(evidence_id=eid, text="x", page=page, score=1.0, source_tool="h")
+
+
+def test_filter_by_basis_falls_back_when_preferred_basis_absent() -> None:
+    # Consolidated-only report (Reliance): every candidate is consolidated, but
+    # the unit prefers standalone -> filtering would drop all -> keep them all.
+    basis = {"regions": [{"basis": "consolidated", "start_page": 1, "end_page": 147}],
+             "default_basis": "unknown"}
+    cands = [_pc("d:t0", 10), _pc("d:t1", 50)]
+    out = _filter_by_basis(cands, basis_artifact=basis, preference="standalone")
+    assert out == cands
+
+
+def test_filter_by_basis_filters_normally_when_preferred_present() -> None:
+    basis = {"regions": [{"basis": "consolidated", "start_page": 1, "end_page": 100},
+                         {"basis": "standalone", "start_page": 101, "end_page": 200}],
+             "default_basis": "unknown"}
+    cons, stand = _pc("d:t0", 50), _pc("d:t1", 150)
+    out = _filter_by_basis([cons, stand], basis_artifact=basis, preference="standalone")
+    assert out == [stand]  # standalone present -> fallback NOT triggered
+
+
+def test_filter_by_basis_empty_input_returns_empty() -> None:
+    assert _filter_by_basis([], basis_artifact={}, preference="standalone") == []
