@@ -348,3 +348,36 @@ def test_table_card_uses_descriptive_label_column() -> None:
     assert "Rows: Revenue from operations; Other income; Total expenses" in card["text"]
     assert "Columns: Particulars | Note No. | 31-03-2024 | 31-03-2023" in card["text"]
     assert "I.;" not in card["text"]  # the index column must NOT be the labels
+
+
+# --- L1 hardening: descriptive-cell contract (review findings 1 & 4) -------
+
+def test_is_descriptive_token_classes() -> None:
+    from fdi.core.retrieval import _is_descriptive
+    # descriptive: multi-word or mixed-case labels (incl. ALL-CAPS with a space)
+    for label in ["Revenue from operations", "Total assets", "TOTAL ASSETS", "Cash"]:
+        assert _is_descriptive(label) is True, label
+    # NOT descriptive: roman-numeral index tokens of ANY length, note numbers,
+    # numeric values, blanks, non-strings
+    for tok in ["I.", "III.", "VIII", "XIII.", "IV.", "22", "18795.89", "", "  ", 42, None]:
+        assert _is_descriptive(tok) is False, tok
+
+
+def test_label_column_index_multichar_roman_index_not_selected() -> None:
+    """A sparse table: the Particulars column is blank on continuation rows
+    while the index column carries multi-char roman numerals (III./VIII.).
+    The index column (col 0) must NOT be chosen despite the leftmost tie-break."""
+    from fdi.core.retrieval import _label_column_index
+    rows = [
+        ["Particulars", "Particulars", "31-03-2024"],       # header
+        ["III.", "Total Income", "20925.03"],
+        ["VIII.", "", "2129.14"],                            # blank label (spanned)
+        ["XIII.", "", "1569.77"],
+    ]
+    assert _label_column_index(rows, 1, len(rows), 3) == 1
+
+
+def test_label_column_index_ragged_rows_do_not_crash() -> None:
+    from fdi.core.retrieval import _label_column_index
+    rows = [["Particulars", "FY24", "FY23"], ["Total assets"], ["Cash held", "10"]]
+    assert _label_column_index(rows, 1, len(rows), 3) == 0

@@ -144,14 +144,20 @@ def _table_grid_rows(
 
 
 def _is_descriptive(cell: object) -> bool:
-    """True for a DESCRIPTIVE label cell: a string with >3 non-space chars and
-    at least one ASCII letter. Excludes roman-numeral index tokens (`I.`, `V`),
-    note numbers (`22`), blanks, and numeric values (`18795.89`) -- the cells
-    that pollute a leading index/number column."""
-    return (
-        isinstance(cell, str)
-        and len(cell.strip()) > 3
-        and any(c.isascii() and c.isalpha() for c in cell)
+    """True for a DESCRIPTIVE label cell: a string >3 non-space chars long that
+    contains a space OR a lowercase ASCII letter. This admits real labels --
+    multi-word (`"Total assets"`, `"TOTAL ASSETS"`) or mixed-case
+    (`"Revenue from operations"`) -- while excluding the cells that pollute a
+    leading index/number column: roman-numeral tokens of ANY length
+    (`I.`, `VIII`, `XIII.` -- no space, no lowercase), note numbers (`22`),
+    blanks, and numeric values (`18795.89`). The space-or-lowercase test is
+    what makes multi-char roman numerals fail (a plain `any(isalpha)` test
+    passes `VIII` because `V/I/X` are letters)."""
+    if not isinstance(cell, str):
+        return False
+    stripped = cell.strip()
+    return len(stripped) > 3 and (
+        " " in stripped or any("a" <= c <= "z" for c in stripped)
     )
 
 
@@ -217,6 +223,10 @@ def _table_chunks(
                 n_cols = max(n_cols, len(row_obj))
         label_col = _label_column_index(rows, header_row_count, n_rows, n_cols)
 
+        # Every header EXCEPT the chosen label column's. When the label column
+        # is not column 0, column 0's header (often a duplicated "Particulars"
+        # over the index column) stays here -- a harmless extra keyword, never
+        # a dropped or duplicated VALUE-column header.
         col_headers_joined = " | ".join(
             h
             for j, h in enumerate(column_headers)
