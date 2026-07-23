@@ -143,9 +143,42 @@ def _table_grid_rows(
     return n_rows, header_row_count, rows, column_headers
 
 
-def _row_label(row: Sequence[object]) -> str:
-    label_raw = row[0] if row else ""
-    return label_raw if isinstance(label_raw, str) else ""
+def _is_descriptive(cell: object) -> bool:
+    """True for a DESCRIPTIVE label cell: a string with >3 non-space chars and
+    at least one ASCII letter. Excludes roman-numeral index tokens (`I.`, `V`),
+    note numbers (`22`), blanks, and numeric values (`18795.89`) -- the cells
+    that pollute a leading index/number column."""
+    return (
+        isinstance(cell, str)
+        and len(cell.strip()) > 3
+        and any(c.isascii() and c.isalpha() for c in cell)
+    )
+
+
+def _label_column_index(
+    rows: Sequence[object], header_row_count: int, n_rows: int, n_cols: int
+) -> int:
+    """Index of the column to read row labels from: the column with the most
+    DESCRIPTIVE data-row cells (see `_is_descriptive`). For Indian statement
+    tables this is the "Particulars" column, NOT the leading roman-numeral
+    index column. Ties resolve to the leftmost; a grid with no descriptive
+    column falls back to 0 (the historical behaviour -- never worse). Pure."""
+    best, best_score = 0, -1
+    for j in range(n_cols):
+        score = 0
+        for r in range(header_row_count, n_rows):
+            row_obj = rows[r] if r < len(rows) else []
+            row = row_obj if isinstance(row_obj, list) else []
+            if j < len(row) and _is_descriptive(row[j]):
+                score += 1
+        if score > best_score:
+            best_score, best = score, j
+    return best
+
+
+def _cell_text(row: Sequence[object], col: int) -> str:
+    cell = row[col] if 0 <= col < len(row) else ""
+    return cell if isinstance(cell, str) else ""
 
 
 def _table_chunks(
@@ -178,15 +211,23 @@ def _table_chunks(
 
         n_rows, header_row_count, rows, column_headers = _table_grid_rows(table_raw)
 
+        n_cols = len(column_headers)
+        for row_obj in rows:
+            if isinstance(row_obj, list):
+                n_cols = max(n_cols, len(row_obj))
+        label_col = _label_column_index(rows, header_row_count, n_rows, n_cols)
+
         col_headers_joined = " | ".join(
-            h for h in column_headers[1:] if isinstance(h, str) and h
+            h
+            for j, h in enumerate(column_headers)
+            if j != label_col and isinstance(h, str) and h
         )
 
         row_labels: list[str] = []
         for r in range(header_row_count, n_rows):
             row_obj = rows[r] if r < len(rows) else []
             row = row_obj if isinstance(row_obj, list) else []
-            row_labels.append(_row_label(row))
+            row_labels.append(_cell_text(row, label_col))
         row_labels_joined = "; ".join(row_labels)
 
         note_part = f" | note {note_no}" if note_no else ""

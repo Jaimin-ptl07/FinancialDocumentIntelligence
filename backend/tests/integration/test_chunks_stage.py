@@ -159,7 +159,7 @@ async def test_chunks_stage_produces_records(session_factory, store) -> None:
     chunks_key = artifact_key(
         doc.id,
         "chunks",
-        3,
+        4,
         derived_input_hash(
             [
                 facts["ast"].output_hash,

@@ -301,3 +301,50 @@ def test_dedup_collapses_section_and_table_card_with_identical_text() -> None:
     out = build_chunks(ast, {}, {}, structure, {})
     ids = [c["chunk_id"] for c in out["chunks"]]
     assert ids == ["s0"]
+
+
+# --- L1: label column chosen by text density ------------------------------
+
+def test_label_column_index_picks_descriptive_over_leading_index() -> None:
+    from fdi.core.retrieval import _label_column_index
+    rows = [
+        ["Particulars", "Particulars", "Note No.", "31-03-2024"],  # header
+        ["I.", "Revenue from operations", "22", "20676.58"],
+        ["II.", "Other income", "23", "248.45"],
+        ["", "Total expenses", "", "18795.89"],
+    ]
+    assert _label_column_index(rows, 1, len(rows), 4) == 1
+
+
+def test_label_column_index_leftmost_on_tie_and_zero_fallback() -> None:
+    from fdi.core.retrieval import _label_column_index
+    # all-numeric grid -> no descriptive column -> fall back to 0
+    rows = [["A", "B"], ["1", "2"], ["3", "4"]]
+    assert _label_column_index(rows, 1, len(rows), 2) == 0
+    # two equally-descriptive columns -> leftmost wins
+    rows2 = [["H1", "H2"], ["Total assets", "Total equity"], ["Cash held", "Debt owed"]]
+    assert _label_column_index(rows2, 1, len(rows2), 2) == 0
+
+
+def test_table_card_uses_descriptive_label_column() -> None:
+    """A P&L-style grid whose leading column is a roman-numeral INDEX must
+    take its row labels from the descriptive column, not the index column."""
+    table = {
+        "caption": {"content": "Statement of Profit and Loss"},
+        "bounding_regions": [{"page_number": 92, "polygon": []}],
+        "grid": _grid(
+            rows=[
+                ["Particulars", "Particulars", "Note No.", "31-03-2024", "31-03-2023"],
+                ["I.", "Revenue from operations", "22", "20676.58", "15219.54"],
+                ["II.", "Other income", "23", "248.45", "265.07"],
+                ["", "Total expenses", "", "18795.89", "14211.52"],
+            ],
+            column_headers=["Particulars", "Particulars", "Note No.", "31-03-2024", "31-03-2023"],
+            header_row_count=1,
+        ),
+    }
+    out = build_chunks({}, {}, {}, {"tables": [table]}, {})
+    card = next(c for c in out["chunks"] if c["chunk_id"] == "t0")
+    assert "Rows: Revenue from operations; Other income; Total expenses" in card["text"]
+    assert "Columns: Particulars | Note No. | 31-03-2024 | 31-03-2023" in card["text"]
+    assert "I.;" not in card["text"]  # the index column must NOT be the labels
