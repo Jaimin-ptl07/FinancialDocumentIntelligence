@@ -17,7 +17,10 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
   const sourceless = !hasSourceFile(document);
 
   return (
-    <tr style={{ borderTop: "1px solid var(--rule-soft)" }}>
+    <tr
+      className="transition-colors duration-200 hover:bg-leaf-2"
+      style={{ borderTop: "1px solid var(--rule-soft)" }}
+    >
       <td style={cell}>
         <Link
           href={`/documents/${document.id}`}
@@ -58,13 +61,19 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
         {formatBytes(document.byte_size)}
       </td>
       <td style={cell}>
+        {/* Bold is reserved app-wide for "needs attention" (LedgerTotals,
+            Value, FieldList) — "done" must not also claim it, or the same
+            weight would mean opposite things depending which screen a user
+            is looking at. The checkmark glyph alone carries "complete" here;
+            weight stays at the row's ordinary 400. */}
         <span
           className="data"
           style={{
             fontSize: "var(--text-sm)",
-            color: complete ? "var(--tick)" : "var(--ink)",
+            color: "var(--tick)",
           }}
         >
+          {complete ? "✓ " : ""}
           {done}/{total}
         </span>
         {failed > 0 ? (

@@ -3,8 +3,12 @@
 import type { StageThroughputView } from "@/lib/types";
 
 /** One row per stage. The bar is a single magnitude — how much of the corpus
- *  cleared this stage — so it needs no legend; failures are called out as a
- *  reserved status beside it, with a word, never colour alone. */
+ *  cleared this stage, nothing more — so an ink fill against the ruled track
+ *  is already the correct read: it isn't distinguishing two states, only
+ *  showing how far one value has got, and ink-on-rule is close to maximum
+ *  contrast in both themes. Failures are the one place this row does need to
+ *  distinguish a state, so that stays a reserved word-badge, never colour
+ *  alone. */
 export function StageThroughput({ stages }: { stages: StageThroughputView[] }) {
   return (
     <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -47,12 +51,15 @@ export function StageThroughput({ stages }: { stages: StageThroughputView[] }) {
                   style={{ gap: "var(--sp-3)" }}
                 >
                   <div
+                    role="img"
+                    aria-label={`${stage.done} of ${total} documents cleared ${stage.name}`}
                     title={`${stage.done} of ${total} documents cleared ${stage.name}`}
                     style={{
                       flex: 1,
                       height: "6px",
                       background: "var(--rule)",
-                      borderRadius: "3px",
+                      borderRadius: "var(--radius-sm)",
+                      boxShadow: "inset 0 0 0 1px var(--rule-soft)",
                       overflow: "hidden",
                       minWidth: "4rem",
                     }}
@@ -63,12 +70,13 @@ export function StageThroughput({ stages }: { stages: StageThroughputView[] }) {
                         height: "100%",
                         background: "var(--tick)",
                         borderRadius: "3px",
+                        transition: "width 200ms ease",
                       }}
                     />
                   </div>
                   <span
                     className="data"
-                    style={{ fontSize: "var(--text-xs)", width: "5ch" }}
+                    style={{ fontSize: "var(--text-xs)", width: "5ch", color: "var(--ink-soft)" }}
                   >
                     {stage.done}/{total}
                   </span>

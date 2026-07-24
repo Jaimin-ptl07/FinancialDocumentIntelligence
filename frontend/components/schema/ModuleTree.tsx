@@ -93,6 +93,10 @@ export function ModuleTree({
               gap: "var(--sp-2)",
               padding: "var(--sp-3) var(--sp-4) var(--sp-2)",
               color: "var(--ink)",
+              /* Top of the hierarchy: the widest tracking, so the eye reads
+                 "section" before it reads "row". Units and fields below step
+                 down in tracking/size/weight rather than in color. */
+              letterSpacing: "0.08em",
             }}
           >
             <span>{module.name}</span>
@@ -106,12 +110,21 @@ export function ModuleTree({
               <div
                 className="data"
                 style={{
-                  padding: "var(--sp-1) var(--sp-4)",
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: "var(--sp-2)",
+                  /* One step in from the module heading: the indent is the
+                     hierarchy cue, not a rule or a tint. */
+                  padding: "var(--sp-1) var(--sp-4) var(--sp-1) var(--sp-5)",
                   fontSize: "var(--text-xs)",
+                  fontWeight: 500,
                   color: "var(--ink-soft)",
                 }}
               >
-                {unit.unit_id} · {unit.title}
+                <span aria-hidden="true" style={{ color: "var(--ink-faint)" }}>
+                  &rsaquo;
+                </span>
+                <span>{unit.unit_id} · {unit.title}</span>
               </div>
               <ul>
                 {unit.fields.map((field) => {
@@ -131,21 +144,51 @@ export function ModuleTree({
                             fieldName: field.field_name,
                           })
                         }
-                        className="w-full text-left hover:bg-leaf-2"
+                        className="group w-full text-left hover:bg-leaf-2 focus-visible:bg-leaf-2"
                         style={{
-                          padding: "var(--sp-1) var(--sp-4)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "var(--sp-2)",
+                          /* Two steps in from the module heading: fields sit
+                             under their unit the way a sub-item sits under a
+                             heading in a table of contents. */
+                          padding: "var(--sp-1) var(--sp-4) var(--sp-1) var(--sp-6)",
                           fontSize: "var(--text-sm)",
                           fontWeight: active ? 600 : 400,
                           color: active ? "var(--ink)" : "var(--ink-soft)",
                           background: active ? "var(--leaf-2)" : "transparent",
+                          transition: "background-color 120ms ease",
                           /* The active mark is ink, not --tether: --tether is
                              spent entirely on provenance. Matches the Spine. */
                           boxShadow: active
                             ? "inset 2px 0 0 0 var(--ink)"
-                            : undefined,
+                            : "inset 2px 0 0 0 transparent",
                         }}
                       >
-                        {field.canonical_label}
+                        {/* A hover-only tick, so a row reads as reachable
+                            before the pointer commits to a click — the same
+                            affordance the active state gives for free, shown
+                            in weight rather than a new color. Reserved at a
+                            fixed width (not conditionally rendered) so its
+                            fade-in never nudges the label beside it. */}
+                        <span
+                          aria-hidden="true"
+                          className={
+                            active ? "opacity-0" : "opacity-0 group-hover:opacity-100"
+                          }
+                          style={{
+                            width: "0.6em",
+                            flexShrink: 0,
+                            color: "var(--ink-faint)",
+                            fontSize: "var(--text-xs)",
+                            transition: "opacity 120ms ease",
+                          }}
+                        >
+                          ›
+                        </span>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {field.canonical_label}
+                        </span>
                       </button>
                     </li>
                   );

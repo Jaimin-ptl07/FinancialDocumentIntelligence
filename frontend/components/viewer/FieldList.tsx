@@ -58,9 +58,19 @@ export function FieldList({
             {found.length}/{fields.length}
           </span>
           {soft.length > 0 ? (
+            // Used to be carried by --flag color alone, which now equals
+            // plain ink — indistinguishable from the count beside it. A
+            // dotted underline (matching the soft-figure treatment in
+            // Value.tsx) plus a weight bump gives it a shape of its own.
             <span
               className="data"
-              style={{ fontSize: "var(--text-xs)", color: "var(--flag)" }}
+              style={{
+                fontSize: "var(--text-xs)",
+                fontWeight: 600,
+                color: "var(--flag)",
+                borderBottom: "1.5px dotted var(--flag)",
+                paddingBottom: 1,
+              }}
             >
               {soft.length} soft
             </span>

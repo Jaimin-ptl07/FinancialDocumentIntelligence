@@ -118,23 +118,57 @@ export function PdfCanvas({
       {onPage.map((region, index) => {
         const box = boxOf(region.polygon);
         return (
+          // A double ring rather than one flat-bordered wash: now that the
+          // mark is pure ink rather than a rust accent, a single 1.5px line
+          // reads as just another rule on the page. Two concentric rings —
+          // a tight inner line plus an offset outer line — plus the wash
+          // between them reads as a deliberately placed mark (a rubber
+          // stamp's double ruling, a certified-copy seal) rather than a
+          // color swatch. The whole mark settles in with a brief scale/fade
+          // rather than snapping straight to full size.
           <div
             key={index}
             ref={index === 0 ? highlightRef : undefined}
             aria-hidden="true"
-            className="absolute pointer-events-none"
+            className="absolute pointer-events-none tether-highlight"
             style={{
-              left: box.x * SCALE * POINTS_PER_INCH,
-              top: box.y * SCALE * POINTS_PER_INCH,
-              width: box.width * SCALE * POINTS_PER_INCH,
-              height: box.height * SCALE * POINTS_PER_INCH,
-              border: "1.5px solid var(--tether)",
-              background: "var(--tether-wash)",
+              left: box.x * SCALE * POINTS_PER_INCH - 3,
+              top: box.y * SCALE * POINTS_PER_INCH - 3,
+              width: box.width * SCALE * POINTS_PER_INCH + 6,
+              height: box.height * SCALE * POINTS_PER_INCH + 6,
+              padding: 3,
+              border: "1px solid var(--tether)",
               borderRadius: "var(--radius-sm)",
+              boxShadow: "0 1px 4px color-mix(in srgb, var(--ink) 18%, transparent)",
             }}
-          />
+          >
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                border: "2px solid var(--tether)",
+                background: "var(--tether-wash)",
+                borderRadius: "var(--radius-sm)",
+              }}
+            />
+          </div>
         );
       })}
+      <style>{`
+        .tether-highlight {
+          animation: tether-highlight-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+          transform-origin: center;
+        }
+        @keyframes tether-highlight-in {
+          from { opacity: 0; transform: scale(0.96); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .tether-highlight {
+            animation: none;
+          }
+        }
+      `}</style>
     </div>
   );
 }

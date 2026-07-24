@@ -171,9 +171,23 @@ export default function SchemaScreen() {
                 <FieldEditor field={field} onChange={updateField} />
               </div>
             ) : (
-              <p style={{ color: "var(--ink-soft)" }}>
-                Pick a field to edit how it is retrieved and read.
-              </p>
+              <div
+                className="flex items-center justify-center"
+                style={{
+                  maxWidth: "56rem",
+                  minHeight: "16rem",
+                  padding: "var(--sp-6)",
+                  border: "1px dashed var(--rule)",
+                  borderRadius: "var(--radius)",
+                }}
+              >
+                <p
+                  className="eyebrow"
+                  style={{ color: "var(--ink-faint)", textAlign: "center" }}
+                >
+                  Pick a field to edit how it is retrieved and read.
+                </p>
+              </div>
             )}
             {save.error ? (
               <p

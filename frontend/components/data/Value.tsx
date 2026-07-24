@@ -53,15 +53,29 @@ export function Value({
             Not found
           </span>
         ) : (
+          // The dotted "soft" underline sits on this wrapper, NOT on the
+          // figure span below — the figure fades with confidence via
+          // inkOpacity(), but the lowest-confidence values are exactly the
+          // ones this mark exists to flag, so the flag itself must stay
+          // fully legible even as the number it's attached to fades. A
+          // WCAG-failing flag on the values needing the most scrutiny would
+          // be worse than no flag at all.
           <span
-            className="data"
             style={{
-              fontSize: "var(--text-sm)",
-              opacity: inkOpacity(field.confidence),
-              borderBottom: soft ? "1px solid var(--flag)" : undefined,
+              display: "inline-block",
+              borderBottom: soft ? "1.5px dotted var(--flag)" : undefined,
+              paddingBottom: soft ? 1 : undefined,
             }}
           >
-            {formatAmount(field.value)}
+            <span
+              className="data"
+              style={{
+                fontSize: "var(--text-sm)",
+                opacity: inkOpacity(field.confidence),
+              }}
+            >
+              {formatAmount(field.value)}
+            </span>
           </span>
         )}
 
@@ -78,6 +92,7 @@ export function Value({
           className="data"
           style={{
             fontSize: "var(--text-2xs)",
+            fontWeight: soft ? 600 : 400,
             color: soft ? "var(--flag)" : "var(--ink-faint)",
             width: "3ch",
             textAlign: "right",

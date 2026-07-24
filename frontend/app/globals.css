@@ -1,48 +1,65 @@
 @import "tailwindcss";
 
 /* ===========================================================================
-   STATUTORY LEDGER
+   MONOCHROME LEDGER
    ---------------------------------------------------------------------------
-   The visual language comes from the annual report itself: statutory filing
-   paper, ledger ruling, the auditor's tick, and above all the CROSS-REFERENCE
-   — in a printed annual report every figure on the balance sheet carries a
-   superscript pointing to a note elsewhere in the book. That superscript is
-   exactly what this product automates. It is the motif.
+   Visual language: Extend.ai's infrastructure-grade monochrome (pure black /
+   pure white / warm off-white), applied over this product's own motif — the
+   CROSS-REFERENCE. In a printed annual report every figure on the balance
+   sheet carries a superscript pointing to a note elsewhere in the book. That
+   superscript is exactly what this product automates. It is the motif.
 
-   ONE RULE GOVERNS THE PALETTE: --tether appears only where the interface is
-   asserting "this figure came from there". Never a button, never a link,
+   ONE RULE GOVERNS THE PALETTE: --tether is the single sanctioned accent in
+   an otherwise strictly neutral system. It appears only where the interface
+   is asserting "this figure came from there" — never a button, never a link,
    never a generic accent. If a button is red, the system has lied.
+
+   Verified against ui-ux-pro-max evidence (Minimalist Monochrome / Minimalism
+   & Swiss Style: "Enterprise apps, dashboards, SaaS platforms, professional
+   tools" — pure black/white, low-to-zero radius, single accent only, no
+   decorative shadows or gradients).
    =========================================================================== */
 
 :root {
   color-scheme: light;
 
   /* --- Surfaces: paper laid on a desk ----------------------------------- */
-  --paper: #eaede6; /* app background — cool pale sage, statutory stock */
-  --leaf: #fbfcf9; /* the sheet itself */
-  --leaf-2: #f1f3ee; /* inset rows, hover, table stripes */
-  --rule: #d3d8cc; /* ledger ruling, borders */
-  --rule-soft: #e2e6dc; /* interior dividers that must not shout */
+  --paper: #f5f5f4; /* app background — warm off-white, Extend's footer-mist family */
+  --leaf: #ffffff; /* the sheet itself — pure white */
+  --leaf-2: #f0f0ef; /* inset rows, hover, table stripes */
+  --rule: #dcdcda; /* ledger ruling, borders */
+  --rule-soft: #eaeae8; /* interior dividers that must not shout */
 
   /* --- Ink -------------------------------------------------------------- */
-  --ink: #0f151b; /* near-black, blue cast */
-  --ink-soft: #59636e; /* labels, captions, secondary */
-  --ink-faint: #8b949d; /* placeholders, disabled */
+  --ink: #000000; /* pure black — Extend's ink-black */
+  --ink-soft: #52524f; /* labels, captions, secondary */
+  --ink-faint: #8a8a86; /* placeholders, disabled */
 
-  /* --- The three semantic marks ----------------------------------------- */
-  --tether: #b3341c; /* PROVENANCE ONLY. See the rule above. */
-  --tick: #1e5c48; /* verified, stage complete */
-  --flag: #8a6a12; /* needs review, low confidence — ochre, not red */
+  /* --- The three semantic marks ------------------------------------------
+     Neutral system, ONE accent. --tether is it. --tick and --flag stay as
+     near-monochrome ink/weight distinctions rather than hue, so the palette
+     stays honestly single-accent rather than "three accents that aren't
+     called accents." */
+  --tether: #000000; /* PROVENANCE ONLY. Pure ink on this monochrome system —
+                         the reference mark is carried by underline + weight,
+                         not by color, so black can do this job. See Tether
+                         component: it also gets a 1px ink ring for emphasis. */
+  --tick: #000000; /* verified / stage complete — carried by weight + glyph, not hue */
+  --flag: #000000; /* needs review / low confidence — carried by underline, not hue */
 
-  /* Tinted washes, derived so they track the theme automatically. */
-  --tether-wash: color-mix(in srgb, var(--tether) 10%, transparent);
-  --tick-wash: color-mix(in srgb, var(--tick) 12%, transparent);
-  --flag-wash: color-mix(in srgb, var(--flag) 14%, transparent);
+  /* Tinted washes, derived so they track ink at low opacity instead of a
+     second hue — a monochrome system washes with itself. */
+  --tether-wash: color-mix(in srgb, var(--tether) 6%, transparent);
+  --tick-wash: color-mix(in srgb, var(--tick) 5%, transparent);
+  --flag-wash: color-mix(in srgb, var(--flag) 8%, transparent);
 
-  /* --- Elevation: a sheet sits above the desk, it does not float --------- */
-  --shadow-sm: 0 1px 2px rgb(15 21 27 / 0.05), 0 1px 3px rgb(15 21 27 / 0.04);
-  --shadow-md: 0 2px 4px rgb(15 21 27 / 0.05), 0 8px 20px rgb(15 21 27 / 0.07);
-  --shadow-lg: 0 4px 8px rgb(15 21 27 / 0.06), 0 20px 44px rgb(15 21 27 / 0.1);
+  /* --- Elevation: flat by default, per the monochrome evidence boundary --
+     ("Keep depth flat unless validated shadow evidence appears.") A sheet is
+     separated by a 1px rule first; shadow is reserved for genuinely floating
+     surfaces (the PDF canvas, modals) rather than every card. */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 2px 6px rgb(0 0 0 / 0.08), 0 12px 32px rgb(0 0 0 / 0.08);
 
   /* --- Type: three roles, three families -------------------------------- */
   --font-display: var(--font-archivo), system-ui, sans-serif;
@@ -72,33 +89,76 @@
 
   /* --- Structure -------------------------------------------------------- */
   --spine-w: 232px;
-  --radius: 6px;
-  --radius-sm: 3px;
-  --radius-lg: 10px;
+  --radius: 3px; /* near-zero — monochrome evidence favors 0–4px, not 6–10px */
+  --radius-sm: 2px;
+  --radius-lg: 6px;
   --hairline: 1px solid var(--rule);
 }
 
-/* The same desk at night. The green cast survives into the darks so the
-   product is recognizably itself; the three marks brighten to hold contrast
-   against a dark ground. */
+/* The same desk at night: a true dark inversion, not a tint. Extend's own
+   system inverts pure black <-> pure white cleanly between themes, so the
+   dark variant here does the same rather than reaching for a blue-black. */
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --paper: #0e1210;
-    --leaf: #161b18;
-    --leaf-2: #1d2320;
-    --rule: #2b332e;
-    --rule-soft: #222925;
-    --ink: #e8ece5;
-    --ink-soft: #98a29a;
-    --ink-faint: #6b756e;
-    --tether: #e2603f;
-    --tick: #4fb894;
-    --flag: #d3a83e;
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-    --shadow-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 8px 20px rgb(0 0 0 / 0.35);
-    --shadow-lg: 0 4px 8px rgb(0 0 0 / 0.45), 0 20px 44px rgb(0 0 0 / 0.5);
+    --paper: #000000;
+    --leaf: #111110;
+    --leaf-2: #1a1a19;
+    --rule: #2e2e2c;
+    --rule-soft: #232322;
+    --ink: #ffffff;
+    --ink-soft: #a3a39e;
+    --ink-faint: #6b6b67;
+    --tether: #ffffff;
+    --tick: #ffffff;
+    --flag: #ffffff;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+    --shadow-md: 0 1px 3px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.4);
+    --shadow-lg: 0 2px 6px rgb(0 0 0 / 0.55), 0 12px 32px rgb(0 0 0 / 0.5);
   }
+}
+
+/* Manual override, set by the theme toggle in Spine.tsx via a `data-theme`
+   attribute on <html>. This must win over the media query in BOTH
+   directions — a light-mode OS user who explicitly chose dark still expects
+   dark, and vice versa — so both blocks below repeat the full token set
+   rather than only the delta, and both are plain attribute selectors with no
+   @media wrapper, which already outranks a media-queried :root in the
+   cascade regardless of source order. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #000000;
+  --leaf: #111110;
+  --leaf-2: #1a1a19;
+  --rule: #2e2e2c;
+  --rule-soft: #232322;
+  --ink: #ffffff;
+  --ink-soft: #a3a39e;
+  --ink-faint: #6b6b67;
+  --tether: #ffffff;
+  --tick: #ffffff;
+  --flag: #ffffff;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 2px 6px rgb(0 0 0 / 0.55), 0 12px 32px rgb(0 0 0 / 0.5);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --paper: #f5f5f4;
+  --leaf: #ffffff;
+  --leaf-2: #f0f0ef;
+  --rule: #dcdcda;
+  --rule-soft: #eaeae8;
+  --ink: #000000;
+  --ink-soft: #52524f;
+  --ink-faint: #8a8a86;
+  --tether: #000000;
+  --tick: #000000;
+  --flag: #000000;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 2px 6px rgb(0 0 0 / 0.08), 0 12px 32px rgb(0 0 0 / 0.08);
 }
 
 @theme inline {
@@ -151,10 +211,13 @@ body {
   letter-spacing: -0.01em;
 }
 
+/* Extend's tracked mono label: dmMono at ~0.78px letter-spacing, ported to
+   the app's own IBM Plex Mono stack since the source family isn't licensed
+   here. Same tightly-tracked-caps effect. */
 .eyebrow {
   font-family: var(--font-data);
   font-size: var(--text-2xs);
-  letter-spacing: 0.14em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-soft);
   font-weight: 500;
@@ -178,9 +241,10 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Controls. Note what is absent: none of these is --tether. The primary
-   action is ink-filled, because the loudest color in this product is spent
-   entirely on provenance.
+   Controls. Note what is absent: none of these is a second hue. The primary
+   action is ink-filled — the only "loud" mark in this product is spent
+   entirely on provenance (--tether), and even that is now ink, carried by
+   weight and a ring rather than color.
    ------------------------------------------------------------------------ */
 
 .btn {
