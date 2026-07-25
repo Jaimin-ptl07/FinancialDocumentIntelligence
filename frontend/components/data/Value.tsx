@@ -1,7 +1,7 @@
 "use client";
 
 import type { ExtractFieldView } from "@/lib/types";
-import { formatAmount, formatConfidence, inkOpacity } from "@/lib/format";
+import { formatAmount, formatConfidence, inkOpacity, isDualPeriod } from "@/lib/format";
 import { RefMark } from "./RefMark";
 
 const LOW_CONFIDENCE = 0.5;
@@ -76,6 +76,18 @@ export function Value({
             >
               {formatAmount(field.value)}
             </span>
+            {isDualPeriod(field.value) ? (
+              <span
+                className="data"
+                style={{
+                  fontSize: "var(--text-2xs)",
+                  color: "var(--ink-faint)",
+                  marginLeft: "var(--sp-2)",
+                }}
+              >
+                (prior {formatAmount(field.value.prior)})
+              </span>
+            ) : null}
           </span>
         )}
 
