@@ -352,7 +352,8 @@ def _attach_regions(
     ids: Sequence[object] = evidence_ids if isinstance(evidence_ids, list) else []
     fallback = resolve_evidence_regions(doc_id, ids, provenance, structure)
     source["bounding_regions"] = resolve_field_regions(
-        keywords=field.keywords, structure=structure, fallback_current=fallback,
+        keywords=field.keywords, evidence_ids=ids, structure=structure,
+        fallback_current=fallback,
     )
     return record
 
