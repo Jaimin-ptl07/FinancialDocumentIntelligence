@@ -271,12 +271,20 @@ async def test_extract_document_pools_keyword_candidates_only(
 
     # B4: geometry rides along on `source`, joined from the provenance
     # (s{i} -> graph node -> OCR paragraph) and structure (t{i} -> the
-    # whole table's bounding region) artifacts.
-    assert isinstance(f0["source"]["bounding_regions"], list)
-    assert f1["source"]["bounding_regions"] == [{"page_number": 1, "polygon": []}]
+    # whole table's bounding region) artifacts. {current, prior}, not a flat
+    # list (2026-07-25 cell-precise design) -- `prior` stays [] here since
+    # this fixture's table has no per-cell boundingRegions to resolve
+    # (processed_doc's fake OCR cells carry none), so `current` falls back to
+    # resolve_evidence_regions's whole-table/whole-section box exactly as
+    # before, just wrapped in the new shape.
+    assert isinstance(f0["source"]["bounding_regions"]["current"], list)
+    assert f0["source"]["bounding_regions"]["prior"] == []
+    assert f1["source"]["bounding_regions"] == {
+        "current": [{"page_number": 1, "polygon": []}], "prior": [],
+    }
     # The unmatchable field cited nothing, so there is nothing to highlight --
     # [] rather than null, and never an exception (decision 10).
-    assert f2["source"]["bounding_regions"] == []
+    assert f2["source"]["bounding_regions"] == {"current": [], "prior": []}
 
     # One LLM call per Retrieval Unit -- THREE, because the vector channel
     # gives even RU_NOWHERE a pool. The numeric unit's prompt carries the
@@ -583,3 +591,129 @@ async def test_extract_document_basis_filter_drops_consolidated_table_for_standa
     _system, user = fake.calls[0]
     assert "12,345" in user
     assert "99,999" not in user
+
+
+async def test_extract_document_gives_table_field_a_cell_precise_box(
+    session_factory, store,
+) -> None:
+    """A numeric field whose keywords match a table row must get a
+    bounding_regions shape of {current, prior}, with current/prior each
+    pointing at their OWN cell's geometry -- distinct from each other and
+    from the table's own whole-table box -- proving the cell-level lookup
+    ran, not the old whole-table fallback. Data cells here carry their own
+    `boundingRegions` (unlike processed_doc's shared fixture, whose fake
+    table has none), which is what makes cell-level geometry reachable at
+    all -- see fdi.core.ocr_schema's per-cell boundingRegions normalization."""
+    marker = uuid.uuid4().hex
+    reg = StageRegistry()
+    for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
+                  ProvenanceStage(), ChunksStage(), StructureStage(), BasisStage(),
+                  EmbeddingStage(), IndexStage()):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    embedder = FakeEmbeddingClient(dim=8)
+    vector_store = FakeVectorStore()
+
+    fake_ocr = FakeOcrClient({
+        "content": "ACME LTD",
+        "pages": [{"pageNumber": 79, "lines": [], "words": []}],
+        "paragraphs": [
+            {
+                "role": "sectionHeading", "content": "Balance Sheet",
+                "boundingRegions": [{"pageNumber": 79, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}],
+            },
+            {
+                "content": f"ACME Ltd manufacturing company {marker}.",
+                "boundingRegions": [{"pageNumber": 79, "polygon": [0, 2, 1, 2, 1, 3, 0, 3]}],
+            },
+        ],
+        "tables": [
+            {
+                "rowCount": 2, "columnCount": 3,
+                "spans": [{"offset": 20, "length": 60}],
+                "boundingRegions": [{"pageNumber": 79, "polygon": [0, 0, 10, 0, 10, 10, 0, 10]}],
+                "cells": [
+                    {"rowIndex": 0, "columnIndex": 0, "kind": "columnHeader",
+                     "content": "Particulars"},
+                    {"rowIndex": 0, "columnIndex": 1, "kind": "columnHeader",
+                     "content": "Column 1 (most recent)"},
+                    {"rowIndex": 0, "columnIndex": 2, "kind": "columnHeader",
+                     "content": "Column 2 (prior)"},
+                    {"rowIndex": 1, "columnIndex": 0,
+                     "content": "Property, plant & Equipments",
+                     "boundingRegions": [{"pageNumber": 79, "polygon": [0, 1, 3, 1, 3, 2, 0, 2]}]},
+                    {"rowIndex": 1, "columnIndex": 1, "content": "2018.29",
+                     "boundingRegions": [{"pageNumber": 79, "polygon": [3, 1, 6, 1, 6, 2, 3, 2]}]},
+                    {"rowIndex": 1, "columnIndex": 2, "content": "1838.80",
+                     "boundingRegions": [{"pageNumber": 79, "polygon": [6, 1, 9, 1, 9, 2, 6, 2]}]},
+                ],
+            },
+        ],
+    })
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(), filename="a.pdf",
+        doc_key=f"acme-cellbox-{marker}", content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    common = {"doc_id": doc.id, "correlation_id": "c1", "session_factory": session_factory,
+              "store": store, "registry": reg, "resolver": resolver}
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), services={"ocr": fake_ocr}, **common
+    )
+    await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="semantic", run_id=str(uuid.uuid4()),
+        services={"semantic": FakeSemanticClient({})}, **common,
+    )
+    await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(
+        stage_name="embedding", run_id=str(uuid.uuid4()),
+        services={"embedder": embedder}, **common,
+    )
+    await run_stage(
+        stage_name="index", run_id=str(uuid.uuid4()),
+        services={"vector_store": vector_store}, **common,
+    )
+
+    field = FieldSpec(
+        field_name="Property plant equipment net", data_type="decimal",
+        retrieval_query=f"manufacturing company {marker}",
+        keywords=("property", "plant", "equipments"),
+        extraction_prompt="Extract property plant and equipment net.",
+        enum_values=None, module_id=1, module_name="M", unit_id="U1",
+        unit_title="T-U1", field_path="m.ppe", periods=("current", "prior"),
+        locator_keywords=("total", "assets"),
+    )
+    fake = FakeExtractorClient([
+        {"m.ppe": {
+            "value": {"current": 2018.29, "prior": 1838.80},
+            "confidence": 1.0,
+            "source": {"evidence_ids": ["t0"]},
+        }},
+    ])
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        result = await extract_document(ctx=ctx, fields=[field], client=fake)
+
+    bounding_regions = result["fields"][0]["source"]["bounding_regions"]
+    assert set(bounding_regions.keys()) == {"current", "prior"}
+    assert bounding_regions["current"], "expected cell-precise current-period geometry"
+    assert bounding_regions["prior"], "expected cell-precise prior-period geometry"
+    assert bounding_regions["current"] != bounding_regions["prior"]
+
+    # cell-precise, not the whole table: the table's own box spans the full
+    # [0,0]-[10,10] polygon; the matched cell's box is a narrow strip of it.
+    current_polygon = bounding_regions["current"][0]["polygon"]
+    assert current_polygon == [3, 1, 6, 1, 6, 2, 3, 2]
+    prior_polygon = bounding_regions["prior"][0]["polygon"]
+    assert prior_polygon == [6, 1, 9, 1, 9, 2, 6, 2]

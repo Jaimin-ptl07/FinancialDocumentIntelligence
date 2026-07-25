@@ -77,7 +77,7 @@ from fdi.core.extractor import (
     unit_needs_tables,
     unit_top_k,
 )
-from fdi.core.provenance import resolve_evidence_regions
+from fdi.core.provenance import resolve_evidence_regions, resolve_field_regions
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
@@ -333,23 +333,26 @@ async def _read_latest_artifact(
 
 def _attach_regions(
     record: dict[str, object],
+    field: FieldSpec,
     *,
     doc_id: str,
     provenance: Mapping[str, object],
     structure: Mapping[str, object],
 ) -> dict[str, object]:
-    """Add `source.bounding_regions` to one assemble_result record.
-
-    Always a list -- [] when unresolvable -- so the UI branches on one shape,
-    matching assemble_result's own habit of returning `evidence_ids: []`
-    rather than None. Never raises."""
+    """Add `source.bounding_regions` to one assemble_result record, as
+    `{current: [...], prior: [...]}` -- cell-precise when `field`'s keywords
+    match a table row (fdi.core.provenance.resolve_field_regions), falling
+    back to the field's whole-table/whole-section geometry
+    (resolve_evidence_regions) under `current` with `prior: []` otherwise.
+    Never raises."""
     source = record.get("source")
     if not isinstance(source, dict):
         return record
     evidence_ids = source.get("evidence_ids")
     ids: Sequence[object] = evidence_ids if isinstance(evidence_ids, list) else []
-    source["bounding_regions"] = resolve_evidence_regions(
-        doc_id, ids, provenance, structure
+    fallback = resolve_evidence_regions(doc_id, ids, provenance, structure)
+    source["bounding_regions"] = resolve_field_regions(
+        keywords=field.keywords, structure=structure, fallback_current=fallback,
     )
     return record
 
@@ -455,9 +458,9 @@ async def extract_document(
     # the durable record carries the same bounding_regions the response does.
     results = [
         _attach_regions(
-            r, doc_id=ctx.doc_id, provenance=provenance, structure=structure
+            r, f, doc_id=ctx.doc_id, provenance=provenance, structure=structure
         )
-        for r in results
+        for r, f in zip(results, fields, strict=True)
     ]
 
     record = build_extraction_record(
