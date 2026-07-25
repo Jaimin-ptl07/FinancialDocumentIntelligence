@@ -515,7 +515,8 @@ def assemble_unit_results(
     return out
 
 
-EXTRACTION_RECORD_VERSION = 1
+# v2: bounding_regions is {current, prior}, not a flat list (see 2026-07-25 design)
+EXTRACTION_RECORD_VERSION = 2
 
 
 def build_extraction_record(
