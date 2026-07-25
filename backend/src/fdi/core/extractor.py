@@ -45,6 +45,16 @@ section (see the constants' own docstrings below for the table-of-contents
 false-positive this guards against) and, independently, drops whole-table
 chunks from units that have no numeric/list field. Both filters run between
 pooling and reranking, in fdi.pipeline.extractor's extract_unit.
+
+Schema v3.2 (TR-1 P4a, design spec sec 6.1) adds a per-UNIT
+`basis_preference` in {"standalone", "consolidated", "both"}, defaulting to
+"standalone" when the unit omits the key or spells it wrong -- back-
+compatible with every v3.1 unit, all of which implicitly meant standalone.
+It is read off the unit (never the field: basis is a property of a whole
+statement, not a line) in _field_spec_from, flattened onto FieldSpec like
+the other unit members, and carried onto UnitSpec by group_fields_by_unit.
+Basis-AWARE retrieval (filtering candidates by it) is a later phase, out of
+scope here -- this phase only carries the value through, pure.
 """
 
 import re
@@ -58,11 +68,11 @@ _NUMERIC_DATA_TYPES = frozenset({"decimal", "integer"})
 class FieldSpec:
     """One extractable field, flattened out of its module and retrieval unit.
 
-    The eight unit/module members after `module_name` (module_key, unit_id,
-    unit_title, scope, statement_type, field_path, periods, locator_keywords)
-    carry defaults so a hand-built FieldSpec (tests, and any future caller
-    that synthesizes one outside the parser) still constructs with the
-    v2.0-era argument set.
+    The nine unit/module members after `module_name` (module_key, unit_id,
+    unit_title, scope, statement_type, field_path, periods, locator_keywords,
+    basis_preference) carry defaults so a hand-built FieldSpec (tests, and any
+    future caller that synthesizes one outside the parser) still constructs
+    with the v2.0-era argument set.
     """
 
     field_name: str
@@ -81,6 +91,7 @@ class FieldSpec:
     field_path: str = ""
     periods: tuple[str, ...] = ()
     locator_keywords: tuple[str, ...] = ()
+    basis_preference: str = "standalone"
 
 
 @dataclass(frozen=True)
@@ -109,6 +120,7 @@ class UnitSpec:
     retrieval_query: str
     locator_keywords: tuple[str, ...]
     fields: tuple[FieldSpec, ...]
+    basis_preference: str = "standalone"
 
 
 def group_fields_by_unit(fields: Sequence[FieldSpec]) -> list[UnitSpec]:
@@ -136,6 +148,7 @@ def group_fields_by_unit(fields: Sequence[FieldSpec]) -> list[UnitSpec]:
             retrieval_query=head.retrieval_query,
             locator_keywords=head.locator_keywords,
             fields=tuple(members),
+            basis_preference=head.basis_preference,
         ))
     return units
 
@@ -181,6 +194,17 @@ def _dedup(values: Sequence[str]) -> tuple[str, ...]:
 
 def _non_blank_str(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
+
+
+_BASIS_PREFERENCES = frozenset({"standalone", "consolidated", "both"})
+
+
+def _basis_preference(value: object) -> str:
+    """`value` if it is one of {"standalone", "consolidated", "both"}, else
+    the default "standalone" -- covers an absent unit key (schema v3.2's
+    documented default), a malformed type, or an invalid/unknown string. Never
+    raises."""
+    return value if isinstance(value, str) and value in _BASIS_PREFERENCES else "standalone"
 
 
 def _field_spec_from(
@@ -241,6 +265,7 @@ def _field_spec_from(
         field_path=field_path if isinstance(field_path, str) else "",
         periods=periods,
         locator_keywords=locator_keywords,
+        basis_preference=_basis_preference(unit.get("basis_preference")),
     )
 
 

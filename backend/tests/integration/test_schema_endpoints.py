@@ -63,9 +63,9 @@ async def test_get_schema_falls_back_to_the_on_disk_seed(make_client) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["source"] == "seed"
-    assert body["version"] == "3.1.0"
-    assert body["field_count"] == 198
-    assert len(body["schema_document"]["modules"]) == 16
+    assert body["version"] == "3.2.0"
+    assert body["field_count"] == 190
+    assert len(body["schema_document"]["modules"]) == 15
 
 
 async def test_put_schema_persists_and_bumps_the_patch_version(make_client) -> None:
@@ -78,13 +78,13 @@ async def test_put_schema_persists_and_bumps_the_patch_version(make_client) -> N
             "/schema", json={"base_version": current["version"], "schema_document": doc}
         )
         assert put.status_code == 200
-        assert put.json()["version"] == "3.1.1"
+        assert put.json()["version"] == "3.2.1"
         assert put.json()["source"] == "store"
 
         after = (await client.get("/schema")).json()
 
     assert after["source"] == "store"
-    assert after["version"] == "3.1.1"
+    assert after["version"] == "3.2.1"
     assert "edited marker" in after["schema_document"]["modules"][0][
         "retrieval_units"
     ][0]["locator_keywords"]
@@ -131,7 +131,7 @@ async def test_post_schema_validate_reports_without_writing(make_client) -> None
 
     assert ok.status_code == 200
     assert ok.json() == {
-        "valid": True, "errors": [], "module_count": 16, "unit_count": 18, "field_count": 198,
+        "valid": True, "errors": [], "module_count": 15, "unit_count": 17, "field_count": 190,
     }
     assert bad.status_code == 200
     assert bad.json()["valid"] is False

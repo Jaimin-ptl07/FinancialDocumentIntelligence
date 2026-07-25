@@ -242,11 +242,15 @@ def test_parse_field_specs_against_the_committed_schema_file() -> None:
     path = repo_root / "docs" / "architecture" / "field-extraction-schema.json"
     with open(path, encoding="utf-8") as f:
         schema = json.load(f)
+    assert schema["version"] == "3.2.0"
     specs = parse_field_specs(schema)
-    assert len(specs) == 198
+    assert len(specs) == 190
     assert parse_field_specs(schema, module="module_3_balance_sheet")
     assert all(s.retrieval_query.strip() for s in specs)
     assert all(s.unit_id for s in specs)
+    bs_specs = [s for s in specs if s.unit_id == "RU_BS"]
+    assert bs_specs
+    assert all(s.basis_preference == "standalone" for s in bs_specs)
 
 
 def test_is_numeric() -> None:
@@ -604,6 +608,55 @@ def test_field_spec_constructs_without_the_new_members() -> None:
     assert spec.field_path == ""
     assert spec.periods == ()
     assert spec.locator_keywords == ()
+    assert spec.basis_preference == "standalone"
+
+
+def _schema_with_basis_preference(value: object, *, present: bool = True) -> dict[str, object]:
+    unit: dict[str, object] = {
+        "unit_id": "RU_X",
+        "title": "X",
+        "locator_keywords": [],
+        "retrieval_query": "x",
+        "fields": [
+            {
+                "field_name": "F",
+                "aliases": [],
+                "data_type": "string",
+                "extraction_prompt": "Extract it.",
+            },
+        ],
+    }
+    if present:
+        unit["basis_preference"] = value
+    return {
+        "modules": [
+            {"id": 2, "key": "m2", "name": "M2", "retrieval_units": [unit]},
+        ],
+    }
+
+
+def test_parse_field_specs_basis_preference_consolidated() -> None:
+    schema = _schema_with_basis_preference("consolidated")
+    [spec] = parse_field_specs(schema)
+    assert spec.basis_preference == "consolidated"
+
+
+def test_parse_field_specs_basis_preference_absent_defaults_to_standalone() -> None:
+    schema = _schema_with_basis_preference(None, present=False)
+    [spec] = parse_field_specs(schema)
+    assert spec.basis_preference == "standalone"
+
+
+def test_parse_field_specs_basis_preference_invalid_value_defaults_to_standalone() -> None:
+    schema = _schema_with_basis_preference("garbage")
+    [spec] = parse_field_specs(schema)
+    assert spec.basis_preference == "standalone"
+
+
+def test_parse_field_specs_basis_preference_both() -> None:
+    schema = _schema_with_basis_preference("both")
+    [spec] = parse_field_specs(schema)
+    assert spec.basis_preference == "both"
 
 
 def test_group_fields_by_unit_groups_and_preserves_order() -> None:
@@ -621,6 +674,26 @@ def test_group_fields_by_unit_carries_unit_metadata() -> None:
     assert unit.unit_title == "T-RU_BS"
     assert unit.retrieval_query == "Balance Sheet"
     assert unit.locator_keywords == ("balance sheet",)
+    assert unit.basis_preference == "standalone"
+
+
+def test_group_fields_by_unit_carries_basis_preference_from_first_field() -> None:
+    fields = [
+        FieldSpec(
+            field_name="a", data_type="decimal", retrieval_query="q",
+            keywords=(), extraction_prompt="p", enum_values=None,
+            module_id=1, module_name="M", unit_id="RU_CONS", unit_title="Consolidated BS",
+            basis_preference="consolidated",
+        ),
+        FieldSpec(
+            field_name="b", data_type="decimal", retrieval_query="q",
+            keywords=(), extraction_prompt="p", enum_values=None,
+            module_id=1, module_name="M", unit_id="RU_CONS", unit_title="Consolidated BS",
+            basis_preference="consolidated",
+        ),
+    ]
+    [unit] = group_fields_by_unit(fields)
+    assert unit.basis_preference == "consolidated"
 
 
 def test_group_fields_by_unit_blank_unit_id_makes_singleton_units() -> None:

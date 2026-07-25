@@ -1,8 +1,7 @@
-"""EmbeddingStage auto-chains off ChunksStage (Phase 3a: `deps=("chunks",)`,
-`version=2`) -- it embeds `chunks["chunks"][i]["text"]` in order, so table-derived
-row/whole-table chunks are embedded "for free" alongside section chunks, with
-zero code change to IndexStage/resolve_chunks (both are already generic over
-`chunk_id`)."""
+"""EmbeddingStage auto-chains off ChunksStage (`deps=("chunks",)`, `version=2`)
+-- it embeds `chunks["chunks"][i]["text"]` in order, so the table CARD (TR-1
+P2) is embedded "for free" alongside section chunks, with zero code change to
+IndexStage/resolve_chunks (both are already generic over `chunk_id`)."""
 
 import uuid
 
@@ -20,6 +19,7 @@ from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.semantic import FakeSemanticClient
 from fdi.pipeline.stages.ast import AstStage
+from fdi.pipeline.stages.basis import BasisStage
 from fdi.pipeline.stages.chunks import ChunksStage
 from fdi.pipeline.stages.embedding import EmbeddingStage
 from fdi.pipeline.stages.graph import GraphStage
@@ -102,6 +102,7 @@ async def test_embedding_stage_runs_and_caches(  # fixtures from conftest
     reg.register(GraphStage())
     reg.register(ProvenanceStage())
     reg.register(StructureStage())
+    reg.register(BasisStage())
     reg.register(ChunksStage())
     reg.register(EmbeddingStage())
     resolver = DagResolver(reg.all())
@@ -131,6 +132,7 @@ async def test_embedding_stage_runs_and_caches(  # fixtures from conftest
     await run_stage(stage_name="structure", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="graph", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="provenance", run_id=str(uuid.uuid4()), services={}, **common)
+    await run_stage(stage_name="basis", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="chunks", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(
         stage_name="embedding", run_id=str(uuid.uuid4()), services=embed_services, **common
@@ -143,8 +145,7 @@ async def test_embedding_stage_runs_and_caches(  # fixtures from conftest
     # embeds chunks["chunks"][].text VERBATIM, in order -- not re-derived from ast.
     assert fake_embedder.seen == [
         "Balance Sheet\nAssets 100",
-        "Balance Sheet | Cash: Value=100",
-        "Balance Sheet\nValue\nCash: Value=100",
+        "[Balance Sheet | BS | basis=unknown | page 1]\nColumns: Value\nRows: Cash",
     ]
 
     async with session_factory() as s:
@@ -156,9 +157,10 @@ async def test_embedding_stage_runs_and_caches(  # fixtures from conftest
     body = await store.get_json(embedding_key)
     assert body["model"] == "fake-embedding"
     assert body["dim"] == 8
-    # s0 (section), t0r1 (table row), t0 (whole-table) -- chunk_id/heading/order
-    # sourced from the `chunks` artifact, byte-for-byte, not re-derived from `ast`.
-    assert [c["chunk_id"] for c in body["chunks"]] == ["s0", "t0r1", "t0"]
+    # s0 (section), t0 (ONE table card, TR-1 P2 -- no more t0r{j} row chunks)
+    # -- chunk_id/heading/order sourced from the `chunks` artifact, byte-for-byte,
+    # not re-derived from `ast`.
+    assert [c["chunk_id"] for c in body["chunks"]] == ["s0", "t0"]
     assert body["chunks"][0]["heading"] == "Balance Sheet"
     assert body["chunks"][1]["heading"] == "Balance Sheet"
     assert len(body["chunks"][0]["vector"]) == 8
