@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { BoundingRegion } from "@/lib/types";
 
-const SCALE = 1.4;
+const MIN_SCALE = 0.6;
+const MAX_SCALE = 3;
 const POINTS_PER_INCH = 72;
 
 /** `pdfjs-dist` is driven directly rather than through `react-pdf` because the
@@ -15,18 +16,37 @@ export function PdfCanvas({
   page,
   regions,
   onPageCount,
-  onHighlightRect,
 }: {
   url: string;
   page: number;
   regions: BoundingRegion[] | null;
   onPageCount?: (count: number) => void;
-  onHighlightRect: (rect: DOMRect | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [scale, setScale] = useState(1);
+
+  // Fit-to-width, not a fixed SCALE: a fixed scale leaves dead space beside a
+  // narrow pane and forces both horizontal AND vertical scrolling on a wide
+  // one, exactly the "user has to scroll" complaint this replaces. Re-measured
+  // on resize (the aside collapsing/expanding changes the pane's width too).
+  useEffect(() => {
+    const el = wrapperRef.current?.parentElement;
+    if (!el) return;
+    const measure = () => {
+      const width = el.clientWidth;
+      if (width > 0) {
+        setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, width / (8.27 * POINTS_PER_INCH))));
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +68,7 @@ export function PdfCanvas({
         const rendered = await doc.getPage(target);
         if (cancelled) return;
 
-        const viewport = rendered.getViewport({ scale: SCALE });
+        const viewport = rendered.getViewport({ scale });
         const canvas = canvasRef.current;
         const context = canvas?.getContext("2d");
         if (!canvas || !context || cancelled) return;
@@ -82,21 +102,7 @@ export function PdfCanvas({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [url, page, onPageCount]);
-
-  // The tether needs to know where the highlight actually landed on screen,
-  // and that changes on scroll and on resize, not only when the field changes.
-  useEffect(() => {
-    const report = () =>
-      onHighlightRect(highlightRef.current?.getBoundingClientRect() ?? null);
-    report();
-    window.addEventListener("resize", report);
-    window.addEventListener("scroll", report, true);
-    return () => {
-      window.removeEventListener("resize", report);
-      window.removeEventListener("scroll", report, true);
-    };
-  }, [regions, ready, page, onHighlightRect]);
+  }, [url, page, onPageCount, scale]);
 
   useEffect(() => {
     highlightRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -113,7 +119,11 @@ export function PdfCanvas({
   }
 
   return (
-    <div className="relative inline-block" style={{ boxShadow: "var(--shadow-md)" }}>
+    <div
+      ref={wrapperRef}
+      className="relative inline-block"
+      style={{ boxShadow: "var(--shadow-md)" }}
+    >
       <canvas ref={canvasRef} className="block" />
       {onPage.map((region, index) => {
         const box = boxOf(region.polygon);
@@ -132,22 +142,22 @@ export function PdfCanvas({
             aria-hidden="true"
             className="absolute pointer-events-none tether-highlight"
             style={{
-              left: box.x * SCALE * POINTS_PER_INCH - 3,
-              top: box.y * SCALE * POINTS_PER_INCH - 3,
-              width: box.width * SCALE * POINTS_PER_INCH + 6,
-              height: box.height * SCALE * POINTS_PER_INCH + 6,
+              left: box.x * scale * POINTS_PER_INCH - 3,
+              top: box.y * scale * POINTS_PER_INCH - 3,
+              width: box.width * scale * POINTS_PER_INCH + 6,
+              height: box.height * scale * POINTS_PER_INCH + 6,
               padding: 3,
-              border: "1px solid var(--tether)",
+              border: "1px solid var(--pdf-mark)",
               borderRadius: "var(--radius-sm)",
-              boxShadow: "0 1px 4px color-mix(in srgb, var(--ink) 18%, transparent)",
+              boxShadow: "0 1px 4px color-mix(in srgb, var(--pdf-mark) 18%, transparent)",
             }}
           >
             <div
               style={{
                 width: "100%",
                 height: "100%",
-                border: "2px solid var(--tether)",
-                background: "var(--tether-wash)",
+                border: "2px solid var(--pdf-mark)",
+                background: "var(--pdf-mark-wash)",
                 borderRadius: "var(--radius-sm)",
               }}
             />

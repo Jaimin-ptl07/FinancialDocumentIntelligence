@@ -53,6 +53,14 @@
   --tick-wash: color-mix(in srgb, var(--tick) 5%, transparent);
   --flag-wash: color-mix(in srgb, var(--flag) 8%, transparent);
 
+  /* The PdfCanvas highlight box marks a region on the RENDERED PAGE, not on
+     app chrome — the page is always a light scan/render (white background,
+     black text) no matter which theme the surrounding app is in. Unlike
+     --tether/--ink, this must NOT flip in dark mode, or the ring goes white
+     on white and disappears against the page it is meant to point at. */
+  --pdf-mark: #000000;
+  --pdf-mark-wash: color-mix(in srgb, var(--pdf-mark) 6%, transparent);
+
   /* --- Elevation: flat by default, per the monochrome evidence boundary --
      ("Keep depth flat unless validated shadow evidence appears.") A sheet is
      separated by a 1px rule first; shadow is reserved for genuinely floating
@@ -372,21 +380,17 @@ body {
   }
 }
 
-/* The viewer stacks below the width where two useful columns fit. The tether
-   is a horizontal join between them, so it is withdrawn rather than redrawn
-   at an angle that would assert a relationship the layout no longer shows. */
+/* The viewer stacks below the width where two useful columns fit. */
 .viewer-split {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .viewer-aside {
   width: 100%;
+  min-height: 0;
   border-top: var(--hairline);
-}
-
-.tether-layer {
-  display: none;
 }
 
 @media (min-width: 1024px) {
@@ -398,10 +402,6 @@ body {
     width: 440px;
     flex-shrink: 0;
     border-top: none;
-  }
-
-  .tether-layer {
-    display: block;
   }
 }
 

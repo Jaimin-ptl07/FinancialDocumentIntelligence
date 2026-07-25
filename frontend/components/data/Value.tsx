@@ -16,19 +16,25 @@ const LOW_CONFIDENCE = 0.5;
  *  the field, scrolls the page, and draws the tether. */
 export function Value({
   field,
+  fieldId,
   selected,
   onSelect,
 }: {
   field: ExtractFieldView;
+  // Identity distinct from field.field_name: a display label the schema
+  // deliberately reuses across modules (e.g. "Cash on hand" under both
+  // Balance Sheet and a note), so it cannot key a React list or identify
+  // which row is selected without colliding.
+  fieldId: string;
   selected: boolean;
-  onSelect: (fieldName: string) => void;
+  onSelect: (fieldId: string) => void;
 }) {
   const missing = field.value === null || field.value === undefined;
   const soft = field.confidence < LOW_CONFIDENCE;
 
   return (
     <div
-      data-field={field.field_name}
+      data-field={fieldId}
       className="flex items-baseline justify-between"
       style={{
         gap: "var(--sp-4)",
@@ -96,7 +102,7 @@ export function Value({
             page={field.source.page}
             active={selected}
             label={`Show ${field.field_name} on page ${field.source.page}`}
-            onClick={() => onSelect(field.field_name)}
+            onClick={() => onSelect(fieldId)}
           />
         ) : null}
 

@@ -371,6 +371,68 @@ async def test_extract_document_makes_one_llm_call_per_unit(
     assert [r["value"] for r in result["fields"]] == ["A", "B", "C", "D", "E"]
 
 
+async def test_extract_document_second_call_is_a_cache_hit(
+    session_factory, store, processed_doc
+) -> None:
+    """A second call for the same (doc_id, schema) must NOT call the LLM
+    again -- it serves the record the first call already persisted. FakeExtractorClient
+    raises AssertionError on an over-call, so this only passes if the cache
+    check short-circuits before any retrieval/LLM work."""
+    doc, marker, embedder, vector_store = processed_doc
+
+    field = FieldSpec(
+        field_name="a", data_type="string",
+        retrieval_query=f"manufacturing company {marker}",
+        keywords=("a",), extraction_prompt="Extract a.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T-U1",
+        field_path="m.a", locator_keywords=("manufacturing",),
+    )
+    fake = FakeExtractorClient([
+        {"m.a": {"value": "A", "confidence": 1.0}},
+    ])
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        first = await extract_document(ctx=ctx, fields=[field], client=fake)
+        second = await extract_document(ctx=ctx, fields=[field], client=fake)
+
+    assert len(fake.calls) == 1, "second call must be a cache hit, not a re-extraction"
+    assert second["fields"] == first["fields"]
+
+
+async def test_extract_document_force_bypasses_cache(
+    session_factory, store, processed_doc
+) -> None:
+    """`force=True` re-runs extraction even when a cached record exists."""
+    doc, marker, embedder, vector_store = processed_doc
+
+    field = FieldSpec(
+        field_name="a", data_type="string",
+        retrieval_query=f"manufacturing company {marker}",
+        keywords=("a",), extraction_prompt="Extract a.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T-U1",
+        field_path="m.a", locator_keywords=("manufacturing",),
+    )
+    fake = FakeExtractorClient([
+        {"m.a": {"value": "A", "confidence": 1.0}},
+        {"m.a": {"value": "A2", "confidence": 1.0}},
+    ])
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        await extract_document(ctx=ctx, fields=[field], client=fake)
+        second = await extract_document(ctx=ctx, fields=[field], client=fake, force=True)
+
+    assert len(fake.calls) == 2
+    assert second["fields"][0]["value"] == "A2"
+
+
 async def test_extract_document_basis_filter_drops_consolidated_table_for_standalone_unit(
     session_factory, store,
 ) -> None:

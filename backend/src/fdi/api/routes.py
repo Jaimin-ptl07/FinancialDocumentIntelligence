@@ -955,7 +955,9 @@ async def extract_document_route(
         session=session, store=store, embedder=embedder, vector_store=vector_store,
         doc_id=doc.id, doc_key=body.doc_key, version=version,
     )
-    result = await extract_document(ctx=ctx, fields=fields, client=extractor_client)
+    result = await extract_document(
+        ctx=ctx, fields=fields, client=extractor_client, force=body.force
+    )
     return ExtractDocumentView.model_validate(
         {"doc_key": body.doc_key, "module": body.module, **result}
     )

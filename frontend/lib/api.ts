@@ -50,11 +50,11 @@ export const startStage = (docId: string, stage: string) =>
     method: "POST",
   });
 
-export const extractDocument = (docKey: string, module?: string) =>
+export const extractDocument = (docKey: string, module?: string, force?: boolean) =>
   request<ExtractDocumentView>("/extract/document", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ doc_key: docKey, module: module ?? null }),
+    body: JSON.stringify({ doc_key: docKey, module: module ?? null, force: force ?? false }),
   });
 
 export const getSchema = () => request<SchemaView>("/schema");

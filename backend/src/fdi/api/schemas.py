@@ -452,6 +452,10 @@ class AskResponse(BaseModel):
 class ExtractRequest(BaseModel):
     doc_key: str
     module: str | None = None
+    # When False (the default), a persisted record for this exact
+    # (doc_id, schema) pair is served as-is -- no retrieval, no LLM calls.
+    # Set True to discard it and re-run extraction from scratch.
+    force: bool = False
 
 
 class BoundingRegionView(BaseModel):

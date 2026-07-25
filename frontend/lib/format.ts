@@ -3,6 +3,15 @@ const INDIAN_GROUPING = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 2,
 });
 
+/** field_name is a display label the extraction schema deliberately reuses
+ *  across modules (e.g. "Cash on hand" appears under both Balance Sheet and
+ *  a note) -- it cannot key a React list or identify a selected row without
+ *  colliding. Pairing it with its position in the fields array a given
+ *  extraction response returns gives every row a unique, stable id. */
+export function fieldId(index: number, fieldName: string): string {
+  return `${index}:${fieldName}`;
+}
+
 /** A dual-period field (schema `periods` set) comes back from the extractor
  *  as `{current, prior}` rather than a scalar — see extractor.py's
  *  build_unit_messages prompt contract. Guarded structurally, not by field

@@ -19,7 +19,9 @@ const field = (over: Partial<ExtractFieldView> = {}): ExtractFieldView => ({
 
 describe("Value", () => {
   it("renders the figure grouped for an Indian filing", () => {
-    render(<Value field={field()} selected={false} onSelect={vi.fn()} />);
+    render(
+      <Value field={field()} fieldId="0:total_assets" selected={false} onSelect={vi.fn()} />,
+    );
     expect(screen.getByText("1,24,850.00")).toBeInTheDocument();
   });
 
@@ -27,6 +29,7 @@ describe("Value", () => {
     const { rerender } = render(
       <Value
         field={field({ confidence: 1 })}
+        fieldId="0:total_assets"
         selected={false}
         onSelect={vi.fn()}
       />,
@@ -36,6 +39,7 @@ describe("Value", () => {
     rerender(
       <Value
         field={field({ confidence: 0 })}
+        fieldId="0:total_assets"
         selected={false}
         onSelect={vi.fn()}
       />,
@@ -45,17 +49,20 @@ describe("Value", () => {
 
   it("offers the page reference as the way into the source", async () => {
     const onSelect = vi.fn();
-    render(<Value field={field()} selected={false} onSelect={onSelect} />);
+    render(
+      <Value field={field()} fieldId="0:total_assets" selected={false} onSelect={onSelect} />,
+    );
     await userEvent.click(
       screen.getByRole("button", { name: "Show total_assets on page 84" }),
     );
-    expect(onSelect).toHaveBeenCalledWith("total_assets");
+    expect(onSelect).toHaveBeenCalledWith("0:total_assets");
   });
 
   it("says plainly when a figure was not found", () => {
     render(
       <Value
         field={field({ value: null, confidence: 0 })}
+        fieldId="0:total_assets"
         selected={false}
         onSelect={vi.fn()}
       />,
@@ -74,6 +81,7 @@ describe("Value", () => {
             bounding_regions: [],
           },
         })}
+        fieldId="0:total_assets"
         selected={false}
         onSelect={vi.fn()}
       />,
