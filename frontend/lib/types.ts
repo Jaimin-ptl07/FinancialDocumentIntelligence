@@ -49,13 +49,19 @@ export interface BoundingRegion {
   polygon: number[];
 }
 
+export interface BoundingRegionsView {
+  current: BoundingRegion[];
+  prior: BoundingRegion[];
+}
+
 export interface ExtractSourceView {
   page: number | null;
   snippet: string | null;
   evidence_ids: string[];
-  /** Always a list — `[]` when the chunk does not map to geometry, or when the
-   *  provenance/structure artifact is absent. Never null. */
-  bounding_regions: BoundingRegion[];
+  /** Split by period — `current` is always a list (possibly a whole-table/
+   *  whole-section fallback box); `prior` is `[]` for a non-dual-period
+   *  field or when no prior-column cell was found. */
+  bounding_regions: BoundingRegionsView;
 }
 
 export interface ExtractFieldView {

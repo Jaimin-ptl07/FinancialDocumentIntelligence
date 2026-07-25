@@ -11,7 +11,7 @@ const field = (over: Partial<ExtractFieldView> = {}): ExtractFieldView => ({
     page: 84,
     snippet: "Total assets 1,24,850",
     evidence_ids: ["doc-1:t3r7"],
-    bounding_regions: [],
+    bounding_regions: { current: [], prior: [] },
   },
   confidence: 0.92,
   ...over,
@@ -78,7 +78,7 @@ describe("Value", () => {
             page: null,
             snippet: null,
             evidence_ids: [],
-            bounding_regions: [],
+            bounding_regions: { current: [], prior: [] },
           },
         })}
         fieldId="0:total_assets"

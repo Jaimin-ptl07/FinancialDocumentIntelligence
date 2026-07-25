@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { BoundingRegion } from "@/lib/types";
+import type { BoundingRegion, BoundingRegionsView } from "@/lib/types";
 
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 3;
@@ -19,7 +19,7 @@ export function PdfCanvas({
 }: {
   url: string;
   page: number;
-  regions: BoundingRegion[] | null;
+  regions: BoundingRegionsView | null;
   onPageCount?: (count: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -108,7 +108,12 @@ export function PdfCanvas({
     highlightRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [regions, ready]);
 
-  const onPage = (regions ?? []).filter((r) => r.page_number === page);
+  const currentOnPage = (regions?.current ?? []).filter((r) => r.page_number === page);
+  const priorOnPage = (regions?.prior ?? []).filter((r) => r.page_number === page);
+  // Tags exist to distinguish TWO boxes from each other -- a lone current
+  // box (the common, non-dual-period case) needs no "New" label since
+  // there's nothing else on the page it could be confused with.
+  const showTags = priorOnPage.length > 0;
 
   if (error) {
     return (
@@ -125,45 +130,8 @@ export function PdfCanvas({
       style={{ boxShadow: "var(--shadow-md)" }}
     >
       <canvas ref={canvasRef} className="block" />
-      {onPage.map((region, index) => {
-        const box = boxOf(region.polygon);
-        return (
-          // A double ring rather than one flat-bordered wash: now that the
-          // mark is pure ink rather than a rust accent, a single 1.5px line
-          // reads as just another rule on the page. Two concentric rings —
-          // a tight inner line plus an offset outer line — plus the wash
-          // between them reads as a deliberately placed mark (a rubber
-          // stamp's double ruling, a certified-copy seal) rather than a
-          // color swatch. The whole mark settles in with a brief scale/fade
-          // rather than snapping straight to full size.
-          <div
-            key={index}
-            ref={index === 0 ? highlightRef : undefined}
-            aria-hidden="true"
-            className="absolute pointer-events-none tether-highlight"
-            style={{
-              left: box.x * scale * POINTS_PER_INCH - 3,
-              top: box.y * scale * POINTS_PER_INCH - 3,
-              width: box.width * scale * POINTS_PER_INCH + 6,
-              height: box.height * scale * POINTS_PER_INCH + 6,
-              padding: 3,
-              border: "1px solid var(--pdf-mark)",
-              borderRadius: "var(--radius-sm)",
-              boxShadow: "0 1px 4px color-mix(in srgb, var(--pdf-mark) 18%, transparent)",
-            }}
-          >
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                border: "2px solid var(--pdf-mark)",
-                background: "var(--pdf-mark-wash)",
-                borderRadius: "var(--radius-sm)",
-              }}
-            />
-          </div>
-        );
-      })}
+      {renderBoxes(currentOnPage, "New", scale, highlightRef, showTags)}
+      {renderBoxes(priorOnPage, "Prior", scale, undefined, showTags)}
       <style>{`
         .tether-highlight {
           animation: tether-highlight-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
@@ -181,6 +149,74 @@ export function PdfCanvas({
       `}</style>
     </div>
   );
+}
+
+// A double ring rather than one flat-bordered wash: now that the mark is pure
+// ink rather than a rust accent, a single 1.5px line reads as just another
+// rule on the page. Two concentric rings -- a tight inner line plus an offset
+// outer line -- plus the wash between them reads as a deliberately placed
+// mark (a rubber stamp's double ruling, a certified-copy seal) rather than a
+// color swatch. The whole mark settles in with a brief scale/fade rather than
+// snapping straight to full size. The prior box is dashed, not a second
+// color, staying inside the monochrome system while still reading as a
+// distinct mark from the current box beside it.
+function renderBoxes(
+  regions: BoundingRegion[],
+  tag: "New" | "Prior",
+  scale: number,
+  firstRef?: React.RefObject<HTMLDivElement | null>,
+  showTag = false,
+) {
+  return regions.map((region, index) => {
+    const box = boxOf(region.polygon);
+    return (
+      <div
+        key={`${tag}-${index}`}
+        ref={index === 0 ? firstRef : undefined}
+        aria-hidden="true"
+        className="absolute pointer-events-none tether-highlight"
+        style={{
+          left: box.x * scale * POINTS_PER_INCH - 3,
+          top: box.y * scale * POINTS_PER_INCH - 3,
+          width: box.width * scale * POINTS_PER_INCH + 6,
+          height: box.height * scale * POINTS_PER_INCH + 6,
+          padding: 3,
+          border: tag === "Prior" ? "1px dashed var(--pdf-mark)" : "1px solid var(--pdf-mark)",
+          borderRadius: "var(--radius-sm)",
+          boxShadow: "0 1px 4px color-mix(in srgb, var(--pdf-mark) 18%, transparent)",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            border: tag === "Prior" ? "2px dashed var(--pdf-mark)" : "2px solid var(--pdf-mark)",
+            background: "var(--pdf-mark-wash)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        />
+        {showTag ? (
+          <span
+            className="data"
+            style={{
+              position: "absolute",
+              top: -18,
+              left: 0,
+              fontSize: "var(--text-2xs)",
+              fontWeight: 600,
+              padding: "1px 4px",
+              background: "var(--pdf-mark)",
+              color: "var(--leaf)",
+              borderRadius: "var(--radius-sm)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {tag}
+          </span>
+        ) : null}
+      </div>
+    );
+  });
 }
 
 /** Azure DI polygons are [x1,y1,x2,y2,x3,y3,x4,y4] in INCHES. The four corners
