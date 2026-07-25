@@ -16,6 +16,8 @@ about where the join is lossy; see `resolve_chunk_regions`'s docstring."""
 import re
 from collections.abc import Mapping, Sequence
 
+from fdi.core.tables import find_field_rows
+
 
 def _paragraph_regions(
     ocr_paragraphs: list[object], index: object
@@ -282,3 +284,67 @@ def resolve_evidence_regions(
             chunk_id = raw
         out.extend(resolve_chunk_regions(chunk_id, provenance, structure))
     return _dedup_regions(out)
+
+
+def _table_grids(structure: Mapping[str, object]) -> list[Mapping[str, object]]:
+    tables = structure.get("tables")
+    if not isinstance(tables, list):
+        return []
+    out: list[Mapping[str, object]] = []
+    for t in tables:
+        if not isinstance(t, Mapping):
+            continue
+        grid = t.get("grid")
+        if isinstance(grid, Mapping):
+            out.append(grid)
+    return out
+
+
+def _cell_regions_at(grid: Mapping[str, object], row: int, col: int) -> list[dict[str, object]]:
+    cell_regions = grid.get("cell_regions")
+    if not isinstance(cell_regions, list) or row < 0 or row >= len(cell_regions):
+        return []
+    row_cells = cell_regions[row]
+    if not isinstance(row_cells, list) or col < 0 or col >= len(row_cells):
+        return []
+    return _regions_list(row_cells[col])
+
+
+def resolve_field_regions(
+    *,
+    keywords: tuple[str, ...],
+    structure: Mapping[str, object],
+    fallback_current: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    """Cell-precise geometry for one extracted field, split by period.
+
+    Matches `keywords` (a FieldSpec's own tokens) against every table's
+    row-label column via `fdi.core.tables.find_field_rows` (same token-
+    subsequence algorithm `resolve_chunk_regions`'s row-id path was built on,
+    now reachable without an LLM-cited row id -- see
+    docs/superpowers/specs/2026-07-25-cell-precise-bounding-regions-design.md).
+
+    On the FIRST matching row across all tables: current = column 1's cell
+    region, prior = column 2's cell region (fdi.core.table_render's existing
+    column-1-is-current/column-2-is-prior convention -- a table with fewer
+    than 3 columns has no prior column and `prior` stays []).
+
+    On no match anywhere (narrative field, no table row found, malformed
+    structure): `current` is `fallback_current` (whatever
+    resolve_evidence_regions already resolved -- whole-table or whole-
+    section geometry), `prior` is []. Never raises (decision 10): a failed
+    cell match degrades to a coarser box, never no box, never a crash.
+    """
+    for grid in _table_grids(structure):
+        matches = find_field_rows(grid, keywords)
+        if not matches:
+            continue
+        row_obj = matches[0].get("row")
+        if not isinstance(row_obj, int):
+            continue
+        current = _dedup_regions(_cell_regions_at(grid, row_obj, 1))
+        prior = _dedup_regions(_cell_regions_at(grid, row_obj, 2))
+        if current or prior:
+            return {"current": current or fallback_current, "prior": prior}
+
+    return {"current": fallback_current, "prior": []}
