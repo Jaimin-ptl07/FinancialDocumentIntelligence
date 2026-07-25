@@ -108,3 +108,25 @@ introducing a second hue).
   here; narrative fields keep today's whole-heading-paragraph box).
 - Any change to retrieval, reranking, or the LLM's evidence-citation
   contract — this is purely a post-hoc geometry lookup.
+
+## Implementation status
+
+Implemented per `docs/plans/2026-07-25-cell-precise-bounding-regions.md`.
+`find_field_rows` (core/tables.py) and `resolve_field_regions`
+(core/provenance.py) do the row/column matching; `_attach_regions`
+(pipeline/extractor.py) wires it in. `EXTRACTION_RECORD_VERSION` bumped to 2
+for the shape change. Frontend renders both boxes via `PdfCanvas.tsx`'s
+`renderBoxes` helper.
+
+**Correction found during manual verification (Task 6) against a real
+190-field/157-table annual report**: the original implementation searched
+*every* table in the document for a keyword match and returned the first hit
+anywhere, ignoring which table the LLM actually cited via `evidence_ids`.
+168 of 190 fields resolved to the wrong page as a result — a generic row
+label ("Total", "Net block") recurs across many schedules in a large filing.
+Fixed by scoping the search to the table(s) `evidence_ids` names first
+(parsed the same way `resolve_chunk_regions` already does, via `t{i}`/
+`t{i}r{j}`), falling back to a document-wide search only when the cited
+table itself has no usable per-cell match. Covered by
+`test_resolve_field_regions_searches_cited_table_before_others` and
+`test_resolve_field_regions_falls_back_to_document_wide_when_cited_table_has_no_match`.
