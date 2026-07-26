@@ -409,6 +409,40 @@ async def list_documents(
     )
 
 
+@router.delete("/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    doc_id: str,
+    session: SessionDep,
+    store: StoreDep,
+    graph_store: GraphStoreDep,
+    vector_store: VectorStoreDep,
+) -> None:
+    """Erase a filing so the same file can be re-uploaded and re-run from
+    scratch -- Document.checksum is unique, so without this a re-upload of
+    the same PDF just 404s into the old row instead of starting fresh.
+
+    Fans out to every store a document can leave data in: Postgres (this
+    row + its stage_run history), the artifact store (both the DAG-stage
+    artifacts and any persisted extraction records), Neo4j, and Milvus. The
+    two doc-scoped MinIO prefixes are deleted before the Postgres row, so a
+    crash mid-delete leaves an orphaned MinIO prefix (harmless, re-deletable)
+    rather than a Postgres row with no artifacts behind it.
+    """
+    repo = DocumentRepository(session)
+    if await repo.get(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+
+    await store.delete_prefix(f"artifacts/{doc_id}/")
+    await store.delete_prefix(f"extractions/{doc_id}/")
+    if graph_store is not None:
+        graph_store.delete_document(doc_id)
+    if vector_store is not None:
+        vector_store.delete_document(doc_id)
+
+    await repo.delete(doc_id)
+    await session.commit()
+
+
 @router.post(
     "/documents/{doc_id}/ocr",
     status_code=status.HTTP_202_ACCEPTED,

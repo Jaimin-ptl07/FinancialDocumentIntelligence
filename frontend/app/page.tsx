@@ -116,6 +116,15 @@ export default function Dashboard() {
                 >
                   Pipeline
                 </th>
+                <th
+                  className="eyebrow"
+                  style={{
+                    padding: "var(--sp-3) var(--sp-4)",
+                    textAlign: "right",
+                  }}
+                >
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>

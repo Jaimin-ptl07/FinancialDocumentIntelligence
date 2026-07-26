@@ -216,6 +216,14 @@ class Neo4jGraphStore:
         with self._driver.session() as session:
             return session.execute_read(self._sections_in_reading_order, doc_id)
 
+    def delete_document(self, doc_id: str) -> None:
+        with self._driver.session() as session:
+            session.execute_write(self._delete_document_tx, doc_id)
+
+    @staticmethod
+    def _delete_document_tx(tx: ManagedTransaction, doc_id: str) -> None:
+        tx.run("MATCH (n {doc_id: $doc_id}) DETACH DELETE n", doc_id=doc_id)
+
     def close(self) -> None:
         self._driver.close()
 

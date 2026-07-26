@@ -533,6 +533,16 @@ class DocumentRepository:
         ).scalars().all()
         return {d.id: d for d in rows}
 
+    async def delete(self, doc_id: str) -> None:
+        """Remove a document and its stage_run history. `stage_run.doc_id`
+        has no ON DELETE CASCADE, so those rows are deleted explicitly first
+        -- deleting `document` first would violate the FK."""
+        await self._s.execute(
+            sqlalchemy.delete(StageRun).where(StageRun.doc_id == doc_id)
+        )
+        await self._s.execute(sqlalchemy.delete(Document).where(Document.id == doc_id))
+        await self._s.flush()
+
     async def ids_for(self, *, doc_key: str | None, version: int | None) -> list[str]:
         """Document ids matching a doc_key and/or version. Used to scope a
         Milvus filter, which keys on doc_id (a Stage has no doc_key to write).

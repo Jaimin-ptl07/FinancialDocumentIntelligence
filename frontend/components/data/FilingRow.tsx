@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { DocumentSummaryView } from "@/lib/types";
+import { deleteDocument } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { summarizeStageCounts } from "@/lib/stages";
 import { filingLabel, hasSourceFile } from "@/lib/documents";
@@ -15,6 +17,23 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
   const { done, failed, total } = summarizeStageCounts(document.stage_counts);
   const complete = failed === 0 && done >= total;
   const sourceless = !hasSourceFile(document);
+  const label = filingLabel(document);
+
+  const queryClient = useQueryClient();
+  const remove = useMutation({
+    mutationFn: () => deleteDocument(document.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["documents"] }),
+  });
+
+  const handleDelete = () => {
+    if (
+      window.confirm(
+        `Delete "${label}"? This removes the filing and everything read from it, so it can be re-uploaded and re-run from scratch.`,
+      )
+    ) {
+      remove.mutate();
+    }
+  };
 
   return (
     <tr
@@ -30,7 +49,7 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
             textUnderlineOffset: "3px",
           }}
         >
-          {filingLabel(document)}
+          {label}
         </Link>
         {sourceless ? (
           <span
@@ -90,6 +109,24 @@ export function FilingRow({ document }: { document: DocumentSummaryView }) {
           >
             ✕ {failed} failed
           </span>
+        ) : null}
+      </td>
+      <td style={{ ...cell, textAlign: "right" }}>
+        <button
+          type="button"
+          className="btn"
+          onClick={handleDelete}
+          disabled={remove.isPending}
+        >
+          {remove.isPending ? "Deleting…" : "Delete"}
+        </button>
+        {remove.isError ? (
+          <p
+            className="data"
+            style={{ fontSize: "var(--text-2xs)", color: "var(--ink)", marginTop: "var(--sp-1)" }}
+          >
+            {(remove.error as Error).message}
+          </p>
         ) : null}
       </td>
     </tr>

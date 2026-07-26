@@ -27,6 +27,8 @@ class GraphStore(Protocol):
 
     def reading_order(self, doc_id: str) -> list[dict[str, object]]: ...
 
+    def delete_document(self, doc_id: str) -> None: ...
+
 
 class FakeGraphStore:
     def __init__(self) -> None:
@@ -116,4 +118,11 @@ class FakeGraphStore:
         return [
             {k: v for k, v in s.items() if k not in {"paragraphs", "tables", "figures"}}
             for s in sections
+        ]
+
+    def delete_document(self, doc_id: str) -> None:
+        self.loaded_nodes = [n for n in self.loaded_nodes if n.get("doc_id") != doc_id]
+        ids = {n.get("id") for n in self.loaded_nodes}
+        self.loaded_edges = [
+            e for e in self.loaded_edges if e.get("source") in ids and e.get("target") in ids
         ]

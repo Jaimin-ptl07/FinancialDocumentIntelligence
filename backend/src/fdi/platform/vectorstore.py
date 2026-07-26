@@ -175,6 +175,11 @@ class MilvusVectorStore:
         stats = self._client.get_collection_stats(self._collection)
         return int(stats["row_count"])
 
+    def delete_document(self, doc_id: str) -> None:
+        if not self._client.has_collection(self._collection):
+            return
+        self._client.delete(collection_name=self._collection, filter=f'doc_id == "{doc_id}"')
+
     @staticmethod
     def from_settings(settings: "Settings") -> "MilvusVectorStore | None":
         if not settings.milvus_uri:

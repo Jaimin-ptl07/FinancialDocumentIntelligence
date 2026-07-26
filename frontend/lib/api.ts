@@ -39,6 +39,25 @@ export const listDocuments = (limit = 50, offset = 0) =>
 export const getDocument = (docId: string) =>
   request<DocumentView>(`/documents/${docId}`);
 
+/** 204 No Content on success -- nothing to parse, so this bypasses
+ *  `request<T>` (which always awaits `response.json()`) and does its own
+ *  fetch + error handling instead. */
+export async function deleteDocument(docId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/documents/${docId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* body was not JSON; the status text stands */
+    }
+    throw new Error(`DELETE /documents/${docId} failed (${response.status}): ${detail}`);
+  }
+}
+
 export const getStages = (docId: string) =>
   request<StagesView>(`/documents/${docId}/stages`);
 
