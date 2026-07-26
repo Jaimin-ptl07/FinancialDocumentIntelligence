@@ -982,6 +982,26 @@ async def extract_document_route(
             status_code=500, detail=f"document {doc.id} has no version"
         )
 
+    # `index` is the pipeline's terminal stage (same rule document_outcome_
+    # counts uses to call a document "complete") -- until it is `done`,
+    # Milvus has no searchable chunks for this doc yet, so every retrieval
+    # unit's hybrid_search legitimately returns nothing and extraction would
+    # silently produce well-formed null records for every field (decision
+    # 10's "never raise" degrades a failed search, not an absent one; there
+    # is nothing here to distinguish the two without this check). A 409
+    # tells the caller to wait and retry, rather than looking like a
+    # document with no readable figures.
+    index_run = await RegistryRepository(session).latest_run(doc.id, "index")
+    if index_run is None or index_run.status != "done":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this document's pipeline has not finished indexing yet -- "
+                "retrieval would find nothing. Wait for all stages to "
+                "complete, then try again"
+            ),
+        )
+
     schema, _source = await load_schema(store=store, seed_path=schema_path)
     fields = parse_field_specs(schema, body.module)
 

@@ -48,6 +48,15 @@ async def run_stage(
         repo = RegistryRepository(s)
         facts = await repo.runs_for_document(doc_id)
         if stage.deps:
+            # A multi-dep stage is dispatched once per dependency edge (each
+            # predecessor calls resolver.successors() independently on finish),
+            # so this call can arrive after only SOME of its deps are done --
+            # not a bug in the caller, just a race this stage must tolerate.
+            # Skipping (no run, no successors) here is safe: whichever
+            # dependency finishes LAST will re-dispatch this same stage, and
+            # that call will see every dep in `facts` and proceed normally.
+            if not all(d in facts for d in stage.deps):
+                return []
             input_hash = derived_input_hash([facts[d].output_hash for d in stage.deps])
         else:
             doc = await s.get(Document, doc_id)
