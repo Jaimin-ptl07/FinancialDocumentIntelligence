@@ -92,6 +92,8 @@ class FieldSpec:
     periods: tuple[str, ...] = ()
     locator_keywords: tuple[str, ...] = ()
     basis_preference: str = "standalone"
+    tag: str = ""
+    origin: str = "extracted"
 
 
 @dataclass(frozen=True)
@@ -254,6 +256,9 @@ def _field_spec_from(
     periods = _str_tuple(field.get("periods"))
     locator_keywords = _str_tuple(unit.get("locator_keywords"))
 
+    tag = field.get("tag")
+    origin = field.get("origin")
+
     return FieldSpec(
         field_name=field_name, data_type=data_type, retrieval_query=retrieval_query,
         keywords=keywords, extraction_prompt=extraction_prompt, enum_values=enum_values,
@@ -266,6 +271,8 @@ def _field_spec_from(
         periods=periods,
         locator_keywords=locator_keywords,
         basis_preference=_basis_preference(unit.get("basis_preference")),
+        tag=tag if isinstance(tag, str) else "",
+        origin=origin if isinstance(origin, str) and origin else "extracted",
     )
 
 
@@ -300,16 +307,45 @@ def parse_field_specs(schema: Mapping[str, object], module: str | None = None) -
                 continue
             fields_raw = u.get("fields")
             fields = fields_raw if isinstance(fields_raw, list) else []
-            for f in fields:
-                if not isinstance(f, Mapping):
-                    continue
-                spec = _field_spec_from(
-                    f, unit=u, module_id=module_id, module_name=module_name,
-                    module_key=module_key,
-                )
-                if spec is not None:
-                    specs.append(spec)
+            _collect_field_specs(
+                fields, unit=u, module_id=module_id, module_name=module_name,
+                module_key=module_key, out=specs,
+            )
     return specs
+
+
+def _collect_field_specs(
+    fields: Sequence[object],
+    *,
+    unit: Mapping[str, object],
+    module_id: int,
+    module_name: str,
+    module_key: str,
+    out: list[FieldSpec],
+) -> None:
+    """Walk a unit's `fields`, recursing into group nodes (v4 nesting) and
+    emitting a FieldSpec per EXTRACTED leaf. A group node is any field carrying
+    a non-empty `fields` list of its own; a derived leaf (`origin == "derived"`,
+    no `extraction_prompt`) contributes nothing to extraction. v3.1's flat
+    fields have no `fields` child, so this is a no-op recursion for them."""
+    for f in fields:
+        if not isinstance(f, Mapping):
+            continue
+        children = f.get("fields")
+        if isinstance(children, list) and children:
+            _collect_field_specs(
+                children, unit=unit, module_id=module_id, module_name=module_name,
+                module_key=module_key, out=out,
+            )
+            continue
+        if f.get("origin") == "derived":
+            continue
+        spec = _field_spec_from(
+            f, unit=unit, module_id=module_id, module_name=module_name,
+            module_key=module_key,
+        )
+        if spec is not None:
+            out.append(spec)
 
 
 def is_numeric(data_type: str) -> bool:
@@ -486,6 +522,8 @@ def assemble_result(
 
     return {
         "field_name": field.field_name,
+        "tag": field.tag,
+        "origin": field.origin,
         "value": value,
         "source": {"page": page, "snippet": snippet, "evidence_ids": evidence_ids},
         "confidence": _clamp_confidence(raw.get("confidence")),
@@ -512,6 +550,20 @@ def assemble_unit_results(
                 entry = raw.get(field.field_name)
         field_raw = entry if isinstance(entry, Mapping) else {}
         out.append(assemble_result(field, field_raw, ranked))
+    return out
+
+
+def index_by_tag(records: Sequence[Mapping[str, object]]) -> dict[str, dict[str, object]]:
+    """A `{tag: record}` index over extraction records, the tag-addressable view
+    the Fact model needs. A record with no/blank `tag` is skipped (it cannot be
+    a Fact); on a repeated tag the FIRST record wins (extracted tags are unique
+    per schema -- the only known duplicate, `WCL`, is derived and so never
+    appears in extraction output). Pure, total, never raises."""
+    out: dict[str, dict[str, object]] = {}
+    for rec in records:
+        tag = rec.get("tag")
+        if isinstance(tag, str) and tag and tag not in out:
+            out[tag] = dict(rec)
     return out
 
 
