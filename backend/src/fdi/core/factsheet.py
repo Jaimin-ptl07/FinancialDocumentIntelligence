@@ -10,6 +10,7 @@ validation, XBRL export) reads one map where each entry knows its own origin.
 
 from collections.abc import Mapping, Sequence
 
+from fdi.core.confidence import calibrate
 from fdi.core.derivation import derive_facts
 from fdi.core.ratios import compute_ratios
 from fdi.core.validation import validate
@@ -42,6 +43,20 @@ def build_factsheet(
 
     ratios = compute_ratios(facts)
     validations = validate(facts, tolerance=tolerance)
+    calibration = calibrate(facts, validations)
+
+    # Fold the calibrated confidence + band back onto each Fact so a consumer
+    # reads one object per number.
+    for tag, cal in calibration.items():
+        if tag in facts:
+            facts[tag]["confidence"] = cal["confidence"]
+            facts[tag]["band"] = cal["band"]
+
+    bands = {"high": 0, "needs_review": 0, "low": 0, "failed": 0}
+    for cal in calibration.values():
+        band = cal["band"]
+        if isinstance(band, str) and band in bands:
+            bands[band] += 1
 
     summary = {
         "extracted": sum(1 for f in facts.values() if f["origin"] == "extracted"),
@@ -53,8 +68,9 @@ def build_factsheet(
         "checks_failed_error": sum(
             1 for v in validations if not v["passed"] and v["severity"] == "error"
         ),
+        "bands": bands,
     }
     return {
         "facts": facts, "derived": derived, "ratios": ratios,
-        "validations": validations, "summary": summary,
+        "validations": validations, "calibration": calibration, "summary": summary,
     }
