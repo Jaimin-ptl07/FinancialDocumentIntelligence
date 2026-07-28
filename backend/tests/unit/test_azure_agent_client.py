@@ -14,8 +14,13 @@ def _client_returning(monkeypatch: pytest.MonkeyPatch, msg: object) -> dict[str,
     class _Choice:
         message = msg
 
+    class _Usage:
+        prompt_tokens = 20
+        completion_tokens = 7
+
     class _Resp:
         choices = [_Choice()]
+        usage = _Usage()
 
     class _Completions:
         def create(self, **kwargs: object) -> _Resp:
@@ -61,6 +66,9 @@ def test_agent_client_parses_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None
         )
     ]
     assert calls["kwargs"]["tool_choice"] == "auto"
+    assert resp.usage is not None
+    assert resp.usage.input_tokens == 20
+    assert resp.usage.output_tokens == 7
 
 
 def test_agent_client_parses_final_content(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,6 +84,9 @@ def test_agent_client_parses_final_content(monkeypatch: pytest.MonkeyPatch) -> N
     )
     resp = c.complete([], [])
     assert resp.content == "the answer" and resp.tool_calls is None
+    assert resp.usage is not None
+    assert resp.usage.input_tokens == 20
+    assert resp.usage.output_tokens == 7
 
 
 def test_agent_client_malformed_tool_json_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:

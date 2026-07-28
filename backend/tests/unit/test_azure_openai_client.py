@@ -15,8 +15,13 @@ def test_azure_client_calls_sdk_and_parses_label(monkeypatch: pytest.MonkeyPatch
     class _Choice:
         message = _Msg()
 
+    class _Usage:
+        prompt_tokens = 12
+        completion_tokens = 3
+
     class _Resp:
         choices = [_Choice()]
+        usage = _Usage()
 
     class _Completions:
         def create(self, **kwargs: object) -> _Resp:
@@ -36,7 +41,11 @@ def test_azure_client_calls_sdk_and_parses_label(monkeypatch: pytest.MonkeyPatch
     c = sem.AzureOpenAIClient(
         endpoint="e", key="k", deployment="dep1", model="gpt-4o", api_version="2024-10-21"
     )
-    assert c.classify("Balance Sheet", "Assets 100") == "BALANCE_SHEET"
+    result = c.classify("Balance Sheet", "Assets 100")
+    assert result.label == "BALANCE_SHEET"
+    assert result.usage is not None
+    assert result.usage.input_tokens == 12
+    assert result.usage.output_tokens == 3
     kwargs = calls["kwargs"]
     assert kwargs["model"] == "dep1"
     messages = kwargs["messages"]
