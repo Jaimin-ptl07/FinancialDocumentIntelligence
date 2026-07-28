@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fdi.platform.db.engine import make_session_factory
-from fdi.platform.db.repository import RegistryRepository
+from fdi.platform.db.repository import DocumentRepository, RegistryRepository
 
 pytestmark = pytest.mark.integration
 
@@ -78,3 +78,35 @@ async def test_llm_usage_with_no_doc_or_stage_run_is_allowed(session_factory) ->
         totals = await RegistryRepository(s).corpus_cost_totals()
     assert totals["llm_input_tokens"] >= 50
     assert totals["llm_output_tokens"] >= 10
+
+
+async def test_document_delete_removes_usage_events_too(session_factory) -> None:
+    """DocumentRepository.delete must not violate ocr_usage_event/
+    llm_usage_event's FKs to stage_run/document -- both tables' rows are
+    children of stage_run (which is itself a child of document), so they
+    must be deleted before stage_run, which must be deleted before
+    document. Regression test: this previously raised
+    ForeignKeyViolationError on a document with any real usage history."""
+    doc_id, run_id = await _make_document_and_stage_run(session_factory)
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_ocr_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            correlation_id="corr1", page_count=3,
+            azure_model="prebuilt-layout", duration_ms=100,
+        )
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="semantic_classify", correlation_id="corr1",
+            model="gpt-4o", input_tokens=10, output_tokens=5, duration_ms=50,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        await DocumentRepository(s).delete(doc_id)
+        await s.commit()
+
+    async with session_factory() as s:
+        assert await DocumentRepository(s).get(doc_id) is None
+        rows = await RegistryRepository(s).document_cost_by_source(doc_id)
+    assert rows == []

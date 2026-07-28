@@ -712,9 +712,19 @@ class DocumentRepository:
         return {d.id: d for d in rows}
 
     async def delete(self, doc_id: str) -> None:
-        """Remove a document and its stage_run history. `stage_run.doc_id`
-        has no ON DELETE CASCADE, so those rows are deleted explicitly first
-        -- deleting `document` first would violate the FK."""
+        """Remove a document, its stage_run history, and its usage-event
+        history. None of `stage_run.doc_id`, `ocr_usage_event.doc_id`/
+        `.stage_run_id`, or `llm_usage_event.doc_id`/`.stage_run_id` have
+        ON DELETE CASCADE, so children are deleted explicitly before their
+        parents -- usage events (costing feature) before stage_run (they FK
+        to it), stage_run before document (deleting document first would
+        violate every one of these FKs)."""
+        await self._s.execute(
+            sqlalchemy.delete(OcrUsageEvent).where(OcrUsageEvent.doc_id == doc_id)
+        )
+        await self._s.execute(
+            sqlalchemy.delete(LlmUsageEvent).where(LlmUsageEvent.doc_id == doc_id)
+        )
         await self._s.execute(
             sqlalchemy.delete(StageRun).where(StageRun.doc_id == doc_id)
         )
