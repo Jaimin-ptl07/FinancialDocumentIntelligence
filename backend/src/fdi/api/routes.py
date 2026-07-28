@@ -34,6 +34,8 @@ from fdi.api.schemas import (
     ConceptComparisonView,
     ConceptLookupView,
     CorpusTotalsView,
+    CostBySourceView,
+    DocumentCostView,
     DocumentListView,
     DocumentStructureView,
     DocumentSummaryView,
@@ -83,6 +85,7 @@ from fdi.api.schemas import (
 )
 from fdi.core.extractor import parse_field_specs
 from fdi.core.ontology import CanonicalConcept
+from fdi.core.pricing import llm_cost_inr, ocr_cost_inr
 from fdi.core.schema import bump_patch_version, validate_extraction_schema
 from fdi.pipeline.agent_tools import AgentContext
 from fdi.pipeline.ask import answer_question
@@ -105,9 +108,14 @@ from fdi.pipeline.retrieval import bm25_search, hybrid_search, vector_search
 from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
-from fdi.platform.config import get_settings
+from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.models import Document
-from fdi.platform.db.repository import DocumentRepository, EvalRepository, RegistryRepository
+from fdi.platform.db.repository import (
+    CostBySource,
+    DocumentRepository,
+    EvalRepository,
+    RegistryRepository,
+)
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -527,6 +535,39 @@ async def document_artifact(
         raise HTTPException(status_code=404, detail=f"no {stage} artifact for document {doc_id}")
     body = await store.get_json(run.artifact_key)
     return dict(body)
+
+
+def _priced_source(row: CostBySource, settings: Settings) -> CostBySourceView:
+    source = row["source"]
+    if source == "ocr":
+        cost = ocr_cost_inr(row["page_count"], settings.ocr_cost_per_page_inr)
+    else:
+        cost = llm_cost_inr(
+            row["input_tokens"], row["output_tokens"],
+            input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+            usd_to_inr=settings.usd_to_inr_rate,
+        )
+    return CostBySourceView(
+        source=source, call_count=row["call_count"],
+        page_count=row["page_count"], input_tokens=row["input_tokens"],
+        output_tokens=row["output_tokens"], duration_ms=row["duration_ms"],
+        cost_inr=cost,
+    )
+
+
+@router.get("/documents/{doc_id}/cost", response_model=DocumentCostView)
+async def document_cost(doc_id: str, session: SessionDep) -> DocumentCostView:
+    repo = RegistryRepository(session)
+    if await repo.get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    settings = get_settings()
+    by_source = [_priced_source(r, settings) for r in await repo.document_cost_by_source(doc_id)]
+    return DocumentCostView(
+        doc_id=doc_id,
+        total_cost_inr=sum(r.cost_inr for r in by_source),
+        by_source=by_source,
+    )
 
 
 def _content_disposition(filename: str | None) -> str:
@@ -1184,6 +1225,32 @@ async def analytics(session: SessionDep, vector_store: VectorStoreDep) -> Analyt
     stages = await registry.stage_throughput()
     outcomes = await registry.document_outcome_counts()
     chunk_count = vector_store.count() if vector_store is not None else 0
+
+    settings = get_settings()
+    corpus_costs = await registry.corpus_cost_totals()
+    stage_costs = await registry.stage_cost_totals()
+    total_cost_inr = ocr_cost_inr(
+        corpus_costs["ocr_page_count"], settings.ocr_cost_per_page_inr
+    ) + llm_cost_inr(
+        corpus_costs["llm_input_tokens"], corpus_costs["llm_output_tokens"],
+        input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+        output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+        usd_to_inr=settings.usd_to_inr_rate,
+    )
+
+    def _stage_cost_inr(name: str) -> float:
+        t = stage_costs.get(name)
+        if t is None:
+            return 0.0
+        return ocr_cost_inr(
+            t["ocr_page_count"], settings.ocr_cost_per_page_inr
+        ) + llm_cost_inr(
+            t["llm_input_tokens"], t["llm_output_tokens"],
+            input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+            usd_to_inr=settings.usd_to_inr_rate,
+        )
+
     return AnalyticsView(
         corpus=CorpusTotalsView(
             document_count=totals["document_count"],
@@ -1199,10 +1266,12 @@ async def analytics(session: SessionDep, vector_store: VectorStoreDep) -> Analyt
                 queued=s["queued"],
                 failed=s["failed"],
                 median_seconds=s["median_seconds"],
+                cost_inr=_stage_cost_inr(s["name"]),
             )
             for s in stages
         ],
         documents_complete=outcomes["complete"],
         documents_failed=outcomes["failed"],
         chunk_count=chunk_count,
+        total_cost_inr=total_cost_inr,
     )

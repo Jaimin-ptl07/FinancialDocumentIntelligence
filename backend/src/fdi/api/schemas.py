@@ -548,7 +548,10 @@ class StageThroughputView(BaseModel):
     """One pipeline stage, counted over the LATEST run per (document, stage).
     `median_seconds` covers the `done` runs only, and is null when there are
     none -- a stage that has never succeeded has no throughput, which is not
-    the same as a throughput of zero."""
+    the same as a throughput of zero. `cost_inr` (costing feature) is the
+    corpus-wide total for this stage's billable calls, priced at read time --
+    0.0 for every stage except "ocr" and "semantic", the only two that ever
+    make a real Azure call."""
 
     name: str
     done: int
@@ -556,6 +559,28 @@ class StageThroughputView(BaseModel):
     queued: int
     failed: int
     median_seconds: float | None
+    cost_inr: float
+
+
+class CostBySourceView(BaseModel):
+    """One usage source's totals for a document, priced into INR at read
+    time (costing feature, docs/superpowers/specs/2026-07-28-costing-
+    feature-design.md). `page_count` is 0 for every LLM source;
+    `input_tokens`/`output_tokens` are 0 for "ocr"."""
+
+    source: str
+    call_count: int
+    page_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+    cost_inr: float
+
+
+class DocumentCostView(BaseModel):
+    doc_id: str
+    total_cost_inr: float
+    by_source: list[CostBySourceView]
 
 
 class AnalyticsView(BaseModel):
@@ -567,3 +592,4 @@ class AnalyticsView(BaseModel):
     documents_complete: int
     documents_failed: int
     chunk_count: int
+    total_cost_inr: float
