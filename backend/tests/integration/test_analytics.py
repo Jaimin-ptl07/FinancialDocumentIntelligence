@@ -196,6 +196,10 @@ async def test_analytics_reports_corpus_totals_and_stage_throughput(
         "queued": 0,
         "failed": 1,
         "median_seconds": 20.0,
+        # This synthetic stage name never appears in ocr_usage_event/
+        # llm_usage_event (costing feature) -- only "ocr" and "semantic"
+        # ever bill, so every other stage's cost_inr is always 0.0.
+        "cost_inr": 0.0,
     }
     names = [s["name"] for s in after["stages"]]
     assert names == sorted(names)
@@ -261,12 +265,16 @@ async def test_empty_corpus_returns_zeros_not_nulls(session_factory) -> None:
     but for the length of this transaction the session genuinely sees zero
     rows, which is the only way to reach this branch of the SQL.
     """
-    from fdi.platform.db.models import Document, StageRun
+    from fdi.platform.db.models import Document, LlmUsageEvent, OcrUsageEvent, StageRun
     from fdi.platform.db.repository import DocumentRepository, RegistryRepository
 
     async with session_factory() as s:
-        # stage_run FKs to document, so it goes first.
-        for model in (StageRun, Document):
+        # ocr_usage_event/llm_usage_event FK to stage_run (costing feature),
+        # which FKs to document -- children before parents, or the DELETE
+        # FROM stage_run below violates ocr_usage_event_stage_run_id_fkey
+        # once any test in this shared container database has recorded a
+        # usage event.
+        for model in (OcrUsageEvent, LlmUsageEvent, StageRun, Document):
             await s.execute(sqlalchemy.delete(model))
 
         totals = await DocumentRepository(s).corpus_totals()
