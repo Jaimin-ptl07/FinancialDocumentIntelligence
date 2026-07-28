@@ -33,12 +33,7 @@ async def store(minio_client: Minio) -> ArtifactStore:
     return s
 
 
-async def test_ocr_stage_runs_and_caches(
-    stub_fdi_env: None, session_factory, store
-) -> None:  # fixtures from conftest
-    # stub_fdi_env: run_stage's OCR-billing path reads get_settings().azure_di_model,
-    # which needs the six required FDI_ vars stubbed -- the autouse
-    # _isolate_fdi_env fixture clears them for every test otherwise.
+async def test_ocr_stage_runs_and_caches(session_factory, store) -> None:  # fixtures from conftest
     doc = await intake_document(
         pdf=b"%PDF-1.7\n%fake-pdf-body\n",
         filename="a.pdf",
@@ -83,7 +78,7 @@ async def test_ocr_stage_runs_and_caches(
 
 
 async def test_ocr_stage_records_one_usage_event_per_real_call(
-    stub_fdi_env: None, session_factory, store
+    session_factory, store
 ) -> None:
     doc = await intake_document(
         pdf=b"%PDF-1.7\n%fake-pdf-body-2\n",

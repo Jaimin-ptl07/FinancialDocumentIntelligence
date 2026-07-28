@@ -55,15 +55,10 @@ async def store(minio_client: Minio) -> ArtifactStore:
 
 
 @pytest.fixture
-async def marked_doc(stub_fdi_env: None, session_factory, store):
+async def marked_doc(session_factory, store):
     """One fully-processed, doubly-indexed document with a fresh uuid4
     marker embedded in its text (Balance Sheet / Total Assets), mirroring
-    test_hybrid_search.py's hybrid_corpus fixture but for ONE document.
-
-    stub_fdi_env: run_stage's OCR-billing path (costing feature) reads
-    get_settings().azure_di_model, which needs the six required FDI_ vars
-    stubbed -- the autouse _isolate_fdi_env fixture clears them for every
-    test otherwise. Same fixture, same reason, as test_ocr_stage.py."""
+    test_hybrid_search.py's hybrid_corpus fixture but for ONE document."""
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),

@@ -115,6 +115,7 @@ async def _run_stage_async(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,
             store=store, registry=REGISTRY, resolver=resolver, services=services,
+            azure_model=get_settings().azure_di_model,
         )
     finally:
         await engine.dispose()

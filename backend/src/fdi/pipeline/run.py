@@ -19,7 +19,6 @@ from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.stage import StageContext
 from fdi.pipeline.usage import UsageAccumulator
-from fdi.platform.config import get_settings
 from fdi.platform.db.models import Document
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -30,6 +29,7 @@ async def run_stage(
     session_factory: async_sessionmaker[AsyncSession], store: ArtifactStore,
     registry: StageRegistry, resolver: DagResolver,
     services: Mapping[str, object] | None = None,
+    azure_model: str = "",
 ) -> list[str]:
     stage = registry.get(stage_name)
     usage = UsageAccumulator()
@@ -109,7 +109,16 @@ async def run_stage(
     # already present in the artifact body (fdi.core.ocr_schema.normalize_
     # ocr's "pages" list), so no change to AzureOcrClient/OcrStage is
     # needed. Costing feature (docs/superpowers/specs/2026-07-28-costing-
-    # feature-design.md sec 3.3).
+    # feature-design.md sec 3.3). `azure_model` arrives as a parameter,
+    # not via get_settings() here: this function is the pure stage-
+    # execution framework and is called directly (no Settings in scope)
+    # by a large fraction of the integration suite, which fakes out
+    # services instead of configuring a real app. A get_settings() call
+    # here would require every one of those callers to also stub a full
+    # Settings() environment just to bill a page count -- tasks.py is the
+    # one real caller that already has Settings in scope; it supplies the
+    # model name, and every other caller's default ("") is a legitimate
+    # "unknown" for a purely descriptive metadata field.
     if stage_name == "ocr" and isinstance(body, Mapping):
         pages = body.get("pages")
         page_count = len(pages) if isinstance(pages, list) else 0
@@ -117,7 +126,7 @@ async def run_stage(
             await RegistryRepository(s).record_ocr_usage(
                 str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
                 correlation_id=correlation_id, page_count=page_count,
-                azure_model=get_settings().azure_di_model, duration_ms=duration_ms,
+                azure_model=azure_model, duration_ms=duration_ms,
             )
             await s.commit()
     await _flush_llm_usage(

@@ -43,7 +43,7 @@ async def store(minio_client: Minio) -> ArtifactStore:
 
 
 async def test_semantic_stage_runs_and_caches(  # fixtures from conftest
-    stub_fdi_env: None, session_factory, store
+    session_factory, store
 ) -> None:
     doc = await intake_document(
         pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
@@ -132,7 +132,7 @@ class _UsageCarryingSemanticClient:
 
 
 async def test_semantic_stage_records_one_llm_usage_event_per_section(
-    stub_fdi_env: None, session_factory, store
+    session_factory, store
 ) -> None:
     doc = await intake_document(
         pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
@@ -208,7 +208,7 @@ class _FlakySemanticClient:
 
 
 async def test_semantic_stage_bills_calls_made_before_a_mid_loop_failure(
-    stub_fdi_env: None, session_factory, store
+    session_factory, store
 ) -> None:
     doc = await intake_document(
         pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),

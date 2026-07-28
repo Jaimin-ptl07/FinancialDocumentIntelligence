@@ -137,7 +137,7 @@ def _schema(marker: str) -> dict[str, object]:
 
 
 @pytest.fixture
-async def processed_doc(stub_fdi_env: None, session_factory, store):
+async def processed_doc(session_factory, store):
     """One fully-processed document: a text section (matched by BM25/vector
     search over its s{i} chunk) + a numeric table (matched by BM25/vector
     search over its t{i} table CARD, indexed into Milvus right alongside
@@ -448,7 +448,7 @@ async def test_extract_document_force_bypasses_cache(
 
 
 async def test_extract_document_basis_filter_drops_consolidated_table_for_standalone_unit(
-    stub_fdi_env: None, session_factory, store,
+    session_factory, store,
 ) -> None:
     """TR-1 P4b: a unit's DEFAULT `basis_preference` ("standalone") drops
     table candidates the `basis` stage tags "consolidated" -- replacing the
@@ -600,7 +600,7 @@ async def test_extract_document_basis_filter_drops_consolidated_table_for_standa
 
 
 async def test_extract_document_gives_table_field_a_cell_precise_box(
-    stub_fdi_env: None, session_factory, store,
+    session_factory, store,
 ) -> None:
     """A numeric field whose keywords match a table row must get a
     bounding_regions shape of {current, prior}, with current/prior each
