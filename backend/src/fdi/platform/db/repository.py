@@ -12,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
-from fdi.platform.db.models import Document, EvalCaseResult, EvalRun, StageRun
+from fdi.platform.db.models import (
+    Document,
+    EvalCaseResult,
+    EvalRun,
+    LlmUsageEvent,
+    OcrUsageEvent,
+    StageRun,
+)
 
 
 class CorpusTotals(TypedDict):
@@ -40,6 +47,34 @@ class StageThroughput(TypedDict):
     queued: int
     failed: int
     median_seconds: float | None
+
+
+class CostBySource(TypedDict):
+    """One usage source's raw totals for one document (costing feature).
+    `source` is "ocr" or one of the llm_usage_event.source values.
+    page_count is 0 for every LLM source; input_tokens/output_tokens are 0
+    for "ocr". INR conversion happens at the API layer via fdi.core.pricing
+    -- this stays in raw units so a pricing change recomputes without
+    touching this query."""
+
+    source: str
+    call_count: int
+    page_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+
+
+class CorpusCostTotals(TypedDict):
+    """Raw usage totals, corpus-wide or per-stage (costing feature). Every
+    real billable event counts -- unlike stage_throughput/document_outcome_
+    counts this is NOT latest-per-stage: a document reprocessed for real
+    (checksum unchanged, stage version bumped) contributes both charges,
+    matching actual money spent."""
+
+    ocr_page_count: int
+    llm_input_tokens: int
+    llm_output_tokens: int
 
 
 def _latest_stage_runs() -> sqlalchemy.Subquery:
@@ -118,6 +153,49 @@ class RegistryRepository:
         run = await self._s.get(StageRun, run_id)
         assert run is not None
         run.status, run.error = "failed", error
+        await self._s.flush()
+
+    async def record_ocr_usage(
+        self,
+        id: str,
+        *,
+        doc_id: str,
+        stage_run_id: str,
+        correlation_id: str | None,
+        page_count: int,
+        azure_model: str,
+        duration_ms: int,
+    ) -> None:
+        self._s.add(
+            OcrUsageEvent(
+                id=id, doc_id=doc_id, stage_run_id=stage_run_id,
+                correlation_id=correlation_id, page_count=page_count,
+                azure_model=azure_model, duration_ms=duration_ms,
+            )
+        )
+        await self._s.flush()
+
+    async def record_llm_usage(
+        self,
+        id: str,
+        *,
+        doc_id: str | None,
+        stage_run_id: str | None,
+        source: str,
+        correlation_id: str | None,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        duration_ms: int,
+    ) -> None:
+        self._s.add(
+            LlmUsageEvent(
+                id=id, doc_id=doc_id, stage_run_id=stage_run_id, source=source,
+                correlation_id=correlation_id, model=model,
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                duration_ms=duration_ms,
+            )
+        )
         await self._s.flush()
 
     async def runs_for_document(self, doc_id: str) -> dict[str, RunFacts]:
@@ -307,6 +385,106 @@ class RegistryRepository:
             await self._s.execute(select(complete, failed).where(ranked.c.rn == 1))
         ).one()
         return {"complete": int(row[0]), "failed": int(row[1])}
+
+    async def document_cost_by_source(self, doc_id: str) -> list[CostBySource]:
+        """Every source of billable usage for one document: "ocr" (if any
+        ocr_usage_event rows exist) plus each distinct llm_usage_event
+        `source` that has at least one row for this doc_id."""
+        rows: list[CostBySource] = []
+        ocr_row = (
+            await self._s.execute(
+                select(
+                    func.count(),
+                    func.coalesce(func.sum(OcrUsageEvent.page_count), 0),
+                    func.coalesce(func.sum(OcrUsageEvent.duration_ms), 0),
+                ).where(OcrUsageEvent.doc_id == doc_id)
+            )
+        ).one()
+        if ocr_row[0]:
+            rows.append(
+                CostBySource(
+                    source="ocr", call_count=int(ocr_row[0]),
+                    page_count=int(ocr_row[1]), input_tokens=0, output_tokens=0,
+                    duration_ms=int(ocr_row[2]),
+                )
+            )
+        llm_rows = (
+            await self._s.execute(
+                select(
+                    LlmUsageEvent.source,
+                    func.count(),
+                    func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.duration_ms), 0),
+                )
+                .where(LlmUsageEvent.doc_id == doc_id)
+                .group_by(LlmUsageEvent.source)
+                .order_by(LlmUsageEvent.source)
+            )
+        ).all()
+        rows.extend(
+            CostBySource(
+                source=str(source), call_count=int(count), page_count=0,
+                input_tokens=int(in_tok), output_tokens=int(out_tok),
+                duration_ms=int(dur),
+            )
+            for source, count, in_tok, out_tok, dur in llm_rows
+        )
+        return rows
+
+    async def corpus_cost_totals(self) -> CorpusCostTotals:
+        """Every billable event corpus-wide, including /ask's doc_id=NULL
+        rows -- the "grand total" figure for GET /analytics."""
+        ocr_total = (
+            await self._s.execute(
+                select(func.coalesce(func.sum(OcrUsageEvent.page_count), 0))
+            )
+        ).scalar_one()
+        llm_totals = (
+            await self._s.execute(
+                select(
+                    func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
+                )
+            )
+        ).one()
+        return CorpusCostTotals(
+            ocr_page_count=int(ocr_total),
+            llm_input_tokens=int(llm_totals[0]),
+            llm_output_tokens=int(llm_totals[1]),
+        )
+
+    async def stage_cost_totals(self) -> dict[str, CorpusCostTotals]:
+        """{stage_name: totals} for the two stages that ever cost anything:
+        "ocr" (page charges) and "semantic" (its LLM calls, source=
+        'semantic_classify'). /ask and extract_document have no
+        stage_run_id and so no stage entry here -- they only ever appear in
+        corpus_cost_totals. A stage with zero billable events is simply
+        absent from the returned dict."""
+        result: dict[str, CorpusCostTotals] = {}
+        ocr_total = (
+            await self._s.execute(
+                select(func.coalesce(func.sum(OcrUsageEvent.page_count), 0))
+            )
+        ).scalar_one()
+        if ocr_total:
+            result["ocr"] = CorpusCostTotals(
+                ocr_page_count=int(ocr_total), llm_input_tokens=0, llm_output_tokens=0
+            )
+        semantic_totals = (
+            await self._s.execute(
+                select(
+                    func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
+                ).where(LlmUsageEvent.source == "semantic_classify")
+            )
+        ).one()
+        if semantic_totals[0] or semantic_totals[1]:
+            result["semantic"] = CorpusCostTotals(
+                ocr_page_count=0, llm_input_tokens=int(semantic_totals[0]),
+                llm_output_tokens=int(semantic_totals[1]),
+            )
+        return result
 
 
 class EvalRepository:
