@@ -864,7 +864,7 @@ async def _seed_processed_doc(session_factory, store) -> dict[str, object]:
 
 
 async def test_retrieve_vector_returns_text_and_citation(
-    make_client, _alembic_applied, session_factory, store
+    make_client, _alembic_applied, stub_fdi_env: None, session_factory, store
 ) -> None:
     from fdi.api.deps import get_embedder, get_vector_store
     from fdi.pipeline.embeddings import FakeEmbeddingClient
@@ -904,7 +904,7 @@ async def test_retrieve_vector_returns_text_and_citation(
 
 
 async def test_retrieve_vector_section_type_filter(
-    make_client, _alembic_applied, session_factory, store
+    make_client, _alembic_applied, stub_fdi_env: None, session_factory, store
 ) -> None:
     from fdi.api.deps import get_embedder, get_vector_store
     from fdi.pipeline.embeddings import FakeEmbeddingClient
@@ -1576,7 +1576,7 @@ async def test_ask_503_when_agent_client_unconfigured(
 
 
 async def test_ask_returns_cited_answer_with_fake_agent_client_override(
-    make_client, session_factory, store, _alembic_applied
+    make_client, session_factory, store, _alembic_applied, stub_fdi_env: None
 ) -> None:
     import uuid
 
@@ -1727,7 +1727,7 @@ async def test_extract_document_409_when_index_not_done(
 
 
 async def test_extract_document_happy_path_with_fake_extractor_client_override(
-    make_client, session_factory, store, tmp_path, _alembic_applied
+    make_client, session_factory, store, tmp_path, _alembic_applied, stub_fdi_env: None
 ) -> None:
     import json
     import uuid
