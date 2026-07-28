@@ -160,7 +160,7 @@ export default function Costing() {
                       {data.by_document.map((d) => (
                         <tr key={d.doc_id} style={{ borderTop: "1px solid var(--rule-soft)" }}>
                           <td className="data" style={{ padding: "var(--sp-3) 0", fontSize: "var(--text-xs)" }}>
-                            <Link href={`/documents/${d.doc_id}`} className="text-ink">
+                            <Link href={`/documents/${d.doc_id}/costing`} className="text-ink">
                               {rowLabel(d)}
                             </Link>
                           </td>
