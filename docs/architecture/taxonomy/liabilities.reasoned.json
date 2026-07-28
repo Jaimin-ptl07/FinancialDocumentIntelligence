@@ -1,0 +1,1140 @@
+{
+ "key": "module_liabilities",
+ "name": "Liabilities",
+ "statement": "liabilities",
+ "retrieval_units": [
+  {
+   "unit_id": "LI",
+   "statement_type": "liabilities",
+   "retrieval_query": "Liabilities statement",
+   "fields": [
+    {
+     "field_name": "Non-current & current liabilities — Borrowings",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "1",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Term loans",
+       "tag": "TL",
+       "origin": "derived",
+       "sr_no": "1.1",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STLRTL",
+         "LTRTL"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Term loans - i. Current",
+         "tag": "STLRTL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Term loans - ii. non - current",
+         "tag": "LTRTL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Working capital loans, Short Term Loan, Cash Credit, Trade Credit, Exporting Packaging Limit, Packaging Credit, Invoice Financing, Letter of Credit,Merchant cash advances",
+       "tag": "WCL",
+       "origin": "derived",
+       "sr_no": "1.2",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "WCLI",
+         "WCLB",
+         "WCLO"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Working capital loans, Short Term Loan, Cash Credit, Trade Credit, Exporting Packaging Limit, Packaging Credit, Invoice Financing, Letter of Credit,Merchant cash advances From ICICI Bank",
+         "tag": "WCLI",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STBI"
+        },
+        {
+         "field_name": "Working capital loans, Short Term Loan, Cash Credit, Trade Credit, Exporting Packaging Limit, Packaging Credit, Invoice Financing, Letter of Credit,Merchant cash advances From Other Banks",
+         "tag": "WCLB",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STBO"
+        },
+        {
+         "field_name": "Working capital loans, Short Term Loan, Cash Credit, Trade Credit, Exporting Packaging Limit, Packaging Credit, Invoice Financing, Letter of Credit,Merchant cash advances From Others",
+         "tag": "WCLO",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOB"
+        }
+       ]
+      },
+      {
+       "field_name": "Buyers Credit",
+       "tag": "WCL",
+       "origin": "derived",
+       "sr_no": "1.3",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STBYCRD",
+         "LTBYCRD"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Buyers Credit - Current",
+         "tag": "STBYCRD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STLOT"
+        },
+        {
+         "field_name": "Buyers Credit - Non Current",
+         "tag": "LTBYCRD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Bill Discounting & Bill purchasing",
+       "tag": "STBP",
+       "origin": "extracted",
+       "sr_no": "1.4",
+       "role": "line"
+      },
+      {
+       "field_name": "Loans repayable on demand",
+       "tag": "LROD",
+       "origin": "extracted",
+       "sr_no": "1.5",
+       "role": "line",
+       "redirect": "STLOT"
+      },
+      {
+       "field_name": "Intercorporate borrowings",
+       "tag": "ICBOR",
+       "origin": "extracted",
+       "sr_no": "1.6",
+       "role": "line",
+       "redirect": "STOB"
+      },
+      {
+       "field_name": "Borrowing from foreign Insti.",
+       "tag": "BORFIA",
+       "origin": "derived",
+       "sr_no": "1.7",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STLFCL",
+         "LTFCL"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Borrowing from foreign Insti. - current External Commercial Borrowings will be tagged here.",
+         "tag": "STLFCL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Borrowing from foreign Insti. - Non - current External Commercial Borrowings will be tagged here.",
+         "tag": "LTFCL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Commercial Papers",
+       "tag": "BCP",
+       "origin": "extracted",
+       "sr_no": "1.8",
+       "role": "line",
+       "redirect": "STOB"
+      },
+      {
+       "field_name": "Deferred payment liabilities",
+       "tag": "DPL",
+       "origin": "extracted",
+       "sr_no": "1.9",
+       "role": "line",
+       "redirect": "LTOT"
+      },
+      {
+       "field_name": "Deposits",
+       "tag": "BSD",
+       "origin": "derived",
+       "sr_no": "1.10",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STTD",
+         "LTTD"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Current Deposits",
+         "tag": "STTD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STLOT"
+        },
+        {
+         "field_name": "Non - Current Deposits",
+         "tag": "LTTD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Loans & adv. from related parties",
+       "tag": "BLNARPT",
+       "origin": "derived",
+       "sr_no": "1.11",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STBLNARPT",
+         "LTBLNARPT"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Loans & adv. from related parties - Current",
+         "tag": "STBLNARPT",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOB"
+        },
+        {
+         "field_name": "Loans & adv. from related parties - Non Current",
+         "tag": "LTBLNARPT",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Bonds & debentures",
+       "tag": "BND",
+       "origin": "derived",
+       "sr_no": "1.12",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STBOND",
+         "LTBOND",
+         "STLD",
+         "LTDEB"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Bonds - current",
+         "tag": "STBOND",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STLOT"
+        },
+        {
+         "field_name": "Bonds - non current",
+         "tag": "LTBOND",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        },
+        {
+         "field_name": "Debenture - current Senior Notes is part of Debentures & will be tagged here.",
+         "tag": "STLD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Debenture - Non current Senior Notes is part of Debentures & will be tagged here.",
+         "tag": "LTDEB",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Other Loans & advances",
+       "tag": "BOTLNA",
+       "origin": "derived",
+       "sr_no": "1.13",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STBOTLNA",
+         "LTBOTLNA"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Other Loans & advances - current",
+         "tag": "STBOTLNA",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOB"
+        },
+        {
+         "field_name": "Other Loans & advances- Non CUrrent",
+         "tag": "LTBOTLNA",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Line of credit",
+       "tag": "LOC",
+       "origin": "derived",
+       "sr_no": "1.14",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "LOCI",
+         "LOCB",
+         "LOCO"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Line of credit - i. from ICICI Bank",
+         "tag": "LOCI",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STBI"
+        },
+        {
+         "field_name": "Line of credit - i. from Other Banks",
+         "tag": "LOCB",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STBO"
+        },
+        {
+         "field_name": "Line of credit - ii. from Others",
+         "tag": "LOCO",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOB"
+        }
+       ]
+      },
+      {
+       "field_name": "Other borrowings",
+       "tag": "OTBR",
+       "origin": "derived",
+       "sr_no": "1.15",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "OTBRI",
+         "OTBRB",
+         "OTBRO",
+         "STOTBRO",
+         "STLTBRO",
+         "LTOTBRO"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Other borrowings - i. from ICICI Bank",
+         "tag": "OTBRI",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STBI"
+        },
+        {
+         "field_name": "Other borrowings - i. from Other Banks",
+         "tag": "OTBRB",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STBO"
+        },
+        {
+         "field_name": "Other borrowings - ii. from Others",
+         "tag": "OTBRO",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOB"
+        },
+        {
+         "field_name": "Other Borrowings - current (Due More than 1 year)",
+         "tag": "STOTBRO",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOOT"
+        },
+        {
+         "field_name": "Other Borrowings - current (Due with in 1 year)",
+         "tag": "STLTBRO",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STLOT"
+        },
+        {
+         "field_name": "Other Borrowings - Non current",
+         "tag": "LTOTBRO",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Mobilization advance- current portion Security deposit from dealers will be tagged here.",
+       "tag": "STMA",
+       "origin": "extracted",
+       "sr_no": "1.16",
+       "role": "line"
+      },
+      {
+       "field_name": "Mobilization advance- Non-current portion Security deposit from dealers will be tagged here.",
+       "tag": "LTMA",
+       "origin": "extracted",
+       "sr_no": "1.17",
+       "role": "line"
+      },
+      {
+       "field_name": "Installments of liabilities due within one year Preference Shares - Current",
+       "tag": "STLPS",
+       "origin": "extracted",
+       "sr_no": "1.18",
+       "role": "line"
+      },
+      {
+       "field_name": "Preference Shares (redeemable after 1 year) - Non Current",
+       "tag": "LTPS",
+       "origin": "extracted",
+       "sr_no": "1.19",
+       "role": "line"
+      },
+      {
+       "field_name": "Total Borrowings (1.1 to 1.13)",
+       "tag": "TOTBOR",
+       "origin": "derived",
+       "sr_no": "1.20",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "TL",
+         "WCL",
+         "WCL",
+         "STBP",
+         "LROD",
+         "ICBOR",
+         "BORFIA",
+         "BCP",
+         "DPL",
+         "BSD",
+         "BLNARPT",
+         "BND",
+         "BOTLNA"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Deferred tax liabilities (net)",
+     "tag": "NETDTL",
+     "origin": "extracted",
+     "sr_no": "2",
+     "role": "line",
+     "redirect": "LTDT"
+    },
+    {
+     "field_name": "Lease liabilities",
+     "tag": "LL",
+     "origin": "derived",
+     "sr_no": "3",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": [
+       "LTOLR",
+       "STOLR",
+       "STLL"
+      ]
+     },
+     "fields": [
+      {
+       "field_name": "Lease liabilities- Non Current",
+       "tag": "LTOLR",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component",
+       "redirect": "LTOT"
+      },
+      {
+       "field_name": "Oustanding Lease Rentals",
+       "tag": "STOLR",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Lease liabilities- Current",
+       "tag": "STLL",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component",
+       "redirect": "STLOT"
+      }
+     ]
+    },
+    {
+     "field_name": "Trade payables",
+     "tag": "TRP",
+     "origin": "derived",
+     "sr_no": "4",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": [
+       "STTRP",
+       "LTTRP"
+      ]
+     },
+     "fields": [
+      {
+       "field_name": "Trade payables-Current (small and mico industries included)",
+       "tag": "STTRP",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Trade payables-Non Current",
+       "tag": "LTTRP",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component",
+       "redirect": "LTOT"
+      }
+     ]
+    },
+    {
+     "field_name": "Other Liabilities",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "5",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Securities deposits and Deposits",
+       "tag": "SDD",
+       "origin": "derived",
+       "sr_no": "5.1",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STSDD",
+         "LTSDD"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Securities deposits and Deposits - i. Current",
+         "tag": "STSDD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOOT"
+        },
+        {
+         "field_name": "Securities deposits and Deposits - ii. Non - Current",
+         "tag": "LTSDD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Interest accured",
+       "tag": "IAD",
+       "origin": "derived",
+       "sr_no": "5.2",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STOIA",
+         "LTIAD"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Interest accured - i. Current",
+         "tag": "STOIA",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Interest accured - ii. Non - Current",
+         "tag": "LTIAD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Income received in advance",
+       "tag": "IRA",
+       "origin": "derived",
+       "sr_no": "5.3",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STAP",
+         "LTIRA"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Income received in advance- i. Current Deposit recieved from customers is an Income Recieved in Advance",
+         "tag": "STAP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Income received in advance- ii. Non - Current Deposit recieved from customers is an Income Recieved in Advance",
+         "tag": "LTIRA",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Unpaid dividends Doesnot include unclaimed dividends. Unclaimed dividends must be tagged as STOOT.",
+       "tag": "UPD",
+       "origin": "derived",
+       "sr_no": "5.4",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STDP",
+         "LTUPD"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Unpaid dividends- i. Current",
+         "tag": "STDP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Unpaid dividends- ii. Non - Current",
+         "tag": "LTUPD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Share application money",
+       "tag": "SAM",
+       "origin": "derived",
+       "sr_no": "5.5",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STSAM",
+         "LTSAM"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Share application money - Current",
+         "tag": "STSAM",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOOT"
+        },
+        {
+         "field_name": "Share application money - Non Current",
+         "tag": "LTSAM",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Unpaid matured deposits",
+       "tag": "UMD",
+       "origin": "derived",
+       "sr_no": "5.6",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STUMD",
+         "LTUMD"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Unpaid matured deposits- i. Current",
+         "tag": "STUMD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOOT"
+        },
+        {
+         "field_name": "Unpaid matured deposits- ii. Non - Current",
+         "tag": "LTUMD",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Expenses payable",
+       "tag": "EP",
+       "origin": "derived",
+       "sr_no": "5.7",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STOEP",
+         "STEPOTL",
+         "LTEP"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Expenses payable-i. Current only Expense Payable in current will be tagged here.(both Expense and Payable should be there).",
+         "tag": "STOEP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "All the remaining Payable will be tagged here.",
+         "tag": "STEPOTL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOOT"
+        },
+        {
+         "field_name": "Expenses payable-ii. Non - Current",
+         "tag": "LTEP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Retention money payable",
+       "tag": "RMP",
+       "origin": "derived",
+       "sr_no": "5.8",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STRMP",
+         "LTRMP"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Retention money payable-i. Current",
+         "tag": "STRMP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STLOT"
+        },
+        {
+         "field_name": "Retention money payable-ii. Non - Current",
+         "tag": "LTRMP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Payable to statutory authorities",
+       "tag": "PSA",
+       "origin": "derived",
+       "sr_no": "5.9",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STPSA",
+         "LTPSA",
+         "STOMTM"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Payable to statutory authorities- Current",
+         "tag": "STPSA",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Payable to statutory authorities- Non - Current",
+         "tag": "LTPSA",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        },
+        {
+         "field_name": "MTM forex loss (Derivative Contract) - Current",
+         "tag": "STOMTM",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Other Liabilities",
+       "tag": "OTL",
+       "origin": "derived",
+       "sr_no": "5.10",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STOTL",
+         "LTOTL"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Other Liabilities- i. Current Unclaimed Dividend will be tagged here.",
+         "tag": "STOTL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOOT"
+        },
+        {
+         "field_name": "Other Liabilities- ii. Non - Current",
+         "tag": "LTOTL",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Total Other Liabilities (Total of 5.1 to 5.10)",
+       "tag": "TOTOL",
+       "origin": "derived",
+       "sr_no": "5.11",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "SDD",
+         "IAD",
+         "IRA",
+         "UPD",
+         "SAM",
+         "UMD",
+         "EP",
+         "RMP",
+         "PSA",
+         "OTL"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Provisions",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "6",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Provisions for employees benefits",
+       "tag": "PRVEB",
+       "origin": "derived",
+       "sr_no": "6.1",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STOEE",
+         "LTPRVEB"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Provisions for employees benefits, Salary, Benefits payable- Current Liability towards employee separation scheme(Current + Non Current ) Tagged here.",
+         "tag": "STOEE",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Provisions for employees benefits, Salary, Benefits payable - Non Current",
+         "tag": "LTPRVEB",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Provisions for warranties",
+       "tag": "PRVWAR",
+       "origin": "derived",
+       "sr_no": "6.2",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STPRVWAR",
+         "LTPRVWAR"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Provisions for warranties - Current",
+         "tag": "STPRVWAR",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOP"
+        },
+        {
+         "field_name": "Provisions for warranties - Non Current",
+         "tag": "LTPRVWAR",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Provisions for Taxation",
+       "tag": "PRVTAX",
+       "origin": "derived",
+       "sr_no": "6.3",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STPRVTAX",
+         "LTPRVTAX"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Provisions for Taxation - Current",
+         "tag": "STPRVTAX",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Provisions for Taxation - Non Current",
+         "tag": "LTPRVTAX",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Others Provisions",
+       "tag": "OTPRV",
+       "origin": "derived",
+       "sr_no": "6.4",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "STOTPRV",
+         "LTOTPRV"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Others Provisions - Current",
+         "tag": "STOTPRV",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "STOP"
+        },
+        {
+         "field_name": "Others Provisions - Non Current",
+         "tag": "LTOTPRV",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "LTOT"
+        }
+       ]
+      },
+      {
+       "field_name": "Total provisions (Total of 6.1 to 6.4)",
+       "tag": "TOTPRV",
+       "origin": "derived",
+       "sr_no": "6.5",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "PRVEB",
+         "PRVWAR",
+         "PRVTAX",
+         "OTPRV"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Tax Liability",
+     "tag": "TAXL",
+     "origin": "extracted",
+     "sr_no": "7",
+     "role": "line",
+     "redirect": "STPRVTAX"
+    },
+    {
+     "field_name": "Lia for Assets held for sale Current liability",
+     "tag": "LAHS",
+     "origin": "extracted",
+     "sr_no": "8",
+     "role": "line",
+     "redirect": "STOOT"
+    },
+    {
+     "field_name": "Total Liabilities (Total of 1 to 8)",
+     "tag": "TOTL",
+     "origin": "derived",
+     "sr_no": "9",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": [
+       "NETDTL",
+       "LL",
+       "TRP",
+       "TAXL",
+       "LAHS"
+      ]
+     }
+    },
+    {
+     "field_name": "Total Non - Current Liabilities (as reported)",
+     "tag": "TOTNCLR",
+     "origin": "extracted",
+     "sr_no": "10",
+     "role": "total_reported"
+    },
+    {
+     "field_name": "Total Current Liabilities as reported)",
+     "tag": "TOTCLR",
+     "origin": "extracted",
+     "sr_no": "11",
+     "role": "total_reported"
+    }
+   ]
+  }
+ ]
+}

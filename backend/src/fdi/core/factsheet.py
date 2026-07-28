@@ -51,21 +51,33 @@ def _walk_schema_fields(
         if not isinstance(f, Mapping):
             continue
         children = f.get("fields")
+        tag = f.get("tag")
+        # Emit a row for EVERY tagged node, parents included -- a derived parent
+        # (e.g. RM = its Current/Non-Current children) must still be computed.
+        if isinstance(tag, str) and tag:
+            out.append(_schema_row(f, block, tag))
         if isinstance(children, list) and children:
             _walk_schema_fields(children, block, out)
-            continue
-        tag = f.get("tag")
-        if not isinstance(tag, str) or not tag:
-            continue
-        out.append({
-            "block_id": block,
-            "tag": tag,
-            "sr_no": f.get("sr_no"),
-            "particulars": f.get("field_name"),
-            "origin": f.get("origin", "extracted"),
-            "excluded": False,
-            "is_section_header": False,
-        })
+
+
+def _schema_row(f: Mapping[str, object], block: str, tag: str) -> dict[str, object]:
+    row: dict[str, object] = {
+        "block_id": block,
+        "tag": tag,
+        "sr_no": f.get("sr_no"),
+        "particulars": f.get("field_name"),
+        "origin": f.get("origin", "extracted"),
+        "excluded": False,
+        "is_section_header": False,
+    }
+    # Carry a v4.1 node's pre-resolved formula so derivation uses it directly
+    # instead of re-parsing sr_no ranges.
+    deriv = f.get("derivation")
+    if isinstance(deriv, Mapping) and deriv.get("inputs"):
+        inputs = deriv.get("inputs")
+        row["inputs"] = list(inputs) if isinstance(inputs, list) else []
+        row["method"] = deriv.get("method", "sum")
+    return row
 
 
 def build_factsheet(

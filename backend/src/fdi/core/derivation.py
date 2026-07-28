@@ -110,9 +110,21 @@ def derive_facts(
         block = r.get("block_id")
         if not isinstance(tag, str) or not tag or tag in plans:
             continue
-        block_map = index.get(block, {}) if isinstance(block, str) else {}
-        plan = _plan(r, block_map)
-        plans[tag] = plan if plan is not None else {"op": "none", "inputs": []}
+        explicit = r.get("inputs")
+        if isinstance(explicit, list) and explicit:
+            inputs = [t for t in explicit if isinstance(t, str) and t != tag]
+            if r.get("method") == "diff" and len(inputs) >= 2:
+                signs = {inputs[0]: 1}
+                signs.update(dict.fromkeys(inputs[1:], -1))
+                plans[tag] = {"op": "diff", "inputs": inputs, "signs": signs,
+                              "left": [inputs[0]], "right": inputs[1:]}
+            else:
+                plans[tag] = {"op": "sum", "inputs": inputs,
+                              "signs": dict.fromkeys(inputs, 1)}
+        else:
+            block_map = index.get(block, {}) if isinstance(block, str) else {}
+            plan = _plan(r, block_map)
+            plans[tag] = plan if plan is not None else {"op": "none", "inputs": []}
         order.append(tag)
 
     work: dict[str, dict[str, object]] = {
@@ -141,8 +153,8 @@ def derive_facts(
             if plan["op"] == "none" or not inputs:
                 facts[tag] = _unresolved(tag)
                 continue
-            signs: Mapping[str, int] = plan["signs"]  # type: ignore[assignment]
-            resolved = [(_value(t), signs[t]) for t in inputs]
+            signs_map: Mapping[str, int] = plan["signs"]  # type: ignore[assignment]
+            resolved = [(_value(t), signs_map[t]) for t in inputs]
             if any(rv is None for rv, _ in resolved):
                 facts[tag] = _missing(tag, plan, inputs)
                 continue
