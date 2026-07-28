@@ -5,7 +5,10 @@ free-text response into. `build_snippet` truncates a section's paragraphs into
 the bounded text sent to the classifier.
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
+
+from fdi.core.pricing import LlmCallUsage
 
 
 class SectionType(StrEnum):
@@ -17,6 +20,17 @@ class SectionType(StrEnum):
     AUDITORS_REPORT = "AUDITORS_REPORT"
     DIRECTORS_REPORT = "DIRECTORS_REPORT"
     OTHER = "OTHER"
+
+
+@dataclass(frozen=True)
+class ClassifyResult:
+    """One SemanticClient.classify() call's outcome: the coerced label plus
+    the LLM usage that produced it (costing feature). `usage` is None from
+    every fake/test double -- SemanticStage.run only records a usage event
+    when it is present."""
+
+    label: str
+    usage: LlmCallUsage | None = None
 
 
 def build_snippet(paragraphs: list[str], max_chars: int = 2000) -> str:
