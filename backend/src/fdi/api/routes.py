@@ -917,6 +917,7 @@ async def ask(
     graph_store: GraphStoreDep,
     entity_threshold: EntityThresholdDep,
     agent_client: AgentClientDep,
+    correlation_id: CorrelationIdDep,
 ) -> AskResponse:
     if agent_client is None:
         raise HTTPException(
@@ -926,11 +927,18 @@ async def ask(
     ctx = AgentContext(
         session=session, store=store, embedder=embedder, vector_store=vector_store,
         graph_store=graph_store, default_entity_threshold=entity_threshold,
+        correlation_id=correlation_id,
     )
     max_rounds = body.max_rounds if body.max_rounds is not None else 5
     result = await answer_question(
         question=body.question, ctx=ctx, agent_client=agent_client, max_rounds=max_rounds,
     )
+    # answer_question may have written llm_usage_event rows via ctx.session
+    # (costing feature) -- this route previously never wrote anything, so
+    # it never needed to commit. RegistryRepository.record_llm_usage only
+    # flushes; the caller owns the commit, same convention as every other
+    # write path in this codebase.
+    await session.commit()
     return AskResponse.model_validate(result)
 
 
@@ -959,6 +967,7 @@ async def extract_document_route(
     vector_store: VectorStoreDep,
     extractor_client: ExtractorClientDep,
     schema_path: ExtractionSchemaPathDep,
+    correlation_id: CorrelationIdDep,
 ) -> ExtractDocumentView:
     if extractor_client is None:
         raise HTTPException(
@@ -1008,10 +1017,17 @@ async def extract_document_route(
     ctx = ExtractContext(
         session=session, store=store, embedder=embedder, vector_store=vector_store,
         doc_id=doc.id, doc_key=body.doc_key, version=version,
+        correlation_id=correlation_id,
     )
     result = await extract_document(
         ctx=ctx, fields=fields, client=extractor_client, force=body.force
     )
+    # extract_document may have written llm_usage_event rows via ctx.session
+    # (costing feature) -- the extraction RECORD itself persists to the
+    # artifact store (_persist_extraction), not Postgres, so this route
+    # never needed to commit before. RegistryRepository.record_llm_usage
+    # only flushes; the caller owns the commit.
+    await session.commit()
     return ExtractDocumentView.model_validate(
         {"doc_key": body.doc_key, "module": body.module, **result}
     )

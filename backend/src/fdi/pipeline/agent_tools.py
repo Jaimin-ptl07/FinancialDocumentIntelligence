@@ -47,6 +47,12 @@ class AgentContext:
     vector_store: VectorStore | None
     graph_store: GraphStore | None
     default_entity_threshold: float = 0.85
+    # Costing feature (docs/superpowers/specs/2026-07-28-costing-feature-
+    # design.md): threaded through to answer_question's llm_usage_event
+    # rows so every call in one /ask request is traceable to it. Optional,
+    # appended last -- every existing keyword-only AgentContext(...)
+    # construction site is unaffected.
+    correlation_id: str | None = None
 
 
 # --------------------------------------------------------------------------

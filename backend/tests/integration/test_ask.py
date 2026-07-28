@@ -12,6 +12,7 @@ from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fdi.core.agent import AgentResponse, ToolCall
+from fdi.core.pricing import LlmCallUsage
 from fdi.pipeline.agent import FakeAgentClient
 from fdi.pipeline.agent_tools import AgentContext
 from fdi.pipeline.ask import answer_question
@@ -35,6 +36,7 @@ from fdi.pipeline.stages.semantic import SemanticStage
 from fdi.pipeline.stages.structure import StructureStage
 from fdi.pipeline.vectorstore import FakeVectorStore
 from fdi.platform.db.engine import make_session_factory
+from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
 pytestmark = pytest.mark.integration
@@ -53,10 +55,15 @@ async def store(minio_client: Minio) -> ArtifactStore:
 
 
 @pytest.fixture
-async def marked_doc(session_factory, store):
+async def marked_doc(stub_fdi_env: None, session_factory, store):
     """One fully-processed, doubly-indexed document with a fresh uuid4
     marker embedded in its text (Balance Sheet / Total Assets), mirroring
-    test_hybrid_search.py's hybrid_corpus fixture but for ONE document."""
+    test_hybrid_search.py's hybrid_corpus fixture but for ONE document.
+
+    stub_fdi_env: run_stage's OCR-billing path (costing feature) reads
+    get_settings().azure_di_model, which needs the six required FDI_ vars
+    stubbed -- the autouse _isolate_fdi_env fixture clears them for every
+    test otherwise. Same fixture, same reason, as test_ocr_stage.py."""
     marker = uuid.uuid4().hex
     reg = StageRegistry()
     for stage in (OcrStage(), NormalizeStage(), AstStage(), SemanticStage(), GraphStage(),
@@ -150,3 +157,37 @@ async def test_answer_question_exhausts_max_rounds_gracefully(session_factory, s
     assert "3 tool-call round" in result["answer"]
     assert result["citations"] == []
     assert len(result["tool_trace"]) == 3
+
+
+async def test_ask_records_one_llm_usage_event_per_round(
+    session_factory, store, marked_doc
+) -> None:
+    """Costing feature (Task 14): answer_question records an llm_usage_event
+    row per agent-loop round, both on the tool-call round and on the
+    final-content round -- verified corpus-wide via corpus_cost_totals
+    rather than a stage_run_id-scoped query, since /ask rows carry no
+    stage_run_id (source="ask_agent")."""
+    doc, marker, embedder, vector_store = marked_doc
+    query = f"Total Assets 100 {marker}"
+    usage_a = LlmCallUsage(model="gpt-4o", input_tokens=100, output_tokens=20, duration_ms=300)
+    usage_b = LlmCallUsage(model="gpt-4o", input_tokens=150, output_tokens=40, duration_ms=250)
+    fake = FakeAgentClient([
+        AgentResponse(
+            tool_calls=[ToolCall(id="c1", name="search", arguments={"query": query})],
+            usage=usage_a,
+        ),
+        AgentResponse(content=f"Total Assets were 100 (see {doc.id}:s0).", usage=usage_b),
+    ])
+    async with session_factory() as s:
+        ctx = AgentContext(session=s, store=store, embedder=embedder, vector_store=vector_store,
+                            graph_store=None, correlation_id="test-corr")
+        await answer_question(
+            question=f"What were total assets, marker {marker}?",
+            ctx=ctx, agent_client=fake, max_rounds=5,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        totals = await RegistryRepository(s).corpus_cost_totals()
+    assert totals["llm_input_tokens"] >= 250  # 100 + 150
+    assert totals["llm_output_tokens"] >= 60   # 20 + 40
