@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useState } from "react";
 import type { DragEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { getStages, startStage, uploadDocument } from "@/lib/api";
+import { getDocumentCost, getStages, startStage, uploadDocument } from "@/lib/api";
 import type { DocumentView } from "@/lib/types";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { StageGraph } from "@/components/pipeline/StageGraph";
 import { STAGES, TERMINAL_STAGE } from "@/lib/stages";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatInr } from "@/lib/format";
 
 export default function Ingest() {
   const [file, setFile] = useState<File | null>(null);
@@ -45,6 +45,16 @@ export default function Ingest() {
   const done = stages.filter((s) => s.status === "done").length;
   const failed = stages.find((s) => s.status === "failed");
   const finished = stages.find((s) => s.name === TERMINAL_STAGE)?.status === "done";
+
+  const { data: cost } = useQuery({
+    queryKey: ["cost", document?.id],
+    queryFn: () => getDocumentCost(document!.id),
+    enabled: document !== null,
+    // Cost only changes when a billable stage (ocr/semantic) actually ran,
+    // not every second like stage status -- a slower interval avoids
+    // adding load to the same hot path SP-18's stages poll already owns.
+    refetchInterval: finished || failed ? false : 5_000,
+  });
 
   // The dropzone is additive over the native input, not a replacement for
   // it: drag-and-drop only ever ends by calling the same setFile the input's
@@ -185,6 +195,11 @@ export default function Ingest() {
               </div>
               <div className="data" style={{ fontSize: "var(--text-sm)" }}>
                 {done}/{STAGES.length} stages
+                {cost && cost.total_cost_inr > 0 ? (
+                  <span style={{ marginLeft: "var(--sp-3)", color: "var(--ink-soft)" }}>
+                    {formatInr(cost.total_cost_inr)}
+                  </span>
+                ) : null}
               </div>
             </div>
 
