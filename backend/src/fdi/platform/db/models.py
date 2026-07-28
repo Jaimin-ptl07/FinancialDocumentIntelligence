@@ -110,3 +110,63 @@ class EvalCaseResult(Base):
     )
     case_id: Mapped[str] = mapped_column(String(128), nullable=False)
     score: Mapped[float] = mapped_column(Float(), nullable=False)
+
+
+class OcrUsageEvent(Base):
+    """One real (cache-miss) Azure Document Intelligence `analyze()` call.
+    Always doc- and stage_run-scoped: OCR only ever runs inside `run_stage`
+    for one document. Costing feature (docs/superpowers/specs/2026-07-28-
+    costing-feature-design.md); INR cost is computed at read time from
+    `page_count`, never stored here."""
+
+    __tablename__ = "ocr_usage_event"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(ForeignKey("document.id"), index=True, nullable=False)
+    stage_run_id: Mapped[str] = mapped_column(
+        ForeignKey("stage_run.id"), index=True, nullable=False
+    )
+    correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    page_count: Mapped[int] = mapped_column(nullable=False)
+    azure_model: Mapped[str] = mapped_column(String(64), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class LlmUsageEvent(Base):
+    """One real Azure OpenAI chat.completions.create() call, across all
+    three call sites (semantic classification, schema-driven extraction,
+    the /ask agent loop). `doc_id`/`stage_run_id` are nullable: `/ask` is
+    corpus-wide (doc_id NULL), and both `/ask` and `/extract/document` run
+    OUTSIDE run_stage entirely (stage_run_id NULL) -- only the `semantic`
+    stage's calls carry a real stage_run_id. Costing feature (docs/
+    superpowers/specs/2026-07-28-costing-feature-design.md); INR cost is
+    computed at read time from input_tokens/output_tokens, never stored
+    here."""
+
+    __tablename__ = "llm_usage_event"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('semantic_classify','extract_document','ask_agent')",
+            name="ck_llm_usage_event_source",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str | None] = mapped_column(
+        ForeignKey("document.id"), index=True, nullable=True
+    )
+    stage_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("stage_run.id"), index=True, nullable=True
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(nullable=False)
+    output_tokens: Mapped[int] = mapped_column(nullable=False)
+    duration_ms: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
