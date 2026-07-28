@@ -186,33 +186,39 @@ async def test_semantic_stage_records_one_llm_usage_event_per_section(
 
 
 class _FlakySemanticClient:
-    """Classifies the first `succeed_count` calls for real (with usage),
-    then raises on the next one. Proves partial-failure billing (spec
-    decision 4/9): the calls made before a mid-loop failure must still be
-    billed, even though the stage's own run raises."""
+    """Raises for any heading in `failing_headings`; classifies every other
+    section normally (with real usage). Proves per-section resilience
+    (SemanticStage.run guards each classify() call individually, added
+    after a real Azure OpenAI content-filter rejection on one section of a
+    1000+-section production filing took down the whole stage): a rejected
+    section degrades to OTHER and bills nothing for that one call, while
+    every other section -- including ones AFTER the failure -- still
+    classifies, bills normally, and the stage itself ends up done, not
+    failed."""
 
-    def __init__(self, succeed_count: int) -> None:
-        self._succeed_count = succeed_count
+    def __init__(self, labels: Mapping[str, str], failing_headings: set[str]) -> None:
+        self._labels = labels
+        self._failing = failing_headings
         self.calls = 0
 
     def classify(self, heading: str, text: str) -> ClassifyResult:
         self.calls += 1
-        if self.calls > self._succeed_count:
-            raise RuntimeError("simulated Azure OpenAI failure")
+        if heading in self._failing:
+            raise RuntimeError("simulated Azure content-filter rejection")
         return ClassifyResult(
-            label=SectionType.OTHER.value,
+            label=self._labels.get(heading, SectionType.OTHER.value),
             usage=LlmCallUsage(
                 model="gpt-4o", input_tokens=10, output_tokens=5, duration_ms=50
             ),
         )
 
 
-async def test_semantic_stage_bills_calls_made_before_a_mid_loop_failure(
+async def test_semantic_stage_degrades_a_failed_section_instead_of_failing(
     session_factory, store
 ) -> None:
     doc = await intake_document(
         pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
-        filename="d.pdf",
+        filename="e.pdf",
         doc_key=str(uuid.uuid4()),
         content_type="application/pdf",
         session_factory=session_factory,
@@ -224,17 +230,23 @@ async def test_semantic_stage_bills_calls_made_before_a_mid_loop_failure(
             "pages": [{"pageNumber": 1, "lines": [], "words": []}],
             "paragraphs": [
                 {"role": "title", "content": "ACME LTD"},
-                {"role": "sectionHeading", "content": "A"},
-                {"content": "text a"},
-                {"role": "sectionHeading", "content": "B"},
-                {"content": "text b"},
-                {"role": "sectionHeading", "content": "C"},
-                {"content": "text c"},
+                {"role": "sectionHeading", "content": "Balance Sheet"},
+                {"content": "Assets 100"},
+                {"role": "sectionHeading", "content": "Risk Factors"},
+                {"content": "flagged content"},
+                {"role": "sectionHeading", "content": "Income Statement"},
+                {"content": "Revenue 50"},
             ],
             "tables": [],
         }
     )
-    flaky = _FlakySemanticClient(succeed_count=2)
+    flaky = _FlakySemanticClient(
+        labels={
+            "Balance Sheet": SectionType.BALANCE_SHEET.value,
+            "Income Statement": SectionType.INCOME_STATEMENT.value,
+        },
+        failing_headings={"Risk Factors"},
+    )
 
     reg = StageRegistry()
     reg.register(OcrStage())
@@ -251,14 +263,28 @@ async def test_semantic_stage_bills_calls_made_before_a_mid_loop_failure(
                      services={"ocr": fake_ocr}, **common)
     await run_stage(stage_name="normalize", run_id=str(uuid.uuid4()), services={}, **common)
     await run_stage(stage_name="ast", run_id=str(uuid.uuid4()), services={}, **common)
+    # Must NOT raise -- the rejected section degrades instead of failing the stage.
+    await run_stage(stage_name="semantic", run_id=str(uuid.uuid4()),
+                     services={"semantic": flaky}, **common)
 
-    with pytest.raises(RuntimeError, match="simulated Azure OpenAI failure"):
-        await run_stage(stage_name="semantic", run_id=str(uuid.uuid4()),
-                         services={"semantic": flaky}, **common)
+    assert flaky.calls == 3, "every section is still attempted, including the one after the failure"
 
     async with session_factory() as s:
         rows = await RegistryRepository(s).document_cost_by_source(doc.id)
         facts = await RegistryRepository(s).latest_runs(doc.id)
+        run_facts = await RegistryRepository(s).runs_for_document(doc.id)
+
+    assert facts["semantic"].status == "done"
     semantic_row = next(r for r in rows if r["source"] == "semantic_classify")
-    assert semantic_row["call_count"] == 2, "the 2 successful calls before the raise must bill"
-    assert facts["semantic"].status == "failed"
+    assert semantic_row["call_count"] == 2, (
+        "only the 2 successful calls bill; the rejected one bills nothing"
+    )
+
+    key = artifact_key(
+        doc.id, "semantic", 1, derived_input_hash([run_facts["ast"].output_hash])
+    )
+    body = await store.get_json(key)
+    by_heading = {s["heading"]: s["type"] for s in body["sections"]}
+    assert by_heading["Balance Sheet"] == "BALANCE_SHEET"
+    assert by_heading["Income Statement"] == "INCOME_STATEMENT"
+    assert by_heading["Risk Factors"] == "OTHER"  # degraded, not lost
