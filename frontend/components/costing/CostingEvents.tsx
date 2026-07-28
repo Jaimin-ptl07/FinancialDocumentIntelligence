@@ -15,24 +15,15 @@ export function CostingEvents({ docId }: { docId: string }) {
   });
 
   const events = data?.events ?? [];
-  const total = events.reduce((sum, e) => sum + e.cost_inr, 0);
 
   return (
     <section className="sheet" style={{ padding: "var(--sp-6)" }}>
-      <div
-        className="flex items-baseline justify-between"
-        style={{ marginBottom: "var(--sp-4)" }}
+      <h2
+        className="display"
+        style={{ fontSize: "var(--text-md)", marginBottom: "var(--sp-4)" }}
       >
-        <h2 className="display" style={{ fontSize: "var(--text-md)" }}>
-          Costing
-        </h2>
-        {events.length > 0 ? (
-          <span className="data" style={{ fontSize: "var(--text-sm)" }}>
-            {formatInr(total)} total &middot; {events.length} call
-            {events.length === 1 ? "" : "s"}
-          </span>
-        ) : null}
-      </div>
+        Every call
+      </h2>
 
       {error ? (
         <p style={{ fontSize: "var(--text-sm)" }}>{(error as Error).message}</p>
