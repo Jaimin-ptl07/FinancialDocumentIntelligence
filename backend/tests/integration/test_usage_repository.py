@@ -110,3 +110,52 @@ async def test_document_delete_removes_usage_events_too(session_factory) -> None
         assert await DocumentRepository(s).get(doc_id) is None
         rows = await RegistryRepository(s).document_cost_by_source(doc_id)
     assert rows == []
+
+
+async def test_document_usage_events_returns_raw_per_call_rows_newest_first(
+    session_factory,
+) -> None:
+    doc_id, run_id = await _make_document_and_stage_run(session_factory)
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_ocr_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            correlation_id="corr1", page_count=4,
+            azure_model="prebuilt-layout", duration_ms=1000,
+        )
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="semantic_classify", correlation_id="corr1",
+            model="gpt-4o", input_tokens=10, output_tokens=5, duration_ms=50,
+        )
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="semantic_classify", correlation_id="corr1",
+            model="gpt-4o", input_tokens=20, output_tokens=8, duration_ms=60,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        events = await RegistryRepository(s).document_usage_events(doc_id)
+
+    assert len(events) == 3
+    kinds = sorted(e["kind"] for e in events)
+    assert kinds == ["llm", "llm", "ocr"]
+    # newest first
+    assert events == sorted(events, key=lambda e: e["created_at"], reverse=True)
+
+    ocr_event = next(e for e in events if e["kind"] == "ocr")
+    assert ocr_event["source"] == "ocr"
+    assert ocr_event["model"] == "prebuilt-layout"
+    assert ocr_event["page_count"] == 4
+    assert ocr_event["input_tokens"] == 0
+    assert ocr_event["output_tokens"] == 0
+    assert ocr_event["stage_run_id"] == run_id
+    assert ocr_event["correlation_id"] == "corr1"
+
+    llm_events = [e for e in events if e["kind"] == "llm"]
+    assert {e["input_tokens"] for e in llm_events} == {10, 20}
+    for e in llm_events:
+        assert e["source"] == "semantic_classify"
+        assert e["model"] == "gpt-4o"
+        assert e["page_count"] == 0

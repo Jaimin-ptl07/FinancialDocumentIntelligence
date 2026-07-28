@@ -39,6 +39,7 @@ from fdi.api.schemas import (
     DocumentListView,
     DocumentStructureView,
     DocumentSummaryView,
+    DocumentUsageEventsView,
     DocumentVersionsView,
     DocumentView,
     EmbeddingTriggerView,
@@ -79,6 +80,7 @@ from fdi.api.schemas import (
     StageThroughputView,
     StaleView,
     TablesView,
+    UsageEventView,
     VectorSearchRequest,
     VectorSearchResultsView,
     VectorSearchResultView,
@@ -115,6 +117,7 @@ from fdi.platform.db.repository import (
     DocumentRepository,
     EvalRepository,
     RegistryRepository,
+    UsageEventRecord,
 )
 
 log = structlog.get_logger(__name__)
@@ -568,6 +571,37 @@ async def document_cost(doc_id: str, session: SessionDep) -> DocumentCostView:
         total_cost_inr=sum(r.cost_inr for r in by_source),
         by_source=by_source,
     )
+
+
+def _priced_event(row: UsageEventRecord, settings: Settings) -> UsageEventView:
+    if row["kind"] == "ocr":
+        cost = ocr_cost_inr(row["page_count"], settings.ocr_cost_per_page_inr)
+    else:
+        cost = llm_cost_inr(
+            row["input_tokens"], row["output_tokens"],
+            input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+            usd_to_inr=settings.usd_to_inr_rate,
+        )
+    return UsageEventView(
+        id=row["id"], kind=row["kind"], source=row["source"], model=row["model"],
+        page_count=row["page_count"], input_tokens=row["input_tokens"],
+        output_tokens=row["output_tokens"], duration_ms=row["duration_ms"],
+        stage_run_id=row["stage_run_id"], correlation_id=row["correlation_id"],
+        created_at=row["created_at"], cost_inr=cost,
+    )
+
+
+@router.get("/documents/{doc_id}/cost/events", response_model=DocumentUsageEventsView)
+async def document_cost_events(doc_id: str, session: SessionDep) -> DocumentUsageEventsView:
+    """Every individual OCR/LLM call for one document -- the raw per-call
+    detail behind GET /documents/{doc_id}/cost's per-source totals."""
+    repo = RegistryRepository(session)
+    if await repo.get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    settings = get_settings()
+    events = [_priced_event(r, settings) for r in await repo.document_usage_events(doc_id)]
+    return DocumentUsageEventsView(doc_id=doc_id, events=events)
 
 
 def _content_disposition(filename: str | None) -> str:

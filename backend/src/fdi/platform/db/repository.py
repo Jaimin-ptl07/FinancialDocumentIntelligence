@@ -77,6 +77,27 @@ class CorpusCostTotals(TypedDict):
     llm_output_tokens: int
 
 
+class UsageEventRecord(TypedDict):
+    """One real OCR or LLM call for a document (costing feature) -- the
+    finest-grained record the schema keeps; document_cost_by_source's
+    per-source totals are an aggregate over exactly these rows. `kind` is
+    "ocr" or "llm"; `source` is "ocr" for an OCR event or the
+    llm_usage_event.source value for an LLM event. page_count is 0 for
+    every LLM event; input_tokens/output_tokens are 0 for an OCR event."""
+
+    id: str
+    kind: str
+    source: str
+    model: str
+    page_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+    stage_run_id: str | None
+    correlation_id: str | None
+    created_at: datetime
+
+
 def _latest_stage_runs() -> sqlalchemy.Subquery:
     """Every `stage_run` tagged with its rank within (doc_id, stage_name),
     newest first, plus its wall-clock duration in seconds.
@@ -431,6 +452,42 @@ class RegistryRepository:
             for source, count, in_tok, out_tok, dur in llm_rows
         )
         return rows
+
+    async def document_usage_events(self, doc_id: str) -> list[UsageEventRecord]:
+        """Every individual OCR/LLM call for one document, newest first --
+        the raw per-call detail document_cost_by_source aggregates over.
+        Costing feature drill-down (spec sec 6's deferred "raw per-call
+        event listing endpoint")."""
+        ocr_rows = (
+            await self._s.execute(
+                select(OcrUsageEvent).where(OcrUsageEvent.doc_id == doc_id)
+            )
+        ).scalars().all()
+        llm_rows = (
+            await self._s.execute(
+                select(LlmUsageEvent).where(LlmUsageEvent.doc_id == doc_id)
+            )
+        ).scalars().all()
+        events: list[UsageEventRecord] = [
+            UsageEventRecord(
+                id=r.id, kind="ocr", source="ocr", model=r.azure_model,
+                page_count=r.page_count, input_tokens=0, output_tokens=0,
+                duration_ms=r.duration_ms, stage_run_id=r.stage_run_id,
+                correlation_id=r.correlation_id, created_at=r.created_at,
+            )
+            for r in ocr_rows
+        ] + [
+            UsageEventRecord(
+                id=r.id, kind="llm", source=r.source, model=r.model,
+                page_count=0, input_tokens=r.input_tokens,
+                output_tokens=r.output_tokens, duration_ms=r.duration_ms,
+                stage_run_id=r.stage_run_id, correlation_id=r.correlation_id,
+                created_at=r.created_at,
+            )
+            for r in llm_rows
+        ]
+        events.sort(key=lambda e: e["created_at"], reverse=True)
+        return events
 
     async def corpus_cost_totals(self) -> CorpusCostTotals:
         """Every billable event corpus-wide, including /ask's doc_id=NULL

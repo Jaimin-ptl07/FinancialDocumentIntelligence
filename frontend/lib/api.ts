@@ -2,6 +2,7 @@ import type {
   AnalyticsView,
   DocumentCostView,
   DocumentListView,
+  DocumentUsageEventsView,
   DocumentView,
   ExtractDocumentView,
   ExtractionSchema,
@@ -64,6 +65,9 @@ export const getStages = (docId: string) =>
 
 export const getDocumentCost = (docId: string) =>
   request<DocumentCostView>(`/documents/${docId}/cost`);
+
+export const getDocumentCostEvents = (docId: string) =>
+  request<DocumentUsageEventsView>(`/documents/${docId}/cost/events`);
 
 export const getArtifact = (docId: string, stage: string) =>
   request<unknown>(`/documents/${docId}/artifacts/${stage}`);

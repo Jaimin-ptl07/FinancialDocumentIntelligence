@@ -9,6 +9,7 @@ import { fieldId as toFieldId } from "@/lib/format";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { PdfCanvas } from "@/components/viewer/PdfCanvas";
 import { FieldList } from "@/components/viewer/FieldList";
+import { CostingEvents } from "@/components/costing/CostingEvents";
 
 export function ReportViewer({ docId }: { docId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -194,6 +195,10 @@ export function ReportViewer({ docId }: { docId: string }) {
             <FieldList fields={fields} selected={selected} onSelect={select} />
           )}
         </div>
+      </div>
+
+      <div style={{ padding: "var(--sp-8)" }}>
+        <CostingEvents docId={docId} />
       </div>
     </>
   );

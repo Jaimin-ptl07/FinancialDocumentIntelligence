@@ -172,6 +172,30 @@ export interface DocumentCostView {
   by_source: CostBySourceView[];
 }
 
+/** One individual OCR/LLM call for a document (costing drill-down) — the
+ *  raw record CostBySourceView aggregates over. `kind` is "ocr" or "llm";
+ *  `page_count` is 0 for an "llm" event, `input_tokens`/`output_tokens`
+ *  are 0 for an "ocr" event. */
+export interface UsageEventView {
+  id: string;
+  kind: "ocr" | "llm";
+  source: string;
+  model: string;
+  page_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  stage_run_id: string | null;
+  correlation_id: string | null;
+  created_at: string;
+  cost_inr: number;
+}
+
+export interface DocumentUsageEventsView {
+  doc_id: string;
+  events: UsageEventView[];
+}
+
 export interface AnalyticsView {
   corpus: {
     document_count: number;

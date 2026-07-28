@@ -1934,6 +1934,60 @@ async def test_document_cost_endpoint_404s_for_unknown_document(
     assert response.status_code == 404
 
 
+async def test_document_cost_events_endpoint_returns_raw_priced_rows(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [
+            {"pageNumber": 1, "lines": [], "words": []},
+            {"pageNumber": 2, "lines": [], "words": []},
+        ],
+        "paragraphs": [],
+        "tables": [],
+    })
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    resolver = DagResolver(reg.all())
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=doc.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": fake_ocr},
+    )
+
+    response = await client.get(f"/documents/{doc.id}/cost/events")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["doc_id"] == doc.id
+    assert len(body["events"]) == 1
+    event = body["events"][0]
+    assert event["kind"] == "ocr"
+    assert event["source"] == "ocr"
+    assert event["page_count"] == 2
+    assert event["cost_inr"] == 2.0  # 2 pages * default FDI_OCR_COST_PER_PAGE_INR=1.0
+    assert event["correlation_id"] == "c1"
+    assert event["created_at"] is not None
+
+
+async def test_document_cost_events_endpoint_404s_for_unknown_document(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    response = await client.get("/documents/does-not-exist/cost/events")
+    assert response.status_code == 404
+
+
 async def test_analytics_reports_total_cost_inr(
     client: AsyncClient, _alembic_applied, session_factory, store
 ) -> None:

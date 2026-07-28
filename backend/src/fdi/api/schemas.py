@@ -583,6 +583,31 @@ class DocumentCostView(BaseModel):
     by_source: list[CostBySourceView]
 
 
+class UsageEventView(BaseModel):
+    """One individual OCR/LLM call for a document (costing feature
+    drill-down) -- the raw record `CostBySourceView` aggregates over.
+    `kind` is "ocr" or "llm"; `page_count` is 0 for an "llm" event,
+    `input_tokens`/`output_tokens` are 0 for an "ocr" event."""
+
+    id: str
+    kind: str
+    source: str
+    model: str
+    page_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+    stage_run_id: str | None
+    correlation_id: str | None
+    created_at: datetime
+    cost_inr: float
+
+
+class DocumentUsageEventsView(BaseModel):
+    doc_id: str
+    events: list[UsageEventView]
+
+
 class AnalyticsView(BaseModel):
     """`GET /analytics`. Corpus-wide and never paginated: the screen that
     reads it shows totals, and a page of totals is not a total."""
