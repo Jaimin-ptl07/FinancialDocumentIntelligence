@@ -11,9 +11,61 @@ validation, XBRL export) reads one map where each entry knows its own origin.
 from collections.abc import Mapping, Sequence
 
 from fdi.core.confidence import calibrate
+from fdi.core.coverage import coverage_report
 from fdi.core.derivation import derive_facts
 from fdi.core.ratios import compute_ratios
 from fdi.core.validation import validate
+
+
+def rows_from_schema(schema: Mapping[str, object]) -> list[dict[str, object]]:
+    """Reconstruct the derivation/coverage row view from a v4 field schema, so a
+    factsheet can be built from (schema, extraction records) alone -- no separate
+    normalized-taxonomy file at runtime. Walks modules -> units -> nested fields,
+    emitting one row per tagged leaf (extracted or derived) with the block_id
+    (unit_id), sr_no, particulars and origin the engines read."""
+    statements: list[dict[str, object]] = []
+    modules = schema.get("modules")
+    if not isinstance(modules, list):
+        return statements
+    for m in modules:
+        if not isinstance(m, Mapping):
+            continue
+        rows: list[dict[str, object]] = []
+        units = m.get("retrieval_units")
+        if isinstance(units, list):
+            for u in units:
+                if not isinstance(u, Mapping):
+                    continue
+                block = u.get("unit_id")
+                fields = u.get("fields")
+                if isinstance(fields, list):
+                    _walk_schema_fields(fields, block if isinstance(block, str) else "", rows)
+        statements.append({"statement": m.get("statement") or m.get("key"), "rows": rows})
+    return statements
+
+
+def _walk_schema_fields(
+    fields: Sequence[object], block: str, out: list[dict[str, object]]
+) -> None:
+    for f in fields:
+        if not isinstance(f, Mapping):
+            continue
+        children = f.get("fields")
+        if isinstance(children, list) and children:
+            _walk_schema_fields(children, block, out)
+            continue
+        tag = f.get("tag")
+        if not isinstance(tag, str) or not tag:
+            continue
+        out.append({
+            "block_id": block,
+            "tag": tag,
+            "sr_no": f.get("sr_no"),
+            "particulars": f.get("field_name"),
+            "origin": f.get("origin", "extracted"),
+            "excluded": False,
+            "is_section_header": False,
+        })
 
 
 def build_factsheet(
@@ -74,3 +126,30 @@ def build_factsheet(
         "facts": facts, "derived": derived, "ratios": ratios,
         "validations": validations, "calibration": calibration, "summary": summary,
     }
+
+
+def document_factsheet(
+    schema: Mapping[str, object],
+    records: Sequence[Mapping[str, object]],
+    *,
+    tolerance: float = 1.0,
+) -> dict[str, object]:
+    """End-to-end factsheet from a v4 schema + extraction records (the API entry
+    point). `records` are extraction output_contract records ({tag, value,
+    confidence, ...}); only extracted, tagged, valued records seed the Fact map,
+    and the derivation engine produces the rest. Adds a coverage report."""
+    statements = rows_from_schema(schema)
+    extracted: dict[str, dict[str, object]] = {}
+    for rec in records:
+        tag = rec.get("tag")
+        if not isinstance(tag, str) or not tag or rec.get("origin") == "derived":
+            continue
+        if rec.get("value") is None:
+            continue
+        extracted[tag] = {"value": rec.get("value"), "confidence": rec.get("confidence", 0.0)}
+
+    bundle = build_factsheet(statements, extracted, tolerance=tolerance)
+    facts = bundle["facts"]
+    if isinstance(facts, dict):
+        bundle["coverage"] = coverage_report(statements, facts)
+    return bundle
