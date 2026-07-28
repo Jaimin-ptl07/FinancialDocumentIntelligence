@@ -11,6 +11,7 @@ const DESTINATIONS = [
   { href: "/ingest", label: "Add a filing" },
   { href: "/schema", label: "Extraction schema" },
   { href: "/analytics", label: "Quality" },
+  { href: "/costing", label: "Costing" },
 ] as const;
 
 const THEME_KEY = "fdi-theme";

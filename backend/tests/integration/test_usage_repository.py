@@ -159,3 +159,81 @@ async def test_document_usage_events_returns_raw_per_call_rows_newest_first(
         assert e["source"] == "semantic_classify"
         assert e["model"] == "gpt-4o"
         assert e["page_count"] == 0
+
+
+async def test_corpus_cost_by_source_aggregates_across_documents(session_factory) -> None:
+    """The corpus DB is shared and NOT reset between tests (see
+    conftest.py's migrated_engine docstring), so this asserts a before/
+    after DELTA over a fresh, uniquely-tagged document rather than an
+    exact total -- the same pattern test_analytics.py already uses for
+    the identical reason."""
+    async with session_factory() as s:
+        before = {r["source"]: r for r in await RegistryRepository(s).corpus_cost_by_source()}
+
+    doc_id, run_id = await _make_document_and_stage_run(session_factory)
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_ocr_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            correlation_id="corr1", page_count=7,
+            azure_model="prebuilt-layout", duration_ms=100,
+        )
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="semantic_classify", correlation_id="corr1",
+            model="gpt-4o", input_tokens=30, output_tokens=6, duration_ms=50,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        after = {r["source"]: r for r in await RegistryRepository(s).corpus_cost_by_source()}
+
+    before_ocr_pages = before.get("ocr", {}).get("page_count", 0)
+    before_llm_in = before.get("semantic_classify", {}).get("input_tokens", 0)
+    assert after["ocr"]["page_count"] - before_ocr_pages == 7
+    assert after["semantic_classify"]["input_tokens"] - before_llm_in == 30
+
+
+async def test_corpus_cost_by_document_lists_this_document_with_its_totals(
+    session_factory,
+) -> None:
+    doc_id, run_id = await _make_document_and_stage_run(session_factory)
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_ocr_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            correlation_id="corr1", page_count=5,
+            azure_model="prebuilt-layout", duration_ms=100,
+        )
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="semantic_classify", correlation_id="corr1",
+            model="gpt-4o", input_tokens=15, output_tokens=3, duration_ms=50,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        rows = await RegistryRepository(s).corpus_cost_by_document()
+    row = next(r for r in rows if r["doc_id"] == doc_id)
+    assert row["ocr_page_count"] == 5
+    assert row["llm_input_tokens"] == 15
+    assert row["llm_output_tokens"] == 3
+
+
+async def test_corpus_cost_by_document_excludes_ask_agents_untethered_rows(
+    session_factory,
+) -> None:
+    """/ask rows (doc_id=None) belong to no single document -- they must
+    never appear in the per-document listing."""
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=None, stage_run_id=None,
+            source="ask_agent", correlation_id="corr3",
+            model="gpt-4o", input_tokens=99, output_tokens=11, duration_ms=200,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        rows = await RegistryRepository(s).corpus_cost_by_document()
+    assert all(r["doc_id"] is not None for r in rows)

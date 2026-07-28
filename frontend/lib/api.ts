@@ -1,5 +1,6 @@
 import type {
   AnalyticsView,
+  CorpusCostView,
   DocumentCostView,
   DocumentListView,
   DocumentUsageEventsView,
@@ -113,6 +114,8 @@ export const validateSchema = (schemaDocument: ExtractionSchema) =>
   });
 
 export const getAnalytics = () => request<AnalyticsView>("/analytics");
+
+export const getCosting = () => request<CorpusCostView>("/costing");
 
 export async function uploadDocument(
   file: File,

@@ -33,8 +33,10 @@ from fdi.api.schemas import (
     ConceptCompareRequest,
     ConceptComparisonView,
     ConceptLookupView,
+    CorpusCostView,
     CorpusTotalsView,
     CostBySourceView,
+    DocumentCostSummaryView,
     DocumentCostView,
     DocumentListView,
     DocumentStructureView,
@@ -1308,4 +1310,45 @@ async def analytics(session: SessionDep, vector_store: VectorStoreDep) -> Analyt
         documents_failed=outcomes["failed"],
         chunk_count=chunk_count,
         total_cost_inr=total_cost_inr,
+    )
+
+
+@router.get("/costing", response_model=CorpusCostView)
+async def costing(session: SessionDep) -> CorpusCostView:
+    """The dedicated costing dashboard: corpus-wide total, a breakdown by
+    usage source, and a per-document listing sorted by spend descending.
+    Distinct from GET /analytics, which mixes pipeline throughput with a
+    lighter `cost_inr` column -- this route exists for "what am I actually
+    spending, and on what" as its own question, not a side note on
+    pipeline health.
+    """
+    registry = RegistryRepository(session)
+    settings = get_settings()
+
+    by_source = [_priced_source(r, settings) for r in await registry.corpus_cost_by_source()]
+
+    by_document = sorted(
+        (
+            DocumentCostSummaryView(
+                doc_id=d["doc_id"], doc_key=d["doc_key"], filename=d["filename"],
+                total_cost_inr=(
+                    ocr_cost_inr(d["ocr_page_count"], settings.ocr_cost_per_page_inr)
+                    + llm_cost_inr(
+                        d["llm_input_tokens"], d["llm_output_tokens"],
+                        input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+                        output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+                        usd_to_inr=settings.usd_to_inr_rate,
+                    )
+                ),
+            )
+            for d in await registry.corpus_cost_by_document()
+        ),
+        key=lambda v: v.total_cost_inr,
+        reverse=True,
+    )
+
+    return CorpusCostView(
+        total_cost_inr=sum(r.cost_inr for r in by_source),
+        by_source=by_source,
+        by_document=by_document,
     )

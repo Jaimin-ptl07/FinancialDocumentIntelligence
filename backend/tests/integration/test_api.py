@@ -1988,6 +1988,66 @@ async def test_document_cost_events_endpoint_404s_for_unknown_document(
     assert response.status_code == 404
 
 
+async def test_costing_endpoint_lists_document_by_spend_descending(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    resolver = DagResolver(reg.all())
+
+    # cheap doc: 1 page -> Rs.1; pricier doc: 6 pages -> Rs.6
+    cheap = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="cheap.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=cheap.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": FakeOcrClient({
+            "content": "x", "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [], "tables": [],
+        })},
+    )
+    pricier = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="pricier.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=pricier.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": FakeOcrClient({
+            "content": "x",
+            "pages": [{"pageNumber": i, "lines": [], "words": []} for i in range(1, 7)],
+            "paragraphs": [], "tables": [],
+        })},
+    )
+
+    response = await client.get("/costing")
+    assert response.status_code == 200
+    body = response.json()
+    by_doc_id = {d["doc_id"]: d for d in body["by_document"]}
+    assert by_doc_id[cheap.id]["total_cost_inr"] == 1.0
+    assert by_doc_id[pricier.id]["total_cost_inr"] == 6.0
+    assert by_doc_id[pricier.id]["filename"] == "pricier.pdf"
+
+    # sorted by spend descending: pricier's index precedes cheap's
+    doc_ids_in_order = [d["doc_id"] for d in body["by_document"]]
+    assert doc_ids_in_order.index(pricier.id) < doc_ids_in_order.index(cheap.id)
+
+    ocr_source = next(s for s in body["by_source"] if s["source"] == "ocr")
+    assert ocr_source["cost_inr"] >= 7.0  # at least this run's 1 + 6 pages
+    assert body["total_cost_inr"] >= 7.0
+
+
 async def test_analytics_reports_total_cost_inr(
     client: AsyncClient, _alembic_applied, session_factory, store
 ) -> None:

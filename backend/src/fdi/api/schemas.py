@@ -608,6 +608,28 @@ class DocumentUsageEventsView(BaseModel):
     events: list[UsageEventView]
 
 
+class DocumentCostSummaryView(BaseModel):
+    """One document's total cost, as one row of the corpus-wide "which
+    filings cost the most" listing (costing feature)."""
+
+    doc_id: str
+    doc_key: str | None
+    filename: str | None
+    total_cost_inr: float
+
+
+class CorpusCostView(BaseModel):
+    """`GET /costing`. The dedicated costing dashboard, distinct from
+    `GET /analytics` (which mixes pipeline throughput with a `cost_inr`
+    column): a corpus-wide total, a breakdown by usage source
+    (ocr/semantic_classify/extract_document/ask_agent), and a per-document
+    listing sorted by spend descending."""
+
+    total_cost_inr: float
+    by_source: list[CostBySourceView]
+    by_document: list[DocumentCostSummaryView]
+
+
 class AnalyticsView(BaseModel):
     """`GET /analytics`. Corpus-wide and never paginated: the screen that
     reads it shows totals, and a page of totals is not a total."""

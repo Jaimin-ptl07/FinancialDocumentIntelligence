@@ -196,6 +196,25 @@ export interface DocumentUsageEventsView {
   events: UsageEventView[];
 }
 
+/** One document's total cost, as one row of the corpus-wide "which
+ *  filings cost the most" listing. */
+export interface DocumentCostSummaryView {
+  doc_id: string;
+  doc_key: string | null;
+  filename: string | null;
+  total_cost_inr: number;
+}
+
+/** `GET /costing` — the dedicated costing dashboard, distinct from
+ *  AnalyticsView (which mixes pipeline throughput with a lighter
+ *  cost_inr column): a corpus-wide total, a breakdown by usage source,
+ *  and a per-document listing sorted by spend descending. */
+export interface CorpusCostView {
+  total_cost_inr: number;
+  by_source: CostBySourceView[];
+  by_document: DocumentCostSummaryView[];
+}
+
 export interface AnalyticsView {
   corpus: {
     document_count: number;
