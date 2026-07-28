@@ -152,6 +152,24 @@ export interface StageThroughputView {
   queued: number;
   failed: number;
   median_seconds: number | null;
+  cost_inr: number;
+}
+
+/** One usage source's totals for a document, priced into INR at read time. */
+export interface CostBySourceView {
+  source: string;
+  call_count: number;
+  page_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  cost_inr: number;
+}
+
+export interface DocumentCostView {
+  doc_id: string;
+  total_cost_inr: number;
+  by_source: CostBySourceView[];
 }
 
 export interface AnalyticsView {
@@ -165,4 +183,5 @@ export interface AnalyticsView {
   documents_complete: number;
   documents_failed: number;
   chunk_count: number;
+  total_cost_inr: number;
 }

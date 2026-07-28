@@ -1,5 +1,6 @@
 import type {
   AnalyticsView,
+  DocumentCostView,
   DocumentListView,
   DocumentView,
   ExtractDocumentView,
@@ -60,6 +61,9 @@ export async function deleteDocument(docId: string): Promise<void> {
 
 export const getStages = (docId: string) =>
   request<StagesView>(`/documents/${docId}/stages`);
+
+export const getDocumentCost = (docId: string) =>
+  request<DocumentCostView>(`/documents/${docId}/cost`);
 
 export const getArtifact = (docId: string, stage: string) =>
   request<unknown>(`/documents/${docId}/artifacts/${stage}`);

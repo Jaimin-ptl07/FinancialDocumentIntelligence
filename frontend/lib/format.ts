@@ -66,6 +66,19 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const INR_CURRENCY = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 2,
+});
+
+/** Cost figures (costing feature) are always shown in Rupees, grouped
+ *  lakh/crore style like formatAmount -- Intl's "en-IN" locale does this
+ *  natively for currency too. */
+export function formatInr(amount: number): string {
+  return INR_CURRENCY.format(amount);
+}
+
 /** Percentages appear beside counts across the analytics screen; keeping them
  *  whole-numbered stops a row of tiles turning into decimal noise. */
 export function formatPercent(fraction: number): string {
