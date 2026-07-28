@@ -16,6 +16,19 @@ def test_agent_response_requires_exactly_one_of_tool_calls_or_content() -> None:
         AgentResponse(tool_calls=[])  # empty list counts as "not set"
 
 
+def test_agent_response_usage_defaults_to_none() -> None:
+    r = AgentResponse(content="ok")
+    assert r.usage is None
+
+
+def test_agent_response_carries_explicit_usage() -> None:
+    from fdi.core.pricing import LlmCallUsage
+
+    usage = LlmCallUsage(model="gpt-4o", input_tokens=10, output_tokens=5, duration_ms=42)
+    r = AgentResponse(content="ok", usage=usage)
+    assert r.usage == usage
+
+
 def test_extract_citations_error_result_is_empty() -> None:
     assert extract_citations("search", {}, {"error": "boom"}) == []
 

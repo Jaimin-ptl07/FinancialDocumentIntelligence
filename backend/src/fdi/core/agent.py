@@ -13,6 +13,8 @@ view never branch on which tool produced a fact."""
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from fdi.core.pricing import LlmCallUsage
+
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -25,6 +27,12 @@ class ToolCall:
 class AgentResponse:
     tool_calls: list[ToolCall] | None = None
     content: str | None = None
+    # Populated by fdi.platform.agent.AzureOpenAIAgentClient.complete from the
+    # SDK response's own `usage` object -- costing feature (docs/superpowers/
+    # specs/2026-07-28-costing-feature-design.md). None from every fake/test
+    # double, which is the correct "no real Azure call happened" signal:
+    # answer_question skips recording usage when this is None.
+    usage: LlmCallUsage | None = None
 
     def __post_init__(self) -> None:
         has_calls = bool(self.tool_calls)
