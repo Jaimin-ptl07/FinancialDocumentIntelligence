@@ -53,6 +53,7 @@ resolving only doc_id would require."""
 
 import contextlib
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol, cast, runtime_checkable
@@ -78,6 +79,7 @@ from fdi.core.extractor import (
     unit_needs_tables,
     unit_top_k,
 )
+from fdi.core.pricing import LlmCallUsage
 from fdi.core.provenance import resolve_evidence_regions, resolve_field_regions
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
@@ -131,6 +133,25 @@ class ExtractContext:
     doc_id: str
     doc_key: str
     version: int
+    # Costing feature (docs/superpowers/specs/2026-07-28-costing-feature-
+    # design.md): threaded through to _record_llm_usage's llm_usage_event
+    # rows. Optional, appended last -- every existing keyword-only
+    # ExtractContext(...) construction site is unaffected.
+    correlation_id: str | None = None
+
+
+async def _record_llm_usage(
+    *, ctx: ExtractContext, source: str, usage: LlmCallUsage
+) -> None:
+    """Persist one real ExtractorClient.extract() call's usage. stage_run_id
+    is always None here -- extract_document runs outside run_stage entirely
+    (it is a synchronous route, not a Celery-dispatched stage)."""
+    await RegistryRepository(ctx.session).record_llm_usage(
+        str(uuid.uuid4()), doc_id=ctx.doc_id, stage_run_id=None,
+        source=source, correlation_id=ctx.correlation_id,
+        model=usage.model, input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens, duration_ms=usage.duration_ms,
+    )
 
 
 _POOL_K = 60
