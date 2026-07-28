@@ -10,9 +10,12 @@ stage (fdi.platform.semantic) and the agent (fdi.platform.agent) already
 use -- no new config."""
 
 import json
+import time
 
 from openai import AzureOpenAI
 
+from fdi.core.extractor import ExtractResult
+from fdi.core.pricing import LlmCallUsage
 from fdi.platform.config import Settings
 
 
@@ -27,7 +30,8 @@ class AzureOpenAIExtractorClient:
         self._deployment = deployment
         self._model = model
 
-    def extract(self, *, system: str, user: str) -> dict[str, object]:
+    def extract(self, *, system: str, user: str) -> ExtractResult:
+        start = time.perf_counter()
         resp = self._sdk.chat.completions.create(
             model=self._deployment,
             messages=[
@@ -37,14 +41,24 @@ class AzureOpenAIExtractorClient:
             response_format={"type": "json_object"},
             temperature=0,
         )
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        usage_obj = resp.usage
+        usage = LlmCallUsage(
+            model=self._model,
+            input_tokens=usage_obj.prompt_tokens if usage_obj else 0,
+            output_tokens=usage_obj.completion_tokens if usage_obj else 0,
+            duration_ms=duration_ms,
+        )
         content = resp.choices[0].message.content
         if not content:
-            return {}
+            return ExtractResult(data={}, usage=usage)
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
+            return ExtractResult(data={}, usage=usage)
+        return ExtractResult(
+            data=parsed if isinstance(parsed, dict) else {}, usage=usage
+        )
 
     @staticmethod
     def from_settings(settings: "Settings") -> "AzureOpenAIExtractorClient | None":
