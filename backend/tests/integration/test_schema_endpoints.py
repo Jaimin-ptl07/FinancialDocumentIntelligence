@@ -63,9 +63,9 @@ async def test_get_schema_falls_back_to_the_on_disk_seed(make_client) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["source"] == "seed"
-    assert body["version"] == "3.2.0"
-    assert body["field_count"] == 190
-    assert len(body["schema_document"]["modules"]) == 15
+    assert body["version"] == "4.1.0"
+    assert body["field_count"] == 402
+    assert len(body["schema_document"]["modules"]) == 4
 
 
 async def test_put_schema_persists_and_bumps_the_patch_version(make_client) -> None:
@@ -78,7 +78,7 @@ async def test_put_schema_persists_and_bumps_the_patch_version(make_client) -> N
             "/schema", json={"base_version": current["version"], "schema_document": doc}
         )
         assert put.status_code == 200
-        assert put.json()["version"] == "3.2.1"
+        assert put.json()["version"] == "4.1.1"
         assert put.json()["source"] == "store"
 
         after = (await client.get("/schema")).json()
@@ -131,7 +131,7 @@ async def test_post_schema_validate_reports_without_writing(make_client) -> None
 
     assert ok.status_code == 200
     assert ok.json() == {
-        "valid": True, "errors": [], "module_count": 15, "unit_count": 17, "field_count": 190,
+        "valid": True, "errors": [], "module_count": 4, "unit_count": 4, "field_count": 402,
     }
     assert bad.status_code == 200
     assert bad.json()["valid"] is False

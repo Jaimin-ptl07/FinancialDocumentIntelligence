@@ -20,7 +20,7 @@ from pydantic_settings.sources import EnvSettingsSource, PydanticBaseSettingsSou
 # of the schema file for the deployed-image side of this.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
-_SCHEMA_RELPATH = Path("docs") / "architecture" / "field-extraction-schema.json"
+_SCHEMA_RELPATH = Path("docs") / "architecture" / "field-extraction-schema.v4_1.json"
 
 
 def _first_existing(*candidates: Path) -> Path:

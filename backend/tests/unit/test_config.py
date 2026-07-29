@@ -130,7 +130,7 @@ def test_extraction_schema_path_default(
     s = Settings()
     p = Path(s.extraction_schema_path)
     assert p.is_absolute()
-    assert p.as_posix().endswith("docs/architecture/field-extraction-schema.json")
+    assert p.as_posix().endswith("docs/architecture/field-extraction-schema.v4_1.json")
     assert p.exists()
 
 
