@@ -1,6 +1,9 @@
 import type {
   AnalyticsView,
+  CorpusCostView,
+  DocumentCostView,
   DocumentListView,
+  DocumentUsageEventsView,
   DocumentView,
   ExtractDocumentView,
   ExtractionSchema,
@@ -61,6 +64,12 @@ export async function deleteDocument(docId: string): Promise<void> {
 export const getStages = (docId: string) =>
   request<StagesView>(`/documents/${docId}/stages`);
 
+export const getDocumentCost = (docId: string) =>
+  request<DocumentCostView>(`/documents/${docId}/cost`);
+
+export const getDocumentCostEvents = (docId: string) =>
+  request<DocumentUsageEventsView>(`/documents/${docId}/cost/events`);
+
 export const getArtifact = (docId: string, stage: string) =>
   request<unknown>(`/documents/${docId}/artifacts/${stage}`);
 
@@ -105,6 +114,8 @@ export const validateSchema = (schemaDocument: ExtractionSchema) =>
   });
 
 export const getAnalytics = () => request<AnalyticsView>("/analytics");
+
+export const getCosting = () => request<CorpusCostView>("/costing");
 
 export async function uploadDocument(
   file: File,

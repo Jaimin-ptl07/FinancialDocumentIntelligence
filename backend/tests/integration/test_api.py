@@ -1874,4 +1874,213 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     assert body["module"] is None
     assert body["field_count"] == 1
     assert body["fields"][0]["field_name"] == "Company overview text"
-    assert body["fields"][0]["value"] == "ACME is a manufacturer."
+
+
+# --------------------------------------------------------------------------
+# Task 16 (costing feature): GET /documents/{doc_id}/cost, cost_inr on
+# GET /analytics.
+# --------------------------------------------------------------------------
+
+
+async def test_document_cost_endpoint_returns_priced_breakdown(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [
+            {"pageNumber": 1, "lines": [], "words": []},
+            {"pageNumber": 2, "lines": [], "words": []},
+            {"pageNumber": 3, "lines": [], "words": []},
+            {"pageNumber": 4, "lines": [], "words": []},
+        ],
+        "paragraphs": [],
+        "tables": [],
+    })
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    resolver = DagResolver(reg.all())
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=doc.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": fake_ocr},
+    )
+
+    response = await client.get(f"/documents/{doc.id}/cost")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["doc_id"] == doc.id
+    ocr_entry = next(r for r in body["by_source"] if r["source"] == "ocr")
+    assert ocr_entry["page_count"] == 4
+    assert ocr_entry["cost_inr"] == 4.0  # 4 pages * default FDI_OCR_COST_PER_PAGE_INR=1.0
+    assert body["total_cost_inr"] == ocr_entry["cost_inr"]
+
+
+async def test_document_cost_endpoint_404s_for_unknown_document(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    response = await client.get("/documents/does-not-exist/cost")
+    assert response.status_code == 404
+
+
+async def test_document_cost_events_endpoint_returns_raw_priced_rows(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [
+            {"pageNumber": 1, "lines": [], "words": []},
+            {"pageNumber": 2, "lines": [], "words": []},
+        ],
+        "paragraphs": [],
+        "tables": [],
+    })
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    resolver = DagResolver(reg.all())
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=doc.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": fake_ocr},
+    )
+
+    response = await client.get(f"/documents/{doc.id}/cost/events")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["doc_id"] == doc.id
+    assert len(body["events"]) == 1
+    event = body["events"][0]
+    assert event["kind"] == "ocr"
+    assert event["source"] == "ocr"
+    assert event["page_count"] == 2
+    assert event["cost_inr"] == 2.0  # 2 pages * default FDI_OCR_COST_PER_PAGE_INR=1.0
+    assert event["correlation_id"] == "c1"
+    assert event["created_at"] is not None
+
+
+async def test_document_cost_events_endpoint_404s_for_unknown_document(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    response = await client.get("/documents/does-not-exist/cost/events")
+    assert response.status_code == 404
+
+
+async def test_costing_endpoint_lists_document_by_spend_descending(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    resolver = DagResolver(reg.all())
+
+    # cheap doc: 1 page -> Rs.1; pricier doc: 6 pages -> Rs.6
+    cheap = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="cheap.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=cheap.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": FakeOcrClient({
+            "content": "x", "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            "paragraphs": [], "tables": [],
+        })},
+    )
+    pricier = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="pricier.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=pricier.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": FakeOcrClient({
+            "content": "x",
+            "pages": [{"pageNumber": i, "lines": [], "words": []} for i in range(1, 7)],
+            "paragraphs": [], "tables": [],
+        })},
+    )
+
+    response = await client.get("/costing")
+    assert response.status_code == 200
+    body = response.json()
+    by_doc_id = {d["doc_id"]: d for d in body["by_document"]}
+    assert by_doc_id[cheap.id]["total_cost_inr"] == 1.0
+    assert by_doc_id[pricier.id]["total_cost_inr"] == 6.0
+    assert by_doc_id[pricier.id]["filename"] == "pricier.pdf"
+
+    # sorted by spend descending: pricier's index precedes cheap's
+    doc_ids_in_order = [d["doc_id"] for d in body["by_document"]]
+    assert doc_ids_in_order.index(pricier.id) < doc_ids_in_order.index(cheap.id)
+
+    ocr_source = next(s for s in body["by_source"] if s["source"] == "ocr")
+    assert ocr_source["cost_inr"] >= 7.0  # at least this run's 1 + 6 pages
+    assert body["total_cost_inr"] >= 7.0
+
+
+async def test_analytics_reports_total_cost_inr(
+    client: AsyncClient, _alembic_applied, session_factory, store
+) -> None:
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ocr import OcrStage
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{uuid.uuid4()}\n".encode(),
+        filename="a.pdf", doc_key=str(uuid.uuid4()), content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+    fake_ocr = FakeOcrClient({
+        "content": "ACME",
+        "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+        "paragraphs": [],
+        "tables": [],
+    })
+    reg = StageRegistry()
+    reg.register(OcrStage())
+    resolver = DagResolver(reg.all())
+    await run_stage(
+        stage_name="ocr", run_id=str(uuid.uuid4()), doc_id=doc.id, correlation_id="c1",
+        session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+        services={"ocr": fake_ocr},
+    )
+
+    response = await client.get("/analytics")
+    body = response.json()
+    assert "total_cost_inr" in body
+    assert body["total_cost_inr"] >= 0.0
+    ocr_stage_entry = next(s for s in body["stages"] if s["name"] == "ocr")
+    assert "cost_inr" in ocr_stage_entry

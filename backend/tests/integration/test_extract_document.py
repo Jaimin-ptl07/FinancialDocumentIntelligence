@@ -23,9 +23,15 @@ import pytest
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from fdi.core.extractor import FieldSpec, parse_field_specs
+from fdi.core.extractor import ExtractResult, FieldSpec, parse_field_specs
+from fdi.core.pricing import LlmCallUsage
 from fdi.pipeline.embeddings import FakeEmbeddingClient
-from fdi.pipeline.extractor import ExtractContext, FakeExtractorClient, extract_document
+from fdi.pipeline.extractor import (
+    ExtractContext,
+    FakeExtractorClient,
+    extract_document,
+    extract_unit,
+)
 from fdi.pipeline.intake import intake_document
 from fdi.pipeline.ocr import FakeOcrClient
 from fdi.pipeline.registry import StageRegistry
@@ -717,3 +723,90 @@ async def test_extract_document_gives_table_field_a_cell_precise_box(
     assert current_polygon == [3, 1, 6, 1, 6, 2, 3, 2]
     prior_polygon = bounding_regions["prior"][0]["polygon"]
     assert prior_polygon == [6, 1, 9, 1, 9, 2, 6, 2]
+
+
+class _UsageCarryingExtractorClient:
+    """Local test double -- unlike FakeExtractorClient, returns a real
+    usage on every call, to prove extract_unit records it (costing
+    feature, docs/superpowers/specs/2026-07-28-costing-feature-design.md)."""
+
+    def __init__(self, data: dict[str, object]) -> None:
+        self._data = data
+
+    def extract(self, *, system: str, user: str) -> ExtractResult:
+        return ExtractResult(
+            data=self._data,
+            usage=LlmCallUsage(
+                model="gpt-4o", input_tokens=80, output_tokens=15, duration_ms=200
+            ),
+        )
+
+
+async def test_extract_unit_records_usage_when_client_returns_it(
+    session_factory, store, processed_doc
+) -> None:
+    """extract_unit's `_record_llm_usage` call (wired in a prior task, wired
+    to an actual implementation here) writes one llm_usage_event row,
+    source="extract_document", carrying the real usage a client returns --
+    proven end to end via RegistryRepository.document_cost_by_source, the
+    same read path GET /analytics/documents/{doc_id}/cost will use."""
+    from fdi.core.extractor import UnitSpec
+
+    doc, marker, embedder, vector_store = processed_doc
+    field = FieldSpec(
+        field_name="a", data_type="string",
+        retrieval_query=f"manufacturing company {marker}",
+        keywords=("a",), extraction_prompt="Extract a.", enum_values=None,
+        module_id=1, module_name="M", unit_id="U1", unit_title="T-U1",
+        field_path="m.a", locator_keywords=("manufacturing",),
+    )
+    unit = UnitSpec(
+        unit_id="U1", unit_title="T-U1",
+        retrieval_query=f"manufacturing company {marker}",
+        locator_keywords=("manufacturing",), fields=(field,),
+    )
+    client = _UsageCarryingExtractorClient({"value": "100", "confidence": 0.9})
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        await extract_unit(ctx=ctx, unit=unit, client=client)
+        await s.commit()
+
+    async with session_factory() as s:
+        rows = await RegistryRepository(s).document_cost_by_source(doc.id)
+    row = next(r for r in rows if r["source"] == "extract_document")
+    assert row["input_tokens"] == 80
+    assert row["output_tokens"] == 15
+
+
+async def test_extract_document_records_no_usage_for_plain_fake_client(
+    session_factory, store, processed_doc
+) -> None:
+    """FakeExtractorClient's default `usage=None` (used everywhere else in
+    this file) must record NOTHING -- extract_unit only calls
+    _record_llm_usage when `result.usage is not None`. Guards against a
+    regression that would record a bogus usage event, and INR-cost, for
+    every one of this file's other (usage-free) tests."""
+    doc, marker, embedder, vector_store = processed_doc
+    fields = parse_field_specs(_schema(marker))
+
+    fake = FakeExtractorClient([
+        {"Company overview text": {"value": "ACME is a manufacturer.", "confidence": 0.9}},
+        {"Total assets": {"value": 12345.0, "confidence": 0.95}},
+        {"Unmatchable field": {"value": None, "confidence": 0.0}},
+    ])
+
+    async with session_factory() as s:
+        ctx = ExtractContext(
+            session=s, store=store, embedder=embedder, vector_store=vector_store,
+            doc_id=doc.id, doc_key=doc.doc_key, version=doc.version,
+        )
+        await extract_document(ctx=ctx, fields=fields, client=fake)
+        await s.commit()
+
+    async with session_factory() as s:
+        rows = await RegistryRepository(s).document_cost_by_source(doc.id)
+    assert not any(r["source"] == "extract_document" for r in rows)

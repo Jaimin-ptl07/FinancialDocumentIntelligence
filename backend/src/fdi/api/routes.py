@@ -33,10 +33,15 @@ from fdi.api.schemas import (
     ConceptCompareRequest,
     ConceptComparisonView,
     ConceptLookupView,
+    CorpusCostView,
     CorpusTotalsView,
+    CostBySourceView,
+    DocumentCostSummaryView,
+    DocumentCostView,
     DocumentListView,
     DocumentStructureView,
     DocumentSummaryView,
+    DocumentUsageEventsView,
     DocumentVersionsView,
     DocumentView,
     EmbeddingTriggerView,
@@ -77,6 +82,7 @@ from fdi.api.schemas import (
     StageThroughputView,
     StaleView,
     TablesView,
+    UsageEventView,
     VectorSearchRequest,
     VectorSearchResultsView,
     VectorSearchResultView,
@@ -84,6 +90,7 @@ from fdi.api.schemas import (
 from fdi.core.extractor import parse_field_specs
 from fdi.core.factsheet import document_factsheet
 from fdi.core.ontology import CanonicalConcept
+from fdi.core.pricing import llm_cost_inr, ocr_cost_inr
 from fdi.core.schema import bump_patch_version, validate_extraction_schema
 from fdi.core.xbrl import calculation_arcs, export_instance
 from fdi.pipeline.agent_tools import AgentContext
@@ -107,9 +114,15 @@ from fdi.pipeline.retrieval import bm25_search, hybrid_search, vector_search
 from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
-from fdi.platform.config import get_settings
+from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.models import Document
-from fdi.platform.db.repository import DocumentRepository, EvalRepository, RegistryRepository
+from fdi.platform.db.repository import (
+    CostBySource,
+    DocumentRepository,
+    EvalRepository,
+    RegistryRepository,
+    UsageEventRecord,
+)
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -531,6 +544,70 @@ async def document_artifact(
     return dict(body)
 
 
+def _priced_source(row: CostBySource, settings: Settings) -> CostBySourceView:
+    source = row["source"]
+    if source == "ocr":
+        cost = ocr_cost_inr(row["page_count"], settings.ocr_cost_per_page_inr)
+    else:
+        cost = llm_cost_inr(
+            row["input_tokens"], row["output_tokens"],
+            input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+            usd_to_inr=settings.usd_to_inr_rate,
+        )
+    return CostBySourceView(
+        source=source, call_count=row["call_count"],
+        page_count=row["page_count"], input_tokens=row["input_tokens"],
+        output_tokens=row["output_tokens"], duration_ms=row["duration_ms"],
+        cost_inr=cost,
+    )
+
+
+@router.get("/documents/{doc_id}/cost", response_model=DocumentCostView)
+async def document_cost(doc_id: str, session: SessionDep) -> DocumentCostView:
+    repo = RegistryRepository(session)
+    if await repo.get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    settings = get_settings()
+    by_source = [_priced_source(r, settings) for r in await repo.document_cost_by_source(doc_id)]
+    return DocumentCostView(
+        doc_id=doc_id,
+        total_cost_inr=sum(r.cost_inr for r in by_source),
+        by_source=by_source,
+    )
+
+
+def _priced_event(row: UsageEventRecord, settings: Settings) -> UsageEventView:
+    if row["kind"] == "ocr":
+        cost = ocr_cost_inr(row["page_count"], settings.ocr_cost_per_page_inr)
+    else:
+        cost = llm_cost_inr(
+            row["input_tokens"], row["output_tokens"],
+            input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+            usd_to_inr=settings.usd_to_inr_rate,
+        )
+    return UsageEventView(
+        id=row["id"], kind=row["kind"], source=row["source"], model=row["model"],
+        page_count=row["page_count"], input_tokens=row["input_tokens"],
+        output_tokens=row["output_tokens"], duration_ms=row["duration_ms"],
+        stage_run_id=row["stage_run_id"], correlation_id=row["correlation_id"],
+        created_at=row["created_at"], cost_inr=cost,
+    )
+
+
+@router.get("/documents/{doc_id}/cost/events", response_model=DocumentUsageEventsView)
+async def document_cost_events(doc_id: str, session: SessionDep) -> DocumentUsageEventsView:
+    """Every individual OCR/LLM call for one document -- the raw per-call
+    detail behind GET /documents/{doc_id}/cost's per-source totals."""
+    repo = RegistryRepository(session)
+    if await repo.get_document(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    settings = get_settings()
+    events = [_priced_event(r, settings) for r in await repo.document_usage_events(doc_id)]
+    return DocumentUsageEventsView(doc_id=doc_id, events=events)
+
+
 def _content_disposition(filename: str | None) -> str:
     """`inline` + BOTH filename forms (RFC 6266).
 
@@ -919,6 +996,7 @@ async def ask(
     graph_store: GraphStoreDep,
     entity_threshold: EntityThresholdDep,
     agent_client: AgentClientDep,
+    correlation_id: CorrelationIdDep,
 ) -> AskResponse:
     if agent_client is None:
         raise HTTPException(
@@ -928,11 +1006,18 @@ async def ask(
     ctx = AgentContext(
         session=session, store=store, embedder=embedder, vector_store=vector_store,
         graph_store=graph_store, default_entity_threshold=entity_threshold,
+        correlation_id=correlation_id,
     )
     max_rounds = body.max_rounds if body.max_rounds is not None else 5
     result = await answer_question(
         question=body.question, ctx=ctx, agent_client=agent_client, max_rounds=max_rounds,
     )
+    # answer_question may have written llm_usage_event rows via ctx.session
+    # (costing feature) -- this route previously never wrote anything, so
+    # it never needed to commit. RegistryRepository.record_llm_usage only
+    # flushes; the caller owns the commit, same convention as every other
+    # write path in this codebase.
+    await session.commit()
     return AskResponse.model_validate(result)
 
 
@@ -961,6 +1046,7 @@ async def extract_document_route(
     vector_store: VectorStoreDep,
     extractor_client: ExtractorClientDep,
     schema_path: ExtractionSchemaPathDep,
+    correlation_id: CorrelationIdDep,
 ) -> ExtractDocumentView:
     if extractor_client is None:
         raise HTTPException(
@@ -1010,10 +1096,17 @@ async def extract_document_route(
     ctx = ExtractContext(
         session=session, store=store, embedder=embedder, vector_store=vector_store,
         doc_id=doc.id, doc_key=body.doc_key, version=version,
+        correlation_id=correlation_id,
     )
     result = await extract_document(
         ctx=ctx, fields=fields, client=extractor_client, force=body.force
     )
+    # extract_document may have written llm_usage_event rows via ctx.session
+    # (costing feature) -- the extraction RECORD itself persists to the
+    # artifact store (_persist_extraction), not Postgres, so this route
+    # never needed to commit before. RegistryRepository.record_llm_usage
+    # only flushes; the caller owns the commit.
+    await session.commit()
     return ExtractDocumentView.model_validate(
         {"doc_key": body.doc_key, "module": body.module, **result}
     )
@@ -1236,6 +1329,32 @@ async def analytics(session: SessionDep, vector_store: VectorStoreDep) -> Analyt
     stages = await registry.stage_throughput()
     outcomes = await registry.document_outcome_counts()
     chunk_count = vector_store.count() if vector_store is not None else 0
+
+    settings = get_settings()
+    corpus_costs = await registry.corpus_cost_totals()
+    stage_costs = await registry.stage_cost_totals()
+    total_cost_inr = ocr_cost_inr(
+        corpus_costs["ocr_page_count"], settings.ocr_cost_per_page_inr
+    ) + llm_cost_inr(
+        corpus_costs["llm_input_tokens"], corpus_costs["llm_output_tokens"],
+        input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+        output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+        usd_to_inr=settings.usd_to_inr_rate,
+    )
+
+    def _stage_cost_inr(name: str) -> float:
+        t = stage_costs.get(name)
+        if t is None:
+            return 0.0
+        return ocr_cost_inr(
+            t["ocr_page_count"], settings.ocr_cost_per_page_inr
+        ) + llm_cost_inr(
+            t["llm_input_tokens"], t["llm_output_tokens"],
+            input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+            usd_to_inr=settings.usd_to_inr_rate,
+        )
+
     return AnalyticsView(
         corpus=CorpusTotalsView(
             document_count=totals["document_count"],
@@ -1251,10 +1370,53 @@ async def analytics(session: SessionDep, vector_store: VectorStoreDep) -> Analyt
                 queued=s["queued"],
                 failed=s["failed"],
                 median_seconds=s["median_seconds"],
+                cost_inr=_stage_cost_inr(s["name"]),
             )
             for s in stages
         ],
         documents_complete=outcomes["complete"],
         documents_failed=outcomes["failed"],
         chunk_count=chunk_count,
+        total_cost_inr=total_cost_inr,
+    )
+
+
+@router.get("/costing", response_model=CorpusCostView)
+async def costing(session: SessionDep) -> CorpusCostView:
+    """The dedicated costing dashboard: corpus-wide total, a breakdown by
+    usage source, and a per-document listing sorted by spend descending.
+    Distinct from GET /analytics, which mixes pipeline throughput with a
+    lighter `cost_inr` column -- this route exists for "what am I actually
+    spending, and on what" as its own question, not a side note on
+    pipeline health.
+    """
+    registry = RegistryRepository(session)
+    settings = get_settings()
+
+    by_source = [_priced_source(r, settings) for r in await registry.corpus_cost_by_source()]
+
+    by_document = sorted(
+        (
+            DocumentCostSummaryView(
+                doc_id=d["doc_id"], doc_key=d["doc_key"], filename=d["filename"],
+                total_cost_inr=(
+                    ocr_cost_inr(d["ocr_page_count"], settings.ocr_cost_per_page_inr)
+                    + llm_cost_inr(
+                        d["llm_input_tokens"], d["llm_output_tokens"],
+                        input_usd_per_mtok=settings.llm_input_cost_per_mtok_usd,
+                        output_usd_per_mtok=settings.llm_output_cost_per_mtok_usd,
+                        usd_to_inr=settings.usd_to_inr_rate,
+                    )
+                ),
+            )
+            for d in await registry.corpus_cost_by_document()
+        ),
+        key=lambda v: v.total_cost_inr,
+        reverse=True,
+    )
+
+    return CorpusCostView(
+        total_cost_inr=sum(r.cost_inr for r in by_source),
+        by_source=by_source,
+        by_document=by_document,
     )

@@ -92,6 +92,9 @@ export function ReportViewer({ docId }: { docId: string }) {
             Re-extract
           </button>
         ) : null}
+        <Link href={`/documents/${docId}/costing`} className="btn">
+          Costing
+        </Link>
       </PageHeader>
 
       <div

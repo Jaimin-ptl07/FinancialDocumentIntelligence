@@ -152,6 +152,67 @@ export interface StageThroughputView {
   queued: number;
   failed: number;
   median_seconds: number | null;
+  cost_inr: number;
+}
+
+/** One usage source's totals for a document, priced into INR at read time. */
+export interface CostBySourceView {
+  source: string;
+  call_count: number;
+  page_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  cost_inr: number;
+}
+
+export interface DocumentCostView {
+  doc_id: string;
+  total_cost_inr: number;
+  by_source: CostBySourceView[];
+}
+
+/** One individual OCR/LLM call for a document (costing drill-down) — the
+ *  raw record CostBySourceView aggregates over. `kind` is "ocr" or "llm";
+ *  `page_count` is 0 for an "llm" event, `input_tokens`/`output_tokens`
+ *  are 0 for an "ocr" event. */
+export interface UsageEventView {
+  id: string;
+  kind: "ocr" | "llm";
+  source: string;
+  model: string;
+  page_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  stage_run_id: string | null;
+  correlation_id: string | null;
+  created_at: string;
+  cost_inr: number;
+}
+
+export interface DocumentUsageEventsView {
+  doc_id: string;
+  events: UsageEventView[];
+}
+
+/** One document's total cost, as one row of the corpus-wide "which
+ *  filings cost the most" listing. */
+export interface DocumentCostSummaryView {
+  doc_id: string;
+  doc_key: string | null;
+  filename: string | null;
+  total_cost_inr: number;
+}
+
+/** `GET /costing` — the dedicated costing dashboard, distinct from
+ *  AnalyticsView (which mixes pipeline throughput with a lighter
+ *  cost_inr column): a corpus-wide total, a breakdown by usage source,
+ *  and a per-document listing sorted by spend descending. */
+export interface CorpusCostView {
+  total_cost_inr: number;
+  by_source: CostBySourceView[];
+  by_document: DocumentCostSummaryView[];
 }
 
 export interface AnalyticsView {
@@ -165,4 +226,5 @@ export interface AnalyticsView {
   documents_complete: number;
   documents_failed: number;
   chunk_count: number;
+  total_cost_inr: number;
 }

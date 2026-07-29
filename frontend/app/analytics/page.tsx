@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/shell/PageHeader";
 import { LedgerTotals } from "@/components/analytics/LedgerTotals";
 import { StageThroughput } from "@/components/analytics/StageThroughput";
 import { ConfidenceHistogram } from "@/components/analytics/ConfidenceHistogram";
-import { formatBytes, formatPercent } from "@/lib/format";
+import { formatBytes, formatInr, formatPercent } from "@/lib/format";
 
 export default function Analytics() {
   const [docKey, setDocKey] = useState("");
@@ -84,6 +84,11 @@ export default function Analytics() {
                   label: "Chunks indexed",
                   value: data.chunk_count.toLocaleString("en-IN"),
                   note: "Retrievable passages",
+                },
+                {
+                  label: "Total cost",
+                  value: formatInr(data.total_cost_inr),
+                  note: "OCR pages + LLM tokens, priced in INR",
                 },
               ]}
             />

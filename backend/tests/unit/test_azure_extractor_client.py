@@ -26,8 +26,13 @@ def _client_returning(monkeypatch: pytest.MonkeyPatch, content: str | None) -> d
     class _Choice:
         message = _Msg()
 
+    class _Usage:
+        prompt_tokens = 30
+        completion_tokens = 9
+
     class _Resp:
         choices = [_Choice()]
+        usage = _Usage()
 
     class _Completions:
         def create(self, **kwargs: object) -> _Resp:
@@ -59,7 +64,10 @@ def test_extract_parses_json_content(monkeypatch: pytest.MonkeyPatch) -> None:
         endpoint="e", key="k", deployment="dep1", model="gpt-4o", api_version="2024-10-21"
     )
     result = c.extract(system="sys", user="usr")
-    assert result == payload
+    assert result.data == payload
+    assert result.usage is not None
+    assert result.usage.input_tokens == 30
+    assert result.usage.output_tokens == 9
     assert calls["kwargs"]["response_format"] == {"type": "json_object"}
     assert calls["kwargs"]["temperature"] == 0
 
@@ -71,7 +79,7 @@ def test_extract_malformed_json_returns_empty_dict(monkeypatch: pytest.MonkeyPat
     c = AzureOpenAIExtractorClient(
         endpoint="e", key="k", deployment="dep1", model="gpt-4o", api_version="2024-10-21"
     )
-    assert c.extract(system="sys", user="usr") == {}
+    assert c.extract(system="sys", user="usr").data == {}
 
 
 def test_extract_empty_content_returns_empty_dict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +89,7 @@ def test_extract_empty_content_returns_empty_dict(monkeypatch: pytest.MonkeyPatc
     c = AzureOpenAIExtractorClient(
         endpoint="e", key="k", deployment="dep1", model="gpt-4o", api_version="2024-10-21"
     )
-    assert c.extract(system="sys", user="usr") == {}
+    assert c.extract(system="sys", user="usr").data == {}
 
 
 def test_extract_non_dict_json_returns_empty_dict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,7 +99,7 @@ def test_extract_non_dict_json_returns_empty_dict(monkeypatch: pytest.MonkeyPatc
     c = AzureOpenAIExtractorClient(
         endpoint="e", key="k", deployment="dep1", model="gpt-4o", api_version="2024-10-21"
     )
-    assert c.extract(system="sys", user="usr") == {}
+    assert c.extract(system="sys", user="usr").data == {}
 
 
 def test_from_settings_none_when_unconfigured() -> None:

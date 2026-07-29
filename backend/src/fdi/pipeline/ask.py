@@ -6,6 +6,7 @@ LLM's final content or a locally-built best-effort answer on exhaustion
 (design spec decision 12 -- no extra "force a final answer" LLM call)."""
 
 import json
+import uuid
 from collections.abc import Mapping
 
 import structlog
@@ -13,6 +14,7 @@ import structlog
 from fdi.core.agent import dedup_citations, extract_citations
 from fdi.pipeline.agent import AgentClient
 from fdi.pipeline.agent_tools import TOOL_SCHEMAS, AgentContext, execute_tool
+from fdi.platform.db.repository import RegistryRepository
 
 log = structlog.get_logger(__name__)
 
@@ -39,6 +41,14 @@ async def answer_question(
 
     for round_num in range(max_rounds):
         resp = agent_client.complete(messages, TOOL_SCHEMAS)
+        if resp.usage is not None:
+            await RegistryRepository(ctx.session).record_llm_usage(
+                str(uuid.uuid4()), doc_id=None, stage_run_id=None,
+                source="ask_agent", correlation_id=ctx.correlation_id,
+                model=resp.usage.model, input_tokens=resp.usage.input_tokens,
+                output_tokens=resp.usage.output_tokens,
+                duration_ms=resp.usage.duration_ms,
+            )
         if resp.tool_calls is None:
             return {
                 "answer": resp.content or "",

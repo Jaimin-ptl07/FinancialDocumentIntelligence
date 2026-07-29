@@ -20,6 +20,10 @@ describe("Spine", () => {
       "href",
       "/analytics",
     );
+    expect(screen.getByRole("link", { name: "Costing" })).toHaveAttribute(
+      "href",
+      "/costing",
+    );
   });
 
   it("exposes the rail as a navigation landmark", () => {

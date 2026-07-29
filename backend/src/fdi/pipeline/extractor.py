@@ -53,6 +53,7 @@ resolving only doc_id would require."""
 
 import contextlib
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol, cast, runtime_checkable
@@ -64,6 +65,7 @@ from fdi.core.basis import page_basis
 from fdi.core.extractor import (
     EXTRACTION_RECORD_VERSION,
     Candidate,
+    ExtractResult,
     FieldSpec,
     UnitSpec,
     assemble_result,
@@ -77,6 +79,7 @@ from fdi.core.extractor import (
     unit_needs_tables,
     unit_top_k,
 )
+from fdi.core.pricing import LlmCallUsage
 from fdi.core.provenance import resolve_evidence_regions, resolve_field_regions
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
@@ -91,21 +94,25 @@ log = structlog.get_logger(__name__)
 
 @runtime_checkable
 class ExtractorClient(Protocol):
-    def extract(self, *, system: str, user: str) -> Mapping[str, object]: ...
+    def extract(self, *, system: str, user: str) -> ExtractResult: ...
 
 
 class FakeExtractorClient:
     """Replays scripted {value, source, confidence}-shaped dicts, one per
     call, in order -- mirrors fdi.pipeline.agent.FakeAgentClient exactly
     (same AssertionError-on-overcall posture, a loud test-diagnosable
-    failure rather than a confusing IndexError deep inside extract_field)."""
+    failure rather than a confusing IndexError deep inside extract_field).
+    Constructor is unchanged (still `list[Mapping[str, object]]`) -- each
+    scripted mapping is wrapped into an ExtractResult with usage=None
+    internally, so no existing FakeExtractorClient(...) construction site
+    needs updating for the costing feature."""
 
     def __init__(self, results: list[Mapping[str, object]]) -> None:
         self._results = results
         self._next = 0
         self.calls: list[tuple[str, str]] = []
 
-    def extract(self, *, system: str, user: str) -> Mapping[str, object]:
+    def extract(self, *, system: str, user: str) -> ExtractResult:
         self.calls.append((system, user))
         if self._next >= len(self._results):
             raise AssertionError(
@@ -114,7 +121,7 @@ class FakeExtractorClient:
             )
         result = self._results[self._next]
         self._next += 1
-        return result
+        return ExtractResult(data=result)
 
 
 @dataclass
@@ -126,6 +133,25 @@ class ExtractContext:
     doc_id: str
     doc_key: str
     version: int
+    # Costing feature (docs/superpowers/specs/2026-07-28-costing-feature-
+    # design.md): threaded through to _record_llm_usage's llm_usage_event
+    # rows. Optional, appended last -- every existing keyword-only
+    # ExtractContext(...) construction site is unaffected.
+    correlation_id: str | None = None
+
+
+async def _record_llm_usage(
+    *, ctx: ExtractContext, source: str, usage: LlmCallUsage
+) -> None:
+    """Persist one real ExtractorClient.extract() call's usage. stage_run_id
+    is always None here -- extract_document runs outside run_stage entirely
+    (it is a synchronous route, not a Celery-dispatched stage)."""
+    await RegistryRepository(ctx.session).record_llm_usage(
+        str(uuid.uuid4()), doc_id=ctx.doc_id, stage_run_id=None,
+        source=source, correlation_id=ctx.correlation_id,
+        model=usage.model, input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens, duration_ms=usage.duration_ms,
+    )
 
 
 _POOL_K = 60
@@ -291,7 +317,12 @@ async def extract_unit(
     system, user = build_unit_messages(unit, prompt_candidates)
     raw: Mapping[str, object] = {}
     with contextlib.suppress(Exception):  # never raise (decision 10)
-        raw = client.extract(system=system, user=user)
+        result = client.extract(system=system, user=user)
+        raw = result.data
+        if result.usage is not None:
+            await _record_llm_usage(
+                ctx=ctx, source="extract_document", usage=result.usage,
+            )
     return assemble_unit_results(unit, raw, ranked)
 
 
@@ -310,7 +341,12 @@ async def extract_field(
     system, user = build_extraction_messages(field, ranked)
     raw: Mapping[str, object] = {}
     with contextlib.suppress(Exception):  # never raise (decision 10)
-        raw = client.extract(system=system, user=user)
+        result = client.extract(system=system, user=user)
+        raw = result.data
+        if result.usage is not None:
+            await _record_llm_usage(
+                ctx=ctx, source="extract_document", usage=result.usage,
+            )
     return assemble_result(field, raw, ranked)
 
 

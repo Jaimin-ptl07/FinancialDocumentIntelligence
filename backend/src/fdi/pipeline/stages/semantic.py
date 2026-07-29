@@ -6,15 +6,38 @@ Content-addressed on `derived_input_hash([ast.output_hash])` +
 `SemanticStage.version` -- deliberate, since the LLM is non-deterministic: a
 second run against the same `ast` artifact is a store cache hit that does NOT
 call the client again (proven in tests/integration/test_semantic_stage.py with
-a call-counting fake)."""
+a call-counting fake). Each real classify() call reports its LlmCallUsage to
+ctx.services["usage"] (costing feature, docs/superpowers/specs/2026-07-28-
+costing-feature-design.md) -- run_stage persists these as llm_usage_event
+rows after this stage returns, so a cache hit (this method never runs) does
+not bill again either.
+
+A single section's classify() call can fail against a real provider without
+the whole document being unclassifiable -- observed in production as Azure
+OpenAI content-filter rejections (400 content_filter) on ordinary annual-
+report sections (POSH/safety-incident/geopolitical-risk paragraphs are
+common false-positive triggers), which the SDK raises as an exception, not
+a normal response. On a large filing (1000+ sections) failing the entire
+stage over one flagged paragraph is disproportionate and blocks every
+downstream stage. Each section's classify() call is therefore guarded
+individually: a failure degrades THAT section to SectionType.OTHER and logs
+a warning, matching the "never crash the whole job over one bad input"
+posture fdi.core.extractor already uses throughout. No response means no
+usage to bill (costing spec decision 4) -- a guarded failure records
+nothing, exactly like a request that errored before any response arrived."""
 
 from collections.abc import Mapping
 from typing import cast
 
-from fdi.core.semantic import SectionType, build_snippet
+import structlog
+
+from fdi.core.semantic import ClassifyResult, SectionType, build_snippet
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.semantic import SemanticClient
 from fdi.pipeline.stage import StageContext
+from fdi.pipeline.usage import UsageAccumulator
+
+log = structlog.get_logger(__name__)
 
 
 class SemanticStage:
@@ -25,6 +48,7 @@ class SemanticStage:
     async def run(self, ctx: StageContext) -> object:
         ast = cast(Mapping[str, object], await ctx.read("ast"))
         client = cast(SemanticClient, ctx.services["semantic"])
+        usage = cast(UsageAccumulator, ctx.services["usage"])
 
         sections_out: list[dict[str, object]] = []
         sections_raw = ast.get("sections")
@@ -41,8 +65,17 @@ class SemanticStage:
                     else []
                 )
                 snippet = build_snippet(paragraphs)
-                label = client.classify(heading, snippet)
-                section_type = SectionType(label)
+                try:
+                    result = client.classify(heading, snippet)
+                except Exception as exc:
+                    log.warning(
+                        "semantic.classify_failed", doc_id=ctx.doc_id,
+                        heading=heading, error=repr(exc),
+                    )
+                    result = ClassifyResult(label=SectionType.OTHER.value)
+                if result.usage is not None:
+                    usage.record_llm("semantic_classify", result.usage)
+                section_type = SectionType(result.label)
                 sections_out.append(
                     {
                         "heading": heading_raw,

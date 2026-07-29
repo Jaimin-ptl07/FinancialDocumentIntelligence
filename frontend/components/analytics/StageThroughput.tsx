@@ -1,6 +1,7 @@
 "use client";
 
 import type { StageThroughputView } from "@/lib/types";
+import { formatInr } from "@/lib/format";
 
 /** One row per stage. The bar is a single magnitude — how much of the corpus
  *  cleared this stage, nothing more — so an ink fill against the ruled track
@@ -25,6 +26,9 @@ export function StageThroughput({ stages }: { stages: StageThroughputView[] }) {
           </th>
           <th className="eyebrow" style={{ textAlign: "right", padding: "var(--sp-2) 0", width: "8rem" }}>
             Median
+          </th>
+          <th className="eyebrow" style={{ textAlign: "right", padding: "var(--sp-2) 0", width: "6rem" }}>
+            Cost
           </th>
         </tr>
       </thead>
@@ -109,6 +113,17 @@ export function StageThroughput({ stages }: { stages: StageThroughputView[] }) {
                 {stage.median_seconds === null
                   ? "—"
                   : `${stage.median_seconds.toFixed(1)}s`}
+              </td>
+              <td
+                className="data"
+                style={{
+                  padding: "var(--sp-3) 0",
+                  fontSize: "var(--text-xs)",
+                  color: "var(--ink-soft)",
+                  textAlign: "right",
+                }}
+              >
+                {stage.cost_inr > 0 ? formatInr(stage.cost_inr) : "—"}
               </td>
             </tr>
           );

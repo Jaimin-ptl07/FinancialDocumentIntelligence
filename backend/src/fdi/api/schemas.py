@@ -548,7 +548,10 @@ class StageThroughputView(BaseModel):
     """One pipeline stage, counted over the LATEST run per (document, stage).
     `median_seconds` covers the `done` runs only, and is null when there are
     none -- a stage that has never succeeded has no throughput, which is not
-    the same as a throughput of zero."""
+    the same as a throughput of zero. `cost_inr` (costing feature) is the
+    corpus-wide total for this stage's billable calls, priced at read time --
+    0.0 for every stage except "ocr" and "semantic", the only two that ever
+    make a real Azure call."""
 
     name: str
     done: int
@@ -556,6 +559,75 @@ class StageThroughputView(BaseModel):
     queued: int
     failed: int
     median_seconds: float | None
+    cost_inr: float
+
+
+class CostBySourceView(BaseModel):
+    """One usage source's totals for a document, priced into INR at read
+    time (costing feature, docs/superpowers/specs/2026-07-28-costing-
+    feature-design.md). `page_count` is 0 for every LLM source;
+    `input_tokens`/`output_tokens` are 0 for "ocr"."""
+
+    source: str
+    call_count: int
+    page_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+    cost_inr: float
+
+
+class DocumentCostView(BaseModel):
+    doc_id: str
+    total_cost_inr: float
+    by_source: list[CostBySourceView]
+
+
+class UsageEventView(BaseModel):
+    """One individual OCR/LLM call for a document (costing feature
+    drill-down) -- the raw record `CostBySourceView` aggregates over.
+    `kind` is "ocr" or "llm"; `page_count` is 0 for an "llm" event,
+    `input_tokens`/`output_tokens` are 0 for an "ocr" event."""
+
+    id: str
+    kind: str
+    source: str
+    model: str
+    page_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+    stage_run_id: str | None
+    correlation_id: str | None
+    created_at: datetime
+    cost_inr: float
+
+
+class DocumentUsageEventsView(BaseModel):
+    doc_id: str
+    events: list[UsageEventView]
+
+
+class DocumentCostSummaryView(BaseModel):
+    """One document's total cost, as one row of the corpus-wide "which
+    filings cost the most" listing (costing feature)."""
+
+    doc_id: str
+    doc_key: str | None
+    filename: str | None
+    total_cost_inr: float
+
+
+class CorpusCostView(BaseModel):
+    """`GET /costing`. The dedicated costing dashboard, distinct from
+    `GET /analytics` (which mixes pipeline throughput with a `cost_inr`
+    column): a corpus-wide total, a breakdown by usage source
+    (ocr/semantic_classify/extract_document/ask_agent), and a per-document
+    listing sorted by spend descending."""
+
+    total_cost_inr: float
+    by_source: list[CostBySourceView]
+    by_document: list[DocumentCostSummaryView]
 
 
 class AnalyticsView(BaseModel):
@@ -567,3 +639,4 @@ class AnalyticsView(BaseModel):
     documents_complete: int
     documents_failed: int
     chunk_count: int
+    total_cost_inr: float

@@ -105,6 +105,16 @@ def test_entity_resolution_settings_default(monkeypatch: pytest.MonkeyPatch) -> 
     assert s.entity_sim_threshold == 0.85
 
 
+def test_costing_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.ocr_cost_per_page_inr == 1.0
+    assert s.llm_input_cost_per_mtok_usd == 2.5
+    assert s.llm_output_cost_per_mtok_usd == 10.0
+    assert s.usd_to_inr_rate == 95.0
+
+
 def test_extraction_schema_path_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

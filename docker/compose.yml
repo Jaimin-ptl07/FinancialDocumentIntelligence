@@ -48,6 +48,10 @@ x-backend-env: &backend-env
   # bare ${FDI_CORS_ORIGINS} fails the whole stack at boot with an opaque
   # SettingsError instead of falling back to the field's own default.
   FDI_CORS_ORIGINS: '${FDI_CORS_ORIGINS:-["http://localhost:3000"]}'
+  FDI_OCR_COST_PER_PAGE_INR: ${FDI_OCR_COST_PER_PAGE_INR}
+  FDI_LLM_INPUT_COST_PER_MTOK_USD: ${FDI_LLM_INPUT_COST_PER_MTOK_USD}
+  FDI_LLM_OUTPUT_COST_PER_MTOK_USD: ${FDI_LLM_OUTPUT_COST_PER_MTOK_USD}
+  FDI_USD_TO_INR_RATE: ${FDI_USD_TO_INR_RATE}
   FDI_EXTRACTION_SCHEMA_PATH: ${FDI_EXTRACTION_SCHEMA_PATH}
 
 x-backend-build: &backend-build

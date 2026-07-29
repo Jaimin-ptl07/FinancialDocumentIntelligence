@@ -12,7 +12,17 @@ async def test_alembic_version_is_stamped(migrated_engine: AsyncEngine) -> None:
         result = await conn.execute(sqlalchemy.text(
             "SELECT version_num FROM alembic_version"
         ))
-        assert result.scalar_one() == "0007"
+        assert result.scalar_one() == "0008"
+
+
+async def test_usage_event_tables_exist(migrated_engine: AsyncEngine) -> None:
+    """Migration 0008 (costing feature) adds ocr_usage_event/llm_usage_event."""
+    async with migrated_engine.connect() as conn:
+        for table in ("ocr_usage_event", "llm_usage_event"):
+            result = await conn.execute(
+                sqlalchemy.text("SELECT to_regclass(:t)"), {"t": table}
+            )
+            assert result.scalar_one() is not None, f"{table} missing"
 
 
 async def test_stage_run_status_check_bites(migrated_engine: AsyncEngine) -> None:

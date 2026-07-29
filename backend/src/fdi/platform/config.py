@@ -215,6 +215,17 @@ class Settings(BaseSettings):
     # deployed-image side of making the default resolve.
     extraction_schema_path: str = str(_default_schema_path())
 
+    # Costing (docs/superpowers/specs/2026-07-28-costing-feature-design.md).
+    # OCR is billed 1 INR/page flat. LLM is billed per Azure OpenAI's own
+    # $/M-token pricing, converted to INR at READ time (never persisted per
+    # event -- a rate change here recomputes every historical total, by
+    # design: spec decision 2). usd_to_inr_rate is a static configured
+    # value, not fetched from any FX API (spec sec 6, explicitly deferred).
+    ocr_cost_per_page_inr: float = 1.0
+    llm_input_cost_per_mtok_usd: float = 2.5
+    llm_output_cost_per_mtok_usd: float = 10.0
+    usd_to_inr_rate: float = 95.0
+
     @classmethod
     def settings_customise_sources(
         cls,

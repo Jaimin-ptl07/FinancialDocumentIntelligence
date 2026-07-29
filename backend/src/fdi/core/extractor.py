@@ -61,7 +61,20 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from fdi.core.pricing import LlmCallUsage
+
 _NUMERIC_DATA_TYPES = frozenset({"decimal", "integer"})
+
+
+@dataclass(frozen=True)
+class ExtractResult:
+    """One ExtractorClient.extract() call's outcome: the raw parsed JSON
+    dict plus the LLM usage that produced it (costing feature). `usage` is
+    None from FakeExtractorClient -- extract_unit/extract_field only record
+    a usage event when it is present."""
+
+    data: Mapping[str, object]
+    usage: LlmCallUsage | None = None
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,8 @@
 """The framework around a Stage: hashing, the content-addressed cache, persistence,
 and successor scheduling. A stage stays a pure transform; all of that lives here."""
 
+import time
+import uuid
 from collections.abc import Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,6 +18,7 @@ from fdi.pipeline.keys import (
 from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.stage import StageContext
+from fdi.pipeline.usage import UsageAccumulator
 from fdi.platform.db.models import Document
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -26,9 +29,11 @@ async def run_stage(
     session_factory: async_sessionmaker[AsyncSession], store: ArtifactStore,
     registry: StageRegistry, resolver: DagResolver,
     services: Mapping[str, object] | None = None,
+    azure_model: str = "",
 ) -> list[str]:
     stage = registry.get(stage_name)
-    svcs = services if services is not None else {}
+    usage = UsageAccumulator()
+    svcs: dict[str, object] = {**(services or {}), "usage": usage}
 
     async def read_artifact(d: str, upstream: str) -> object:
         async with session_factory() as s:
@@ -80,6 +85,7 @@ async def run_stage(
         return resolver.successors(stage_name)
 
     # 3. cache miss: run, validate, store, record.
+    start = time.perf_counter()
     try:
         body = await stage.run(
             StageContext(
@@ -90,11 +96,72 @@ async def run_stage(
         validate_finite(body)
         await store.put_json(key, body)
     except Exception as exc:
+        await _flush_llm_usage(
+            usage, session_factory=session_factory, doc_id=doc_id,
+            run_id=run_id, correlation_id=correlation_id,
+        )
         async with session_factory() as s:
             await RegistryRepository(s).fail_run(run_id, repr(exc))
             await s.commit()
         raise
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    # OCR bills 1 real Azure DI call per stage execution -- page count is
+    # already present in the artifact body (fdi.core.ocr_schema.normalize_
+    # ocr's "pages" list), so no change to AzureOcrClient/OcrStage is
+    # needed. Costing feature (docs/superpowers/specs/2026-07-28-costing-
+    # feature-design.md sec 3.3). `azure_model` arrives as a parameter,
+    # not via get_settings() here: this function is the pure stage-
+    # execution framework and is called directly (no Settings in scope)
+    # by a large fraction of the integration suite, which fakes out
+    # services instead of configuring a real app. A get_settings() call
+    # here would require every one of those callers to also stub a full
+    # Settings() environment just to bill a page count -- tasks.py is the
+    # one real caller that already has Settings in scope; it supplies the
+    # model name, and every other caller's default ("") is a legitimate
+    # "unknown" for a purely descriptive metadata field.
+    if stage_name == "ocr" and isinstance(body, Mapping):
+        pages = body.get("pages")
+        page_count = len(pages) if isinstance(pages, list) else 0
+        async with session_factory() as s:
+            await RegistryRepository(s).record_ocr_usage(
+                str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+                correlation_id=correlation_id, page_count=page_count,
+                azure_model=azure_model, duration_ms=duration_ms,
+            )
+            await s.commit()
+    await _flush_llm_usage(
+        usage, session_factory=session_factory, doc_id=doc_id,
+        run_id=run_id, correlation_id=correlation_id,
+    )
     async with session_factory() as s:
         await RegistryRepository(s).finish_run(run_id, output_hash(body), key)
         await s.commit()
     return resolver.successors(stage_name)
+
+
+async def _flush_llm_usage(
+    usage: UsageAccumulator,
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    doc_id: str,
+    run_id: str,
+    correlation_id: str | None,
+) -> None:
+    """Persist every LLM call a stage reported to its UsageAccumulator, as
+    one llm_usage_event row each, attributed to this stage execution's
+    run_id. Called on BOTH the success and the failure path -- a stage
+    that made 3 real calls before erroring on a 4th still billed for those
+    3 (spec decision 4/9)."""
+    if not usage.llm_calls:
+        return
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        for call in usage.llm_calls:
+            await repo.record_llm_usage(
+                str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+                source=call.source, correlation_id=correlation_id,
+                model=call.usage.model, input_tokens=call.usage.input_tokens,
+                output_tokens=call.usage.output_tokens,
+                duration_ms=call.usage.duration_ms,
+            )
+        await s.commit()

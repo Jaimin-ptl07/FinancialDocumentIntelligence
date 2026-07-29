@@ -74,6 +74,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.artifact_store = ArtifactStore(
         client, bucket=settings.s3_bucket, presign_client=presign_client
     )
+    # Bucket creation was previously lazy -- only /health's s3 probe or a
+    # worker's first task happened to call ensure_bucket(). On a fresh
+    # environment (bucket never created), any OTHER route hit first raised
+    # minio.error.S3Error: NoSuchBucket instead of the app just working.
+    # Doing it here means the bucket exists before the app can serve traffic.
+    await app.state.artifact_store.ensure_bucket()
     app.state.embedder = BgeEmbeddingClient.from_settings(settings)
     app.state.vector_store = MilvusVectorStore.from_settings(settings)
     app.state.graph_store = Neo4jGraphStore.from_settings(settings)
