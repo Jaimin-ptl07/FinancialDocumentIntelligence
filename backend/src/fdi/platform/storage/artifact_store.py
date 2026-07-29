@@ -102,6 +102,29 @@ class ArtifactStore:
 
         return await asyncio.to_thread(_stat)
 
+    async def delete_prefix(self, prefix: str) -> None:
+        """Delete every object under `prefix`. `remove_objects` takes a lazy
+        iterable of `DeleteObject`s and returns a lazy iterable of errors --
+        both must be forced with `list(...)`, or the SDK never issues the
+        batch delete call at all."""
+        from minio.deleteobjects import DeleteObject
+
+        def _delete() -> None:
+            names = (
+                obj.object_name
+                for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True)
+                if obj.object_name is not None
+            )
+            errors = list(
+                self._client.remove_objects(
+                    self._bucket, (DeleteObject(name) for name in names)
+                )
+            )
+            if errors:
+                raise RuntimeError(f"failed to delete some objects under {prefix!r}: {errors}")
+
+        await asyncio.to_thread(_delete)
+
     async def presigned_get_url(self, key: str, ttl_seconds: int) -> str:
         url: str = await asyncio.to_thread(
             self._presign_client.presigned_get_object,

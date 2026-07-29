@@ -46,9 +46,18 @@ export function ConfidenceHistogram({ fields }: { fields: ExtractFieldView[] }) 
           return (
             <div
               key={band.lo}
+              role="img"
               title={label}
               aria-label={label}
-              style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%" }}
+              className="confidence-histogram-bar"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "flex-end",
+                height: "100%",
+                borderRadius: "var(--radius-sm)",
+                padding: "var(--sp-1) 0 0",
+              }}
             >
               <span
                 className="data"
@@ -67,7 +76,7 @@ export function ConfidenceHistogram({ fields }: { fields: ExtractFieldView[] }) 
                   minHeight: count > 0 ? "3px" : "1px",
                   background: count > 0 ? "var(--ink)" : "var(--rule)",
                   opacity: count > 0 ? inkOpacity((band.lo + band.hi) / 2) : 1,
-                  borderRadius: "4px 4px 0 0",
+                  borderRadius: "var(--radius-sm) var(--radius-sm) 0 0",
                 }}
               />
             </div>
@@ -85,7 +94,7 @@ export function ConfidenceHistogram({ fields }: { fields: ExtractFieldView[] }) 
           marginTop: "var(--sp-1)",
         }}
       >
-        {BANDS.map((band) => (
+        {BANDS.map((band, index) => (
           <span
             key={band.lo}
             className="data"
@@ -96,9 +105,23 @@ export function ConfidenceHistogram({ fields }: { fields: ExtractFieldView[] }) 
             }}
           >
             {band.lo.toFixed(1)}
+            {index === BANDS.length - 1 ? "–1.0" : ""}
           </span>
         ))}
       </div>
+
+      {/* Hover affordance for the tooltip-bearing bars above: a faint wash
+          from the system's own inset-row tone, not a new colour, so a reader
+          can find the interactive target before the native title tooltip
+          appears. */}
+      <style>{`
+        .confidence-histogram-bar {
+          transition: background-color 120ms ease;
+        }
+        .confidence-histogram-bar:hover {
+          background: var(--leaf-2);
+        }
+      `}</style>
     </figure>
   );
 }

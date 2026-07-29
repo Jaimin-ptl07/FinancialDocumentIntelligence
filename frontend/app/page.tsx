@@ -43,13 +43,17 @@ export default function Dashboard() {
         ) : data.documents.length === 0 ? (
           <div
             className="sheet"
-            style={{ padding: "var(--sp-16)", textAlign: "center" }}
+            style={{
+              padding: "var(--sp-16)",
+              textAlign: "center",
+              boxShadow: "var(--shadow-md)",
+            }}
           >
             <p
               className="display"
               style={{
                 fontSize: "var(--text-lg)",
-                marginBottom: "var(--sp-2)",
+                marginBottom: "var(--sp-3)",
               }}
             >
               No filings yet
@@ -58,6 +62,9 @@ export default function Dashboard() {
               style={{
                 color: "var(--ink-soft)",
                 marginBottom: "var(--sp-6)",
+                maxWidth: "42ch",
+                marginLeft: "auto",
+                marginRight: "auto",
               }}
             >
               Upload an annual report to start reading figures out of it.
@@ -74,13 +81,14 @@ export default function Dashboard() {
               textAlign: "left",
               borderCollapse: "collapse",
               overflow: "hidden",
+              boxShadow: "var(--shadow-md)",
             }}
           >
             <caption className="sr-only">
               Filings, with pipeline progress
             </caption>
             <thead>
-              <tr>
+              <tr style={{ borderBottom: "1px solid var(--rule)" }}>
                 <th
                   className="eyebrow"
                   style={{ padding: "var(--sp-3) var(--sp-4)" }}
@@ -107,6 +115,15 @@ export default function Dashboard() {
                   style={{ padding: "var(--sp-3) var(--sp-4)" }}
                 >
                   Pipeline
+                </th>
+                <th
+                  className="eyebrow"
+                  style={{
+                    padding: "var(--sp-3) var(--sp-4)",
+                    textAlign: "right",
+                  }}
+                >
+                  <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>

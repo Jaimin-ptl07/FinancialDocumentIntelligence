@@ -1698,6 +1698,34 @@ async def test_extract_document_404_unknown_doc_key(make_client, _alembic_applie
     assert r.status_code == 404
 
 
+async def test_extract_document_409_when_index_not_done(
+    make_client, session_factory, store, _alembic_applied
+) -> None:
+    """A document with no `index` stage_run at all -- the pipeline hasn't
+    reached its terminal stage yet, so Milvus has nothing searchable for it.
+    Extracting now would silently return null for every field (RT-9); the
+    route must refuse instead."""
+    import uuid
+
+    from fdi.api.deps import get_extractor_client
+    from fdi.pipeline.extractor import FakeExtractorClient
+    from fdi.pipeline.intake import intake_document
+
+    marker = uuid.uuid4().hex
+    await intake_document(
+        pdf=f"%PDF-1.7\n%fake-{marker}\n".encode(), filename="a.pdf",
+        doc_key=f"pending-{marker}", content_type="application/pdf",
+        session_factory=session_factory, store=store,
+    )
+
+    async with make_client(
+        dependency_overrides={get_extractor_client: lambda: FakeExtractorClient([])}
+    ) as client:
+        r = await client.post("/extract/document", json={"doc_key": f"pending-{marker}"})
+    assert r.status_code == 409
+    assert "not finished indexing" in r.json()["detail"]
+
+
 async def test_extract_document_happy_path_with_fake_extractor_client_override(
     make_client, session_factory, store, tmp_path, _alembic_applied
 ) -> None:
@@ -1800,6 +1828,24 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
         "metadata": {"doc_id": doc.id, "heading": "Overview", "chunk_id": "s0", "page": 1,
                       "text": f"ACME is a manufacturer {marker}."},
     }])
+
+    # The route 409s unless `index` -- the pipeline's terminal stage -- is
+    # recorded `done` (see routes.py's extract_document_route: an in-
+    # progress pipeline means Milvus has no searchable chunks yet, and
+    # extracting against it would silently return null for every field).
+    # This test bypasses the real EmbeddingStage/IndexStage machinery (it
+    # populates `fake_vector_store` directly, above), so there is no real
+    # `index` run to point to -- a synthetic `done` row is recorded here to
+    # represent "the pipeline finished", exactly what the real stages would
+    # have left behind.
+    async with session_factory() as s:
+        from fdi.platform.db.repository import RegistryRepository
+
+        repo = RegistryRepository(s)
+        index_run_id = str(uuid.uuid4())
+        await repo.start_run(index_run_id, doc.id, "index", 1, "fake", None)
+        await repo.finish_run(index_run_id, "fake", "fake-key")
+        await s.commit()
 
     # One call per Retrieval Unit, not per field: the response is keyed by
     # field_path, falling back to field_name when the schema omits it (as

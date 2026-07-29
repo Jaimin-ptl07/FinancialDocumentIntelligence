@@ -1,7 +1,7 @@
 import pytest
 
 from fdi.core.ontology import CanonicalConcept
-from fdi.core.tables import filter_tables, find_concept_rows, parse_numeric
+from fdi.core.tables import filter_tables, find_concept_rows, find_field_rows, parse_numeric
 
 
 @pytest.mark.parametrize(("raw", "expected"), [
@@ -128,3 +128,25 @@ def test_filter_tables_drops_malformed_grid_only_when_keyword_given() -> None:
     malformed = {"grid": "not-a-mapping"}
     assert filter_tables([malformed], "fy24") == []
     assert filter_tables([malformed], None) == [malformed]
+
+
+def test_find_field_rows_matches_by_keyword_and_returns_coordinates() -> None:
+    grid = _grid(
+        ["Particulars", "Column 1 (most recent)", "Column 2 (prior)"],
+        [["Property, plant & Equipments", "2018.29", "1838.80"]],
+    )
+    matches = find_field_rows(grid, ("property", "plant", "equipments"))
+    assert matches == [{"row": 1, "row_label": "Property, plant & Equipments"}]
+
+
+def test_find_field_rows_no_match_returns_empty() -> None:
+    grid = _grid(
+        ["Particulars", "Column 1 (most recent)", "Column 2 (prior)"],
+        [["Intangible assets", "17.71", "21.07"]],
+    )
+    assert find_field_rows(grid, ("property", "plant", "equipments")) == []
+
+
+def test_find_field_rows_degrades_on_malformed_grid() -> None:
+    assert find_field_rows({}, ("revenue",)) == []
+    assert find_field_rows({"n_rows": "bad"}, ("revenue",)) == []

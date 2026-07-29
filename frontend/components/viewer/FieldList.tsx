@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { ExtractFieldView } from "@/lib/types";
+import { fieldId as toFieldId } from "@/lib/format";
 import { Value } from "@/components/data/Value";
 
 type Lens = "all" | "soft" | "missing";
@@ -14,6 +15,13 @@ const LENSES: { key: Lens; label: string }[] = [
 
 const LOW_CONFIDENCE = 0.5;
 
+// `field_name` is a display label the schema deliberately reuses across
+// modules (e.g. "Cash on hand" appears under both Balance Sheet and a note),
+// so it cannot key a React list or identify a selected row on its own --
+// pairing it with its position in `fields` gives every row a unique id while
+// keeping the label itself untouched everywhere it's displayed.
+type IdentifiedField = { field: ExtractFieldView; fieldId: string };
+
 export function FieldList({
   fields,
   selected,
@@ -21,21 +29,30 @@ export function FieldList({
 }: {
   fields: ExtractFieldView[];
   selected: string | null;
-  onSelect: (fieldName: string) => void;
+  onSelect: (fieldId: string) => void;
 }) {
   const [lens, setLens] = useState<Lens>("all");
 
+  const identified = useMemo<IdentifiedField[]>(
+    () => fields.map((field, index) => ({ field, fieldId: toFieldId(index, field.field_name) })),
+    [fields],
+  );
+
   const { found, soft, missing } = useMemo(() => {
-    const found = fields.filter((f) => f.value !== null && f.value !== undefined);
+    const found = identified.filter(
+      (f) => f.field.value !== null && f.field.value !== undefined,
+    );
     return {
       found,
-      soft: found.filter((f) => f.confidence < LOW_CONFIDENCE),
-      missing: fields.filter((f) => f.value === null || f.value === undefined),
+      soft: found.filter((f) => f.field.confidence < LOW_CONFIDENCE),
+      missing: identified.filter(
+        (f) => f.field.value === null || f.field.value === undefined,
+      ),
     };
-  }, [fields]);
+  }, [identified]);
 
   const shown =
-    lens === "soft" ? soft : lens === "missing" ? missing : fields;
+    lens === "soft" ? soft : lens === "missing" ? missing : identified;
 
   return (
     <div>
@@ -58,9 +75,19 @@ export function FieldList({
             {found.length}/{fields.length}
           </span>
           {soft.length > 0 ? (
+            // Used to be carried by --flag color alone, which now equals
+            // plain ink — indistinguishable from the count beside it. A
+            // dotted underline (matching the soft-figure treatment in
+            // Value.tsx) plus a weight bump gives it a shape of its own.
             <span
               className="data"
-              style={{ fontSize: "var(--text-xs)", color: "var(--flag)" }}
+              style={{
+                fontSize: "var(--text-xs)",
+                fontWeight: 600,
+                color: "var(--flag)",
+                borderBottom: "1.5px dotted var(--flag)",
+                paddingBottom: 1,
+              }}
             >
               {soft.length} soft
             </span>
@@ -114,11 +141,12 @@ export function FieldList({
             : "Every field in this schema was found."}
         </p>
       ) : (
-        shown.map((field) => (
+        shown.map(({ field, fieldId }) => (
           <Value
-            key={field.field_name}
+            key={fieldId}
             field={field}
-            selected={selected === field.field_name}
+            fieldId={fieldId}
+            selected={selected === fieldId}
             onSelect={onSelect}
           />
         ))

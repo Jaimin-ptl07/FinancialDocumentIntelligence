@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import type { DragEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { getStages, startStage, uploadDocument } from "@/lib/api";
 import type { DocumentView } from "@/lib/types";
@@ -13,6 +14,7 @@ import { formatBytes } from "@/lib/format";
 export default function Ingest() {
   const [file, setFile] = useState<File | null>(null);
   const [document, setDocument] = useState<DocumentView | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const start = useMutation({
     mutationFn: async (chosen: File) => {
@@ -44,6 +46,29 @@ export default function Ingest() {
   const failed = stages.find((s) => s.status === "failed");
   const finished = stages.find((s) => s.name === TERMINAL_STAGE)?.status === "done";
 
+  // The dropzone is additive over the native input, not a replacement for
+  // it: drag-and-drop only ever ends by calling the same setFile the input's
+  // onChange calls, so there is exactly one path a chosen file can take.
+  const acceptDrop = (dropped: File | undefined) => {
+    if (dropped && dropped.type === "application/pdf") setFile(dropped);
+  };
+
+  const onDragOver = (e: DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setDragActive(true);
+  };
+
+  const onDragLeave = (e: DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+  };
+
+  const onDrop = (e: DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+    acceptDrop(e.dataTransfer.files?.[0]);
+  };
+
   return (
     <>
       <PageHeader
@@ -57,33 +82,80 @@ export default function Ingest() {
           className="sheet"
           style={{ padding: "var(--sp-6)", maxWidth: "40rem" }}
         >
-          <label
-            htmlFor="pdf"
+          <div
             className="eyebrow"
-            style={{ display: "block", color: "var(--ink)", marginBottom: "var(--sp-2)" }}
+            style={{ marginBottom: "var(--sp-3)" }}
           >
             Annual report PDF
-          </label>
-          <input
-            id="pdf"
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="input"
-            style={{ marginBottom: "var(--sp-3)" }}
-          />
-          {file ? (
-            <p
+          </div>
+
+          {/* The dropzone is a <label> so the entire panel — not just the
+              native input — is a click target; the input keeps its own
+              "Annual report PDF" accessible name via aria-label (rather than
+              inheriting the label's visible text, which is the drop
+              instructions) so a screen reader and a test driving the input
+              directly both see the same name either way. Drag-and-drop is
+              layered on top of onChange, not a replacement for it — both
+              paths end at the same setFile. */}
+          <label
+            htmlFor="pdf"
+            onDragOver={onDragOver}
+            onDragEnter={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            className="sheet-flat"
+            style={{
+              display: "block",
+              position: "relative",
+              padding: "var(--sp-6)",
+              marginBottom: "var(--sp-3)",
+              textAlign: "center",
+              cursor: "pointer",
+              borderStyle: "dashed",
+              borderColor: dragActive ? "var(--ink)" : "var(--rule)",
+              background: dragActive ? "var(--leaf-2)" : "var(--leaf)",
+              transition: "background-color 120ms ease, border-color 120ms ease",
+            }}
+          >
+            <div
               className="data"
-              style={{
-                fontSize: "var(--text-xs)",
-                color: "var(--ink-soft)",
-                marginBottom: "var(--sp-4)",
-              }}
+              aria-hidden="true"
+              style={{ fontSize: "var(--text-lg)", marginBottom: "var(--sp-2)" }}
             >
-              {file.name} · {formatBytes(file.size)}
-            </p>
-          ) : null}
+              {dragActive ? "↓" : "⇪"}
+            </div>
+            <div style={{ fontSize: "var(--text-sm)", marginBottom: "var(--sp-1)" }}>
+              {file ? (
+                <span className="data">
+                  {file.name} · {formatBytes(file.size)}
+                </span>
+              ) : (
+                <>Drop a PDF here, or click to browse</>
+              )}
+            </div>
+            <div style={{ fontSize: "var(--text-xs)", color: "var(--ink-faint)" }}>
+              One annual report at a time, PDF only
+            </div>
+            <input
+              id="pdf"
+              type="file"
+              accept="application/pdf"
+              aria-label="Annual report PDF"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              style={{
+                position: "absolute",
+                width: 1,
+                height: 1,
+                padding: 0,
+                margin: -1,
+                overflow: "hidden",
+                clip: "rect(0, 0, 0, 0)",
+                whiteSpace: "nowrap",
+                border: 0,
+              }}
+            />
+          </label>
+
           <button
             type="button"
             disabled={!file || start.isPending}

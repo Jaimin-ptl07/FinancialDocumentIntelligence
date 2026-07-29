@@ -1,22 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { extractDocument, getDocument, pdfUrl } from "@/lib/api";
 import { filingLabel, hasSourceFile } from "@/lib/documents";
+import { fieldId as toFieldId } from "@/lib/format";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { PdfCanvas } from "@/components/viewer/PdfCanvas";
 import { FieldList } from "@/components/viewer/FieldList";
-import { Tether } from "@/components/viewer/Tether";
 
 export function ReportViewer({ docId }: { docId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState<number | null>(null);
-  const [highlightRect, setHighlightRect] = useState<DOMRect | null>(null);
-  const [fieldRect, setFieldRect] = useState<DOMRect | null>(null);
-  const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { data: filing } = useQuery({
@@ -24,55 +21,48 @@ export function ReportViewer({ docId }: { docId: string }) {
     queryFn: () => getDocument(docId),
   });
 
-  const extract = useMutation({
-    mutationFn: () => extractDocument(filing!.doc_key ?? docId),
+  // A plain (non-forced) read is a query, not a mutation: extract_document is
+  // now cache-first server-side (a persisted record from a prior run is
+  // served with no LLM calls), so loading the viewer should show whatever's
+  // already on disk without waiting for a click -- the click is for the
+  // FIRST read of a filing, or for forcing a fresh one via `extract.refetch`
+  // after `force` is flipped true below.
+  const canRead = Boolean(filing && hasSourceFile(filing));
+  // A ref, not state: `refetch()` can run in the same tick as the click that
+  // sets this, and queryFn must see the flag that click intended, not a
+  // batched-and-not-yet-applied state update.
+  const forceRef = useRef(false);
+  const extract = useQuery({
+    queryKey: ["extract", docId, filing?.doc_key],
+    queryFn: () => {
+      const force = forceRef.current;
+      forceRef.current = false;
+      return extractDocument(filing!.doc_key ?? docId, undefined, force);
+    },
+    enabled: canRead,
   });
 
-  // Memoized because the tether re-measures whenever `fields` changes identity;
-  // a fresh array on every render would make that effect run on every paint.
   const fields = useMemo(() => extract.data?.fields ?? [], [extract.data]);
-  const active = fields.find((f) => f.field_name === selected) ?? null;
+  // Indexed by position, matching FieldList's fieldId scheme: field_name
+  // alone collides across modules (e.g. two "Cash on hand" rows), so it
+  // cannot resolve which field is selected on its own.
+  const active =
+    selected !== null
+      ? (fields.find((f, i) => toFieldId(i, f.field_name) === selected) ?? null)
+      : null;
 
   // Selecting a field is what turns the page. The reference mark says p84, so
   // clicking it must actually land on 84.
   const select = useCallback(
-    (fieldName: string) => {
-      setSelected(fieldName);
-      const target = fields.find((f) => f.field_name === fieldName);
+    (fieldId: string) => {
+      setSelected(fieldId);
+      const target = fields.find((f, i) => toFieldId(i, f.field_name) === fieldId);
       if (target?.source.page) setPage(target.source.page);
     },
     [fields],
   );
 
-  // Both endpoints of the tether move whenever the panes scroll or the window
-  // resizes, so the geometry is re-measured on those events rather than only
-  // when the selection changes.
-  useEffect(() => {
-    const measure = () => {
-      setContainerRect(containerRef.current?.getBoundingClientRect() ?? null);
-      if (!selected) {
-        setFieldRect(null);
-        return;
-      }
-      const row = containerRef.current?.querySelector(
-        `[data-field="${CSS.escape(selected)}"]`,
-      );
-      setFieldRect(row?.getBoundingClientRect() ?? null);
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
-    return () => {
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
-    };
-  }, [selected, fields, page]);
-
   const onPageCount = useCallback((count: number) => setPageCount(count), []);
-  const onHighlightRect = useCallback(
-    (rect: DOMRect | null) => setHighlightRect(rect),
-    [],
-  );
 
   return (
     <>
@@ -82,22 +72,36 @@ export function ReportViewer({ docId }: { docId: string }) {
       >
         <button
           type="button"
-          disabled={!filing || !hasSourceFile(filing) || extract.isPending}
-          onClick={() => extract.mutate()}
+          disabled={!canRead || extract.isFetching}
+          onClick={() => extract.refetch()}
           className="btn btn-primary"
         >
-          {extract.isPending ? "Reading figures" : "Read figures"}
+          {extract.isFetching ? "Reading figures" : "Read figures"}
         </button>
+        {extract.data ? (
+          <button
+            type="button"
+            disabled={extract.isFetching}
+            onClick={() => {
+              forceRef.current = true;
+              extract.refetch();
+            }}
+            className="btn"
+            title="Discard the stored reading and extract again from scratch"
+          >
+            Re-extract
+          </button>
+        ) : null}
       </PageHeader>
 
       <div
         ref={containerRef}
         className="viewer-split relative"
-        style={{ minHeight: "calc(100vh - 129px)" }}
+        style={{ height: "calc(100vh - 129px)" }}
       >
         <div
           className="flex-1 min-w-0 flex flex-col"
-          style={{ borderRight: "1px solid var(--rule)" }}
+          style={{ borderRight: "1px solid var(--rule)", minHeight: 0 }}
         >
           <div
             className="flex items-center shrink-0"
@@ -162,7 +166,6 @@ export function ReportViewer({ docId }: { docId: string }) {
                 page={page}
                 regions={active?.source.bounding_regions ?? null}
                 onPageCount={onPageCount}
-                onHighlightRect={onHighlightRect}
               />
             )}
           </div>
@@ -191,8 +194,6 @@ export function ReportViewer({ docId }: { docId: string }) {
             <FieldList fields={fields} selected={selected} onSelect={select} />
           )}
         </div>
-
-        <Tether from={fieldRect} to={highlightRect} container={containerRect} />
       </div>
     </>
   );

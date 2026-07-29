@@ -131,19 +131,59 @@ def validate_extraction_schema(doc: object) -> list[str]:
                 continue
 
             for fi, field in enumerate(fields):
-                fwhere = f"{uwhere}.fields[{fi}]"
-                if not isinstance(field, Mapping):
-                    errors.append(f"{fwhere} must be an object")
-                    continue
-                for key in ("field_name", "data_type", "extraction_prompt"):
-                    value = field.get(key)
-                    if not isinstance(value, str) or not value:
-                        errors.append(f'{fwhere}."{key}" must be a non-empty string')
-                data_type = field.get("data_type")
-                if isinstance(data_type, str) and data_type and data_type not in _DATA_TYPES:
-                    errors.append(
-                        f'{fwhere}."data_type" {data_type!r} is not one of '
-                        f"{sorted(_DATA_TYPES)}"
-                    )
+                _validate_field_node(field, f"{uwhere}.fields[{fi}]", errors)
 
     return errors
+
+
+_ORIGINS: Final = frozenset({"extracted", "derived"})
+
+
+def _validate_field_node(field: object, where: str, errors: list[str]) -> None:
+    """Validate one field node, recursing into v4 group nodes (a field carrying
+    its own non-empty `fields` list). The rules are ADDITIVE so a v3.1 flat leaf
+    (no `origin`, no `tag`, no children) is judged exactly as before:
+
+    * every node needs a non-empty `field_name`;
+    * a group node (has children) needs only that, then recurses;
+    * a leaf's `origin`, if present, must be "extracted" or "derived";
+    * a v4 leaf (origin present) needs a non-empty `tag`;
+    * a derived leaf needs neither `extraction_prompt` nor `data_type`;
+    * every other leaf (extracted, or a v3.1 leaf with no origin) needs
+      `data_type` and `extraction_prompt`, as before;
+    * any `data_type` that is present must be one of the known types.
+    """
+    if not isinstance(field, Mapping):
+        errors.append(f"{where} must be an object")
+        return
+
+    name = field.get("field_name")
+    if not isinstance(name, str) or not name:
+        errors.append(f'{where}."field_name" must be a non-empty string')
+
+    children = field.get("fields")
+    if isinstance(children, list) and children:
+        for ci, child in enumerate(children):
+            _validate_field_node(child, f"{where}.fields[{ci}]", errors)
+        return
+
+    origin = field.get("origin")
+    if origin is not None and (not isinstance(origin, str) or origin not in _ORIGINS):
+        errors.append(f'{where}."origin" {origin!r} is not one of {sorted(_ORIGINS)}')
+
+    data_type = field.get("data_type")
+    if isinstance(data_type, str) and data_type and data_type not in _DATA_TYPES:
+        errors.append(
+            f'{where}."data_type" {data_type!r} is not one of {sorted(_DATA_TYPES)}'
+        )
+
+    if origin is not None:  # v4 leaf
+        tag = field.get("tag")
+        if not isinstance(tag, str) or not tag:
+            errors.append(f'{where}."tag" must be a non-empty string')
+
+    if origin != "derived":  # extracted leaf, or a v3.1 leaf with no origin
+        for key in ("data_type", "extraction_prompt"):
+            value = field.get(key)
+            if not isinstance(value, str) or not value:
+                errors.append(f'{where}."{key}" must be a non-empty string')

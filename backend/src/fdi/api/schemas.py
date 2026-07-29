@@ -452,6 +452,10 @@ class AskResponse(BaseModel):
 class ExtractRequest(BaseModel):
     doc_key: str
     module: str | None = None
+    # When False (the default), a persisted record for this exact
+    # (doc_id, schema) pair is served as-is -- no retrieval, no LLM calls.
+    # Set True to discard it and re-run extraction from scratch.
+    force: bool = False
 
 
 class BoundingRegionView(BaseModel):
@@ -462,15 +466,24 @@ class BoundingRegionView(BaseModel):
     polygon: list[object] = []
 
 
+class BoundingRegionsView(BaseModel):
+    """A field's bounding geometry, split by period. `current` is always a
+    list (possibly the whole-table/whole-section fallback box); `prior` is
+    [] for a non-dual-period field or when no prior-column cell was found."""
+
+    current: list[BoundingRegionView] = []
+    prior: list[BoundingRegionView] = []
+
+
 class ExtractSourceView(BaseModel):
     page: int | None
     snippet: str | None
     evidence_ids: list[str]
-    # ALWAYS a list, [] when the chunk does not map or the provenance/
-    # structure artifact is absent -- fdi.core.provenance.resolve_chunk_
-    # regions is explicit about which chunk kinds are lossy. Defaulted so an
-    # older stored extraction record still validates.
-    bounding_regions: list[BoundingRegionView] = []
+    # {current, prior}, not a flat list -- see 2026-07-25 design. A record
+    # persisted before this change (schema_version 1) will not validate here;
+    # EXTRACTION_RECORD_VERSION was bumped alongside this so a v1 record is a
+    # cache miss (re-extracted fresh), never fed to this validator.
+    bounding_regions: BoundingRegionsView = BoundingRegionsView()
 
 
 class ExtractFieldView(BaseModel):

@@ -58,7 +58,6 @@ x-backend-build: &backend-build
 services:
   postgres:
     image: postgres:18.4
-    profiles: [core]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -79,7 +78,6 @@ services:
     # as an image. This is the newest pullable tag, and is knowingly unpatched for
     # CVE-2025-62506. Local dev only -- never production. See spec 3.4.
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    profiles: [core]
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -96,7 +94,6 @@ services:
 
   redis:
     image: redis:8.8.0
-    profiles: [core]
     volumes:
       - redisdata:/data
     ports: ["6379:6379"]
@@ -110,7 +107,6 @@ services:
 
   rabbitmq:
     image: rabbitmq:4.3.2-management
-    profiles: [core]
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
@@ -127,7 +123,6 @@ services:
 
   migrate:
     <<: *backend-build
-    profiles: [core]
     environment: *backend-env
     command: ["alembic", "upgrade", "head"]
     restart: "no"
@@ -136,7 +131,6 @@ services:
 
   api:
     <<: *backend-build
-    profiles: [core]
     environment: *backend-env
     ports: ["8000:8000"]
     depends_on:
@@ -155,7 +149,6 @@ services:
 
   worker:
     <<: *backend-build
-    profiles: [core]
     environment: *backend-env
     # No --concurrency flag, deliberately. Concurrency comes from
     # FDI_WORKER_CONCURRENCY -> Settings -> app.conf.worker_concurrency (Task 13).
@@ -185,7 +178,6 @@ services:
     # FDI_NEO4J_PASSWORD the app connects with -- one source of truth, not a
     # hardcoded credential that happens to agree with Settings by coincidence.
     image: neo4j:5.26.28
-    profiles: [graph]
     environment:
       NEO4J_AUTH: ${FDI_NEO4J_USER}/${FDI_NEO4J_PASSWORD}
       # Re-exposed so the healthcheck below can expand them INSIDE the
@@ -211,7 +203,6 @@ services:
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.25
-    profiles: [vector]
     command:
       - etcd
       - --advertise-client-urls=http://127.0.0.1:2379
@@ -228,7 +219,6 @@ services:
     # service block, unlike neo4j's NEO4J_AUTH, so no environment:/healthcheck
     # change was needed here, only the config wiring above app-side.
     image: milvusdb/milvus:v2.6.20
-    profiles: [vector]
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: etcd:2379

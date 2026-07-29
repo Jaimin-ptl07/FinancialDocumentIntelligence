@@ -77,7 +77,7 @@ from fdi.core.extractor import (
     unit_needs_tables,
     unit_top_k,
 )
-from fdi.core.provenance import resolve_evidence_regions
+from fdi.core.provenance import resolve_evidence_regions, resolve_field_regions
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
@@ -333,23 +333,27 @@ async def _read_latest_artifact(
 
 def _attach_regions(
     record: dict[str, object],
+    field: FieldSpec,
     *,
     doc_id: str,
     provenance: Mapping[str, object],
     structure: Mapping[str, object],
 ) -> dict[str, object]:
-    """Add `source.bounding_regions` to one assemble_result record.
-
-    Always a list -- [] when unresolvable -- so the UI branches on one shape,
-    matching assemble_result's own habit of returning `evidence_ids: []`
-    rather than None. Never raises."""
+    """Add `source.bounding_regions` to one assemble_result record, as
+    `{current: [...], prior: [...]}` -- cell-precise when `field`'s keywords
+    match a table row (fdi.core.provenance.resolve_field_regions), falling
+    back to the field's whole-table/whole-section geometry
+    (resolve_evidence_regions) under `current` with `prior: []` otherwise.
+    Never raises."""
     source = record.get("source")
     if not isinstance(source, dict):
         return record
     evidence_ids = source.get("evidence_ids")
     ids: Sequence[object] = evidence_ids if isinstance(evidence_ids, list) else []
-    source["bounding_regions"] = resolve_evidence_regions(
-        doc_id, ids, provenance, structure
+    fallback = resolve_evidence_regions(doc_id, ids, provenance, structure)
+    source["bounding_regions"] = resolve_field_regions(
+        keywords=field.keywords, evidence_ids=ids, structure=structure,
+        fallback_current=fallback,
     )
     return record
 
@@ -376,12 +380,42 @@ async def _basis_artifact_for(ctx: ExtractContext) -> Mapping[str, object]:
     return basis
 
 
+async def _cached_extraction(
+    ctx: ExtractContext, fields: Sequence[FieldSpec]
+) -> dict[str, object] | None:
+    """The persisted record for this exact (doc_id, schema) pair, or None if
+    absent/unreadable. Never raises (decision 10): a corrupt or unreachable
+    cache degrades to a fresh extraction, not a 500. Keyed identically to
+    `_persist_extraction`'s write, so a cache write and a cache check always
+    agree on where to look."""
+    schema_hash = output_hash([f.field_path or f.field_name for f in fields])
+    key = extraction_key(ctx.doc_id, EXTRACTION_RECORD_VERSION, schema_hash)
+    with contextlib.suppress(Exception):
+        if await ctx.store.exists(key):
+            raw = await ctx.store.get_json(key)
+            if isinstance(raw, Mapping):
+                return dict(raw)
+    return None
+
+
 async def extract_document(
-    *, ctx: ExtractContext, fields: Sequence[FieldSpec], client: ExtractorClient
+    *,
+    ctx: ExtractContext,
+    fields: Sequence[FieldSpec],
+    client: ExtractorClient,
+    force: bool = False,
 ) -> dict[str, object]:
     """Group `fields` into Retrieval Units and run ONE retrieval + ONE LLM
     call per unit, then restore the caller's field order. Signature unchanged
     -- `doc_key`/`module` are still attached by the route. Never raises.
+
+    Unless `force`, a persisted record for this exact (doc_id, schema) pair
+    -- written by a prior call's `_persist_extraction` -- is served directly,
+    with no retrieval or LLM calls at all: extraction is expensive (one Azure
+    OpenAI round trip per Retrieval Unit) and its inputs (the document, the
+    schema) do not change between page loads, so re-running on every view
+    would burn the same money and the same multi-minute wait for an answer
+    already on disk.
 
     Each record's `source` additionally carries `bounding_regions`: the
     geometry behind its cited chunks, joined by the pure
@@ -390,6 +424,12 @@ async def extract_document(
     card rendering, and basis for basis-aware retrieval) are read ONCE here,
     not per field or per unit -- the committed schema has 198 fields, so a
     per-field read would be hundreds of MinIO round trips for one request."""
+    if not force:
+        cached = await _cached_extraction(ctx, fields)
+        if cached is not None:
+            log.info("extractor.cache_hit", doc_id=ctx.doc_id)
+            return cached
+
     provenance = await _read_latest_artifact(ctx, "provenance")
     structure = await _read_latest_artifact(ctx, "structure")
     basis_artifact = await _basis_artifact_for(ctx)
@@ -419,9 +459,9 @@ async def extract_document(
     # the durable record carries the same bounding_regions the response does.
     results = [
         _attach_regions(
-            r, doc_id=ctx.doc_id, provenance=provenance, structure=structure
+            r, f, doc_id=ctx.doc_id, provenance=provenance, structure=structure
         )
-        for r in results
+        for r, f in zip(results, fields, strict=True)
     ]
 
     record = build_extraction_record(

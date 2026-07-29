@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { BoundingRegion } from "@/lib/types";
+import type { BoundingRegion, BoundingRegionsView } from "@/lib/types";
 
-const SCALE = 1.4;
+const MIN_SCALE = 0.6;
+const MAX_SCALE = 3;
 const POINTS_PER_INCH = 72;
 
 /** `pdfjs-dist` is driven directly rather than through `react-pdf` because the
@@ -15,18 +16,37 @@ export function PdfCanvas({
   page,
   regions,
   onPageCount,
-  onHighlightRect,
 }: {
   url: string;
   page: number;
-  regions: BoundingRegion[] | null;
+  regions: BoundingRegionsView | null;
   onPageCount?: (count: number) => void;
-  onHighlightRect: (rect: DOMRect | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [scale, setScale] = useState(1);
+
+  // Fit-to-width, not a fixed SCALE: a fixed scale leaves dead space beside a
+  // narrow pane and forces both horizontal AND vertical scrolling on a wide
+  // one, exactly the "user has to scroll" complaint this replaces. Re-measured
+  // on resize (the aside collapsing/expanding changes the pane's width too).
+  useEffect(() => {
+    const el = wrapperRef.current?.parentElement;
+    if (!el) return;
+    const measure = () => {
+      const width = el.clientWidth;
+      if (width > 0) {
+        setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, width / (8.27 * POINTS_PER_INCH))));
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +68,7 @@ export function PdfCanvas({
         const rendered = await doc.getPage(target);
         if (cancelled) return;
 
-        const viewport = rendered.getViewport({ scale: SCALE });
+        const viewport = rendered.getViewport({ scale });
         const canvas = canvasRef.current;
         const context = canvas?.getContext("2d");
         if (!canvas || !context || cancelled) return;
@@ -82,27 +102,18 @@ export function PdfCanvas({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [url, page, onPageCount]);
-
-  // The tether needs to know where the highlight actually landed on screen,
-  // and that changes on scroll and on resize, not only when the field changes.
-  useEffect(() => {
-    const report = () =>
-      onHighlightRect(highlightRef.current?.getBoundingClientRect() ?? null);
-    report();
-    window.addEventListener("resize", report);
-    window.addEventListener("scroll", report, true);
-    return () => {
-      window.removeEventListener("resize", report);
-      window.removeEventListener("scroll", report, true);
-    };
-  }, [regions, ready, page, onHighlightRect]);
+  }, [url, page, onPageCount, scale]);
 
   useEffect(() => {
     highlightRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [regions, ready]);
 
-  const onPage = (regions ?? []).filter((r) => r.page_number === page);
+  const currentOnPage = (regions?.current ?? []).filter((r) => r.page_number === page);
+  const priorOnPage = (regions?.prior ?? []).filter((r) => r.page_number === page);
+  // Tags exist to distinguish TWO boxes from each other -- a lone current
+  // box (the common, non-dual-period case) needs no "New" label since
+  // there's nothing else on the page it could be confused with.
+  const showTags = priorOnPage.length > 0;
 
   if (error) {
     return (
@@ -113,30 +124,99 @@ export function PdfCanvas({
   }
 
   return (
-    <div className="relative inline-block" style={{ boxShadow: "var(--shadow-md)" }}>
+    <div
+      ref={wrapperRef}
+      className="relative inline-block"
+      style={{ boxShadow: "var(--shadow-md)" }}
+    >
       <canvas ref={canvasRef} className="block" />
-      {onPage.map((region, index) => {
-        const box = boxOf(region.polygon);
-        return (
-          <div
-            key={index}
-            ref={index === 0 ? highlightRef : undefined}
-            aria-hidden="true"
-            className="absolute pointer-events-none"
-            style={{
-              left: box.x * SCALE * POINTS_PER_INCH,
-              top: box.y * SCALE * POINTS_PER_INCH,
-              width: box.width * SCALE * POINTS_PER_INCH,
-              height: box.height * SCALE * POINTS_PER_INCH,
-              border: "1.5px solid var(--tether)",
-              background: "var(--tether-wash)",
-              borderRadius: "var(--radius-sm)",
-            }}
-          />
-        );
-      })}
+      {renderBoxes(currentOnPage, "New", scale, highlightRef, showTags)}
+      {renderBoxes(priorOnPage, "Prior", scale, undefined, showTags)}
+      <style>{`
+        .tether-highlight {
+          animation: tether-highlight-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+          transform-origin: center;
+        }
+        @keyframes tether-highlight-in {
+          from { opacity: 0; transform: scale(0.96); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .tether-highlight {
+            animation: none;
+          }
+        }
+      `}</style>
     </div>
   );
+}
+
+// A double ring rather than one flat-bordered wash: now that the mark is pure
+// ink rather than a rust accent, a single 1.5px line reads as just another
+// rule on the page. Two concentric rings -- a tight inner line plus an offset
+// outer line -- plus the wash between them reads as a deliberately placed
+// mark (a rubber stamp's double ruling, a certified-copy seal) rather than a
+// color swatch. The whole mark settles in with a brief scale/fade rather than
+// snapping straight to full size. The prior box is dashed, not a second
+// color, staying inside the monochrome system while still reading as a
+// distinct mark from the current box beside it.
+function renderBoxes(
+  regions: BoundingRegion[],
+  tag: "New" | "Prior",
+  scale: number,
+  firstRef?: React.RefObject<HTMLDivElement | null>,
+  showTag = false,
+) {
+  return regions.map((region, index) => {
+    const box = boxOf(region.polygon);
+    return (
+      <div
+        key={`${tag}-${index}`}
+        ref={index === 0 ? firstRef : undefined}
+        aria-hidden="true"
+        className="absolute pointer-events-none tether-highlight"
+        style={{
+          left: box.x * scale * POINTS_PER_INCH - 3,
+          top: box.y * scale * POINTS_PER_INCH - 3,
+          width: box.width * scale * POINTS_PER_INCH + 6,
+          height: box.height * scale * POINTS_PER_INCH + 6,
+          padding: 3,
+          border: tag === "Prior" ? "1px dashed var(--pdf-mark)" : "1px solid var(--pdf-mark)",
+          borderRadius: "var(--radius-sm)",
+          boxShadow: "0 1px 4px color-mix(in srgb, var(--pdf-mark) 18%, transparent)",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            border: tag === "Prior" ? "2px dashed var(--pdf-mark)" : "2px solid var(--pdf-mark)",
+            background: "var(--pdf-mark-wash)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        />
+        {showTag ? (
+          <span
+            className="data"
+            style={{
+              position: "absolute",
+              top: -18,
+              left: 0,
+              fontSize: "var(--text-2xs)",
+              fontWeight: 600,
+              padding: "1px 4px",
+              background: "var(--pdf-mark)",
+              color: "var(--leaf)",
+              borderRadius: "var(--radius-sm)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {tag}
+          </span>
+        ) : null}
+      </div>
+    );
+  });
 }
 
 /** Azure DI polygons are [x1,y1,x2,y2,x3,y3,x4,y4] in INCHES. The four corners

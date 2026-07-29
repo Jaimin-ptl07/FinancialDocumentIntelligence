@@ -32,3 +32,6 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+# Isolated git worktrees for feature work
+.worktrees/

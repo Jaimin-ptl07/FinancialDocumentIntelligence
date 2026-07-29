@@ -91,7 +91,16 @@ export function FieldEditor({
 
   return (
     <div>
-      <div style={{ marginBottom: "var(--sp-6)" }}>
+      <div
+        style={{
+          marginBottom: "var(--sp-6)",
+          paddingBottom: "var(--sp-5)",
+          /* A hairline closes off "which field is this" before the form
+             opens "how is it configured" — the same rule weight the tree
+             and header use elsewhere, not a new divider treatment. */
+          borderBottom: "1px solid var(--rule-soft)",
+        }}
+      >
         <div className="eyebrow">Field</div>
         <h2
           className="display"

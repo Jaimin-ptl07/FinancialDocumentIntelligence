@@ -1,0 +1,2321 @@
+{
+ "key": "module_profit_and_loss",
+ "name": "Profit and Loss",
+ "statement": "profit_and_loss",
+ "retrieval_units": [
+  {
+   "unit_id": "PR",
+   "statement_type": "profit_and_loss",
+   "retrieval_query": "Profit and Loss statement",
+   "fields": [
+    {
+     "field_name": "Revenue From Operations — Gross Revenue from Operations",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "1",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Revenue from Sale of Products",
+       "tag": "RFSP",
+       "origin": "extracted",
+       "sr_no": "1.1",
+       "role": "line"
+      },
+      {
+       "field_name": "Revenue from Sale of Services",
+       "tag": "RFSS",
+       "origin": "extracted",
+       "sr_no": "1.2",
+       "role": "line"
+      },
+      {
+       "field_name": "Revenue from Contracts with Customers",
+       "tag": "RFCC",
+       "origin": "extracted",
+       "sr_no": "1.3",
+       "role": "line"
+      },
+      {
+       "field_name": "Revenue from Traded Goods",
+       "tag": "RFTG",
+       "origin": "extracted",
+       "sr_no": "1.4",
+       "role": "line"
+      },
+      {
+       "field_name": "Other Operating Revenues",
+       "tag": "OTOR",
+       "origin": "extracted",
+       "sr_no": "1.5",
+       "role": "line"
+      },
+      {
+       "field_name": "Total Gross Revenue (Total of 1.1 to 1.5)",
+       "tag": "RFOGRS",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "RFSP",
+         "RFSS",
+         "RFCC",
+         "RFTG",
+         "OTOR"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Less:Taxes",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "2",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Excise duty",
+       "tag": "ED",
+       "origin": "extracted",
+       "sr_no": "2.1",
+       "role": "line"
+      },
+      {
+       "field_name": "Excise duty (from exp)",
+       "tag": "EDEXP",
+       "origin": "extracted",
+       "sr_no": "2.2",
+       "role": "line",
+       "redirect": "TOTRRNT"
+      },
+      {
+       "field_name": "Goods and Service Tax",
+       "tag": "GST",
+       "origin": "extracted",
+       "sr_no": "2.3",
+       "role": "line",
+       "redirect": "OTNONOIC"
+      },
+      {
+       "field_name": "Goods and Service Tax (from exp)",
+       "tag": "GSTEXP",
+       "origin": "extracted",
+       "sr_no": "2.4",
+       "role": "line",
+       "redirect": "TOTRRNT"
+      },
+      {
+       "field_name": "Other Duties and Taxes(EX.-Duty Drawback Received)",
+       "tag": "OTDT",
+       "origin": "extracted",
+       "sr_no": "2.5",
+       "role": "line",
+       "redirect": "OTNONOIC"
+      },
+      {
+       "field_name": "Other Duties and Taxes (from exp)(ex-Rates and taxes)",
+       "tag": "OTDTEXP",
+       "origin": "extracted",
+       "sr_no": "2.6",
+       "role": "line",
+       "redirect": "TOTRRNT"
+      },
+      {
+       "field_name": "Total of taxes (Total of 2.1 to 2.6)",
+       "tag": "TOTTAX",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "ED",
+         "EDEXP",
+         "GST",
+         "GSTEXP",
+         "OTDT",
+         "OTDTEXP"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Net Revenue From Operations (1 minus 2)",
+     "tag": "RFONET",
+     "origin": "derived",
+     "sr_no": "3",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": [
+       "NSDNE",
+       "NSN"
+      ]
+     },
+     "fields": [
+      {
+       "field_name": "Territory wise Revenue- Additional Information for ICICI Bank",
+       "node_type": "group",
+       "sr_no": null,
+       "role": "sub_header",
+       "fields": [
+        {
+         "field_name": "Domestic Sales",
+         "tag": "RFDS",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "supplementary"
+        },
+        {
+         "field_name": "Export Sales",
+         "tag": "RFES",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "supplementary"
+        },
+        {
+         "field_name": "Gross Sales (Combined)",
+         "tag": "GSC",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "supplementary",
+         "redirect": "RFDS"
+        },
+        {
+         "field_name": "Other operating recenue- TERRITORY WISE REVENUE",
+         "tag": "OTORT",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "supplementary",
+         "redirect": "RFDS"
+        }
+       ]
+      },
+      {
+       "field_name": "Net Sales Territory Wise",
+       "tag": "NSDNE",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": []
+       }
+      },
+      {
+       "field_name": "Net Sales Nature Wise (1.3 minus 2)",
+       "tag": "NSN",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "RFCC"
+        ]
+       }
+      },
+      {
+       "field_name": "% age rise (+) or fall (-) in net sales as compared to previous year (annualised)",
+       "tag": null,
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": []
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Other income",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "4",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Other Income General",
+       "tag": null,
+       "origin": "extracted",
+       "sr_no": "4.1",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Interest",
+         "tag": "INTOI",
+         "origin": "extracted",
+         "sr_no": "4.1.1",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Interest (as shown in exp)",
+           "tag": "INTOIEXP",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "reference",
+           "redirect": "INTOI"
+          }
+         ]
+        },
+        {
+         "field_name": "Dividend",
+         "tag": "DIVOI",
+         "origin": "extracted",
+         "sr_no": "4.1.2",
+         "role": "line"
+        },
+        {
+         "field_name": "Commision",
+         "tag": "COMOI",
+         "origin": "extracted",
+         "sr_no": "4.1.3",
+         "role": "line",
+         "redirect": "OTNONOIC"
+        },
+        {
+         "field_name": "Rent",
+         "tag": "RENTOI",
+         "origin": "extracted",
+         "sr_no": "4.1.4",
+         "role": "line",
+         "redirect": "OTNONOIC"
+        },
+        {
+         "field_name": "Non Operating Income",
+         "tag": "NONOI",
+         "origin": "derived",
+         "sr_no": "4.1.5",
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": []
+         },
+         "redirect": "OTNONOIC",
+         "fields": [
+          {
+           "field_name": "Insurance Income",
+           "tag": "INSOI",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "OTNONOIC",
+           "not_considered": true
+          },
+          {
+           "field_name": "Unwinding of Interest as income",
+           "tag": "INTUWOI",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "OTNONOINC",
+           "not_considered": true
+          },
+          {
+           "field_name": "Non-Operating Income - Cash Items",
+           "node_type": "group",
+           "sr_no": null,
+           "role": "sub_header",
+           "fields": [
+            {
+             "field_name": "Exchange gain (Actual gain on ECB/ other foreign currency financing facilities)",
+             "tag": "EXCG",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Crystallized forex Gain (Actual gain on realization/ payment of current assets and current liabilities in foreign currency)",
+             "tag": "CFG",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Other Non- Operating Cash Income (EX.-Government grants,Export Incentive)",
+             "tag": "OTNONOIC",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            }
+           ]
+          },
+          {
+           "field_name": "Non-Operating Income - Non Cash Items",
+           "node_type": "group",
+           "sr_no": null,
+           "role": "sub_header",
+           "fields": [
+            {
+             "field_name": "Notional profit on reinstatement of current assets in foreign currency",
+             "tag": "NPRCA",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Notional profit on reinstatement of current liabilities in foreign currency",
+             "tag": "NPRCL",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "MTM Forex gain (Notional gain on ECB/ other foreign currency financing facilities)",
+             "tag": "NPMTM",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Other Non - Operating Non Cash Income",
+             "tag": "OTNONOINC",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "field_name": "Total Other Income General (Total of 4.1.1 to 4.1.5)",
+         "tag": "TOTOTING",
+         "origin": "derived",
+         "sr_no": null,
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "INTOI",
+           "DIVOI",
+           "COMOI",
+           "RENTOI",
+           "NONOI"
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "field_name": "Other Income Exceptional",
+       "tag": null,
+       "origin": "extracted",
+       "sr_no": "4.2",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Net gain on sale of investment",
+         "tag": "NGINV",
+         "origin": "extracted",
+         "sr_no": "4.2.1",
+         "role": "line"
+        },
+        {
+         "field_name": "Net gain on sale of assets(ex.-Gain on sale/discard of ppe(net)",
+         "tag": "NGA",
+         "origin": "extracted",
+         "sr_no": "4.2.2",
+         "role": "line"
+        },
+        {
+         "field_name": "Reversal of Prov, impairment etc.(ex.-Liabilities no longer required written back,Sundry credit balances written back)",
+         "tag": "REVOI",
+         "origin": "extracted",
+         "sr_no": "4.2.3",
+         "role": "line",
+         "redirect": "OTNONOINC"
+        },
+        {
+         "field_name": "Provisions, impairment etc. (as shown in exp.)",
+         "tag": "REVOIEXP",
+         "origin": "extracted",
+         "sr_no": "4.2.4",
+         "role": "line",
+         "redirect": "OTNONOENC"
+        },
+        {
+         "field_name": "Others",
+         "tag": "OTINE",
+         "origin": "derived",
+         "sr_no": "4.2.5",
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "OTINEC",
+           "OTINENC"
+          ]
+         },
+         "fields": [
+          {
+           "field_name": "Other Cash Income",
+           "tag": "OTINEC",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "OTNONOIC"
+          },
+          {
+           "field_name": "Other Non Cash Income",
+           "tag": "OTINENC",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "OTNONOINC"
+          }
+         ]
+        },
+        {
+         "field_name": "Total Other Income Exceptional (Total of 4.2.1 to 4.2.5)",
+         "tag": "TOTOTINEX",
+         "origin": "derived",
+         "sr_no": null,
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "NGINV",
+           "NGA",
+           "REVOI",
+           "REVOIEXP",
+           "OTINE"
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "field_name": "Share of profit",
+       "tag": "SOP",
+       "origin": "extracted",
+       "sr_no": "4.3",
+       "role": "line",
+       "redirect": "OTNONOIC"
+      },
+      {
+       "field_name": "Total of Other Income (Total of 4.1 to 4.3)",
+       "tag": "TOTOTIN",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "SOP"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Total Rev. from operation and Other Income (Total of 3 and 4)",
+     "tag": "TOTRNOTINR",
+     "origin": "extracted",
+     "sr_no": "5",
+     "role": "total_reported",
+     "reconciliation": {
+      "method": "sum",
+      "inputs": []
+     }
+    },
+    {
+     "field_name": "Expenses",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "6",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Cost of Materials Consumed",
+       "tag": "COMC",
+       "origin": "extracted",
+       "sr_no": "6.1",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Raw Materials",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "6.1.1",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Imported",
+           "tag": "RMIM",
+           "origin": "extracted",
+           "sr_no": "6.1.1.1",
+           "role": "line"
+          },
+          {
+           "field_name": "Indigenous",
+           "tag": "RMID",
+           "origin": "extracted",
+           "sr_no": "6.1.1.2",
+           "role": "line"
+          },
+          {
+           "field_name": "Combined",
+           "tag": "RME",
+           "origin": "extracted",
+           "sr_no": "6.1.1.3",
+           "role": "line",
+           "redirect": "RMID"
+          },
+          {
+           "field_name": "Total Raw Materials (6.1.1.1 to 6.1.1.3)",
+           "tag": null,
+           "origin": "derived",
+           "sr_no": null,
+           "role": "subtotal",
+           "derivation": {
+            "method": "sum",
+            "inputs": [
+             "RMIM",
+             "RMID",
+             "RME"
+            ]
+           }
+          }
+         ]
+        },
+        {
+         "field_name": "Other Spares",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "6.1.2",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Imported",
+           "tag": "OSIM",
+           "origin": "extracted",
+           "sr_no": "6.1.2.1",
+           "role": "line"
+          },
+          {
+           "field_name": "Indigenous",
+           "tag": "OSID",
+           "origin": "extracted",
+           "sr_no": "6.1.2.2",
+           "role": "line"
+          },
+          {
+           "field_name": "OSIMID",
+           "tag": "OSIMID",
+           "origin": "extracted",
+           "sr_no": "6.1.2.3",
+           "role": "line",
+           "fields": [
+            {
+             "field_name": "Other cost of materials consumed",
+             "tag": "OTCOMC",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "component",
+             "redirect": "RMID"
+            }
+           ]
+          },
+          {
+           "field_name": "Total Other Spares (6.1.2.1 to 6.1.2.3)",
+           "tag": null,
+           "origin": "derived",
+           "sr_no": null,
+           "role": "subtotal",
+           "derivation": {
+            "method": "sum",
+            "inputs": [
+             "OSIM",
+             "OSID",
+             "OSIMID"
+            ]
+           }
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "field_name": "Purchases of stock-in-trade",
+       "tag": "PUSIT",
+       "origin": "extracted",
+       "sr_no": "6.2",
+       "role": "line",
+       "redirect": "RMID"
+      },
+      {
+       "field_name": "Changes in inventories (deduction)",
+       "tag": "CHINVT",
+       "origin": "extracted",
+       "sr_no": "6.3",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Stock-in-process (ex.- Work-in-progress)",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "6.3.1",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Opening Stock-in-process",
+           "tag": "OSIP",
+           "origin": "extracted",
+           "sr_no": "6.3.1.1",
+           "role": "line"
+          },
+          {
+           "field_name": "Closing Stock-in-process",
+           "tag": "CSIP",
+           "origin": "extracted",
+           "sr_no": "6.3.1.2",
+           "role": "line"
+          },
+          {
+           "field_name": "Net Change in Stock-in-process (6.3.1.1 minus 6.3.1.2)",
+           "tag": null,
+           "origin": "derived",
+           "sr_no": "6.3.1.3",
+           "role": "subtotal",
+           "derivation": {
+            "method": "sum",
+            "inputs": [
+             "OSIP",
+             "CSIP"
+            ]
+           }
+          }
+         ]
+        },
+        {
+         "field_name": "Finished Goods",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "6.3.2",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Opening Stock of Finished Goods",
+           "tag": "OSFG",
+           "origin": "extracted",
+           "sr_no": "6.3.2.1",
+           "role": "line"
+          },
+          {
+           "field_name": "Closing Stock of Finished Goods",
+           "tag": "CSFG",
+           "origin": "extracted",
+           "sr_no": "6.3.2.2",
+           "role": "line"
+          },
+          {
+           "field_name": "Net Change in Finished Goods (6.3.2.1 minus 6.3.2.2)",
+           "tag": null,
+           "origin": "derived",
+           "sr_no": "6.3.2.3",
+           "role": "subtotal",
+           "derivation": {
+            "method": "sum",
+            "inputs": [
+             "OSFG",
+             "CSFG"
+            ]
+           }
+          }
+         ]
+        },
+        {
+         "field_name": "OTHERS (stock-in-Trade)-including",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "6.3.3",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "OPENING STOCK OTHERS",
+           "tag": "OSOT",
+           "origin": "extracted",
+           "sr_no": "6.3.3.1",
+           "role": "line",
+           "redirect": "OSFG"
+          },
+          {
+           "field_name": "CLOSING SOCK OTHERS",
+           "tag": "CSOT",
+           "origin": "extracted",
+           "sr_no": "6.3.3.2",
+           "role": "line",
+           "redirect": "CSFG"
+          },
+          {
+           "field_name": "NET CHANGE IN OTHER INVENTORY",
+           "tag": null,
+           "origin": "derived",
+           "sr_no": "6.3.3.3",
+           "role": "subtotal",
+           "derivation": {
+            "method": "sum",
+            "inputs": []
+           }
+          }
+         ]
+        },
+        {
+         "field_name": "Other change in Inventory",
+         "tag": "OTCHINVT",
+         "origin": "extracted",
+         "sr_no": "6.3.4",
+         "role": "line"
+        }
+       ]
+      },
+      {
+       "field_name": "Manufacturing expenses",
+       "tag": "MFEXP",
+       "origin": "derived",
+       "sr_no": "6.4",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "PCWC",
+         "FMTC",
+         "OOME"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Processing / Job Work Charges (EX.Labour charges for job work)",
+         "tag": "PCWC",
+         "origin": "extracted",
+         "sr_no": "6.4.1",
+         "role": "line"
+        },
+        {
+         "field_name": "Freight and Transportation Charges",
+         "tag": "FMTC",
+         "origin": "extracted",
+         "sr_no": "6.4.2",
+         "role": "line"
+        },
+        {
+         "field_name": "Others (EX.- water charge)",
+         "tag": "OOME",
+         "origin": "extracted",
+         "sr_no": "6.4.3",
+         "role": "line"
+        }
+       ]
+      },
+      {
+       "field_name": "Other operating expenses",
+       "tag": "OTOPEXP",
+       "origin": "extracted",
+       "sr_no": "6.5",
+       "role": "line",
+       "redirect": "OOME"
+      },
+      {
+       "field_name": "Employee benefit expense",
+       "tag": "EEBEXP",
+       "origin": "derived",
+       "sr_no": "6.6",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "FWS",
+         "OTEEBEXP"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Direct Labour (Factory wages & salaries) (Labor Cahrge )",
+         "tag": "FWS",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        },
+        {
+         "field_name": "Other Employee Benefits",
+         "tag": "OTEEBEXP",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Finance costs",
+       "tag": null,
+       "origin": "extracted",
+       "sr_no": "6.7",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Interest",
+         "tag": "INTEXP",
+         "origin": "derived",
+         "sr_no": "6.7.1",
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "INTTL",
+           "INTWC",
+           "INTTLWC",
+           "INTOT",
+           "BNKC"
+          ]
+         },
+         "fields": [
+          {
+           "field_name": "Interest on Fixed Loans / Term loans",
+           "tag": "INTTL",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          },
+          {
+           "field_name": "Interest on Working capital loans",
+           "tag": "INTWC",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          },
+          {
+           "field_name": "Interest on Fixed Loans / Term loans / Working capital loans",
+           "tag": "INTTLWC",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "INTTL"
+          },
+          {
+           "field_name": "Other Interest",
+           "tag": "INTOT",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "INTTL"
+          },
+          {
+           "field_name": "Bank Charges",
+           "tag": "BNKC",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          }
+         ]
+        },
+        {
+         "field_name": "Borrowing costs(any borrowing cost)",
+         "tag": "BC",
+         "origin": "extracted",
+         "sr_no": "6.7.2",
+         "role": "line",
+         "redirect": "BNKC"
+        },
+        {
+         "field_name": "Others finance cost",
+         "tag": "OTFC",
+         "origin": "extracted",
+         "sr_no": "6.7.3",
+         "role": "line",
+         "redirect": "BNKC"
+        },
+        {
+         "field_name": "Total finance costs (Total of 6.7.1 to 6.7.3)",
+         "tag": "TOTFC",
+         "origin": "derived",
+         "sr_no": null,
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "INTEXP",
+           "BC",
+           "OTFC"
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "field_name": "Depreciation, depl. & amortz. exp",
+       "tag": "DEPEXP",
+       "origin": "derived",
+       "sr_no": "6.8",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "DEP",
+         "AMT"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Depreciation, depl. exp",
+         "tag": "DEP",
+         "origin": "extracted",
+         "sr_no": "6.8.1",
+         "role": "line"
+        },
+        {
+         "field_name": "amortz. exp",
+         "tag": "AMT",
+         "origin": "extracted",
+         "sr_no": "6.8.2",
+         "role": "line"
+        }
+       ]
+      },
+      {
+       "field_name": "Impairment Loss - Other than IMPL, IMPA",
+       "tag": "IMPL",
+       "origin": "extracted",
+       "sr_no": "6.9",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Impairment of Assets",
+         "tag": "IMPLA",
+         "origin": "extracted",
+         "sr_no": "6.9.1",
+         "role": "line",
+         "redirect": "IMPL"
+        },
+        {
+         "field_name": "Impairment of Investment",
+         "tag": "IMPLI",
+         "origin": "extracted",
+         "sr_no": "6.9.2",
+         "role": "line",
+         "redirect": "IMPL"
+        }
+       ]
+      },
+      {
+       "field_name": "Provisions",
+       "tag": null,
+       "origin": "extracted",
+       "sr_no": "6.10",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Provisions for bad, doubtful debts(ex.- Loss Allowance)",
+         "tag": "PRVDD",
+         "origin": "extracted",
+         "sr_no": "6.10.1",
+         "role": "line",
+         "redirect": "bdexp"
+        },
+        {
+         "field_name": "Other provisions (ex.-Allowance/expected credit loss)",
+         "tag": "OTPRVE",
+         "origin": "extracted",
+         "sr_no": "6.10.2",
+         "role": "line",
+         "redirect": "bdexp"
+        },
+        {
+         "field_name": "Total Provisions (Total of 6.10.1 to 6.10.2)",
+         "tag": "TOTPRVE",
+         "origin": "derived",
+         "sr_no": null,
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "PRVDD",
+           "OTPRVE"
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "field_name": "Other expenses",
+       "tag": null,
+       "origin": "extracted",
+       "sr_no": "6.11",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Consumption of stores & spare parts",
+         "tag": "CSTNSP",
+         "origin": "extracted",
+         "sr_no": "6.11.1",
+         "role": "line",
+         "redirect": "OSID"
+        },
+        {
+         "field_name": "Power, fuel, conves. & electricity",
+         "tag": "PNF",
+         "origin": "extracted",
+         "sr_no": "6.11.2",
+         "role": "line"
+        },
+        {
+         "field_name": "Rent",
+         "tag": "RENTEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.3",
+         "role": "line",
+         "redirect": "TOTRRNT"
+        },
+        {
+         "field_name": "Hire Charges",
+         "tag": "HCEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.4",
+         "role": "line",
+         "redirect": "TOTRRNT",
+         "fields": [
+          {
+           "field_name": "Lease Rental Expense",
+           "tag": "LREXP",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          }
+         ]
+        },
+        {
+         "field_name": "Administrative exp",
+         "tag": "ADMINEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.5",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP",
+         "fields": [
+          {
+           "field_name": "Travelling & Conveyance expenses",
+           "tag": "TCEXP",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          }
+         ]
+        },
+        {
+         "field_name": "Repairs to building, plants etc",
+         "tag": "REP",
+         "origin": "derived",
+         "sr_no": "6.11.6",
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": []
+         },
+         "fields": [
+          {
+           "field_name": "Repair oF Plant and Equipment",
+           "tag": "REPPNE",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "oome",
+           "not_considered": true
+          },
+          {
+           "field_name": "Repair of Building, Others",
+           "tag": "REPOT",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "TOTOTSGAEXP",
+           "not_considered": true
+          }
+         ]
+        },
+        {
+         "field_name": "Research and development exp",
+         "tag": "RND",
+         "origin": "extracted",
+         "sr_no": "6.11.7",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "Legal, professional and licence exp",
+         "tag": "LNPC",
+         "origin": "extracted",
+         "sr_no": "6.11.8",
+         "role": "line"
+        },
+        {
+         "field_name": "Directors sitting fees & commission",
+         "tag": "DRSF",
+         "origin": "extracted",
+         "sr_no": "6.11.9",
+         "role": "line",
+         "redirect": "TOTMGRE"
+        },
+        {
+         "field_name": "Managerial remuneration",
+         "tag": "MGRE",
+         "origin": "extracted",
+         "sr_no": "6.11.10",
+         "role": "line",
+         "redirect": "TOTMGRE"
+        },
+        {
+         "field_name": "Donations and subscriptions",
+         "tag": "DNS",
+         "origin": "extracted",
+         "sr_no": "6.11.11",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "Advertising & promotional expenses",
+         "tag": "ADVTEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.12",
+         "role": "line"
+        },
+        {
+         "field_name": "After sales service & claims",
+         "tag": "AFTSS",
+         "origin": "extracted",
+         "sr_no": "6.11.13",
+         "role": "line",
+         "redirect": "TOTCOMDSC"
+        },
+        {
+         "field_name": "Bad debts and Others",
+         "tag": "BDEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.14",
+         "role": "line"
+        },
+        {
+         "field_name": "Commission",
+         "tag": "COMEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.15",
+         "role": "line",
+         "redirect": "TOTCOMDSC",
+         "fields": [
+          {
+           "field_name": "Discount",
+           "tag": "DISC",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "TOTCOMDSC"
+          },
+          {
+           "field_name": "Service Charge",
+           "tag": "SERCH",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "TOTCOMDSC"
+          }
+         ]
+        },
+        {
+         "field_name": "Selling and distribution expenses(ex.-Packing material,selling & marketing)",
+         "tag": "SLNDEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.16",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "Royalty and Brands",
+         "tag": "RNB",
+         "origin": "extracted",
+         "sr_no": "6.11.17",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "Exchange difference",
+         "tag": "EXCHEXP",
+         "origin": "derived",
+         "sr_no": "6.11.18",
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": []
+         }
+        },
+        {
+         "field_name": "Cost effluent and Environment exp(ex.-Extended producer responsibility (EPR) (refer note C18))",
+         "tag": "CED",
+         "origin": "extracted",
+         "sr_no": "6.11.19",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "W/off & loss on sale - assets/Invst",
+         "tag": "WOANL",
+         "origin": "derived",
+         "sr_no": "6.11.20",
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": []
+         }
+        },
+        {
+         "field_name": "Corporate social responsibility(ex. CSR expenditure)",
+         "tag": "CSREXP",
+         "origin": "extracted",
+         "sr_no": "6.11.21",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "Payments to auditor",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "6.11.22",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "a) For audit services",
+           "tag": "PYAUDAS",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          },
+          {
+           "field_name": "b) For management services",
+           "tag": "PYAUDMS",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          },
+          {
+           "field_name": "c) For other services",
+           "tag": "PYAUDOS",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          },
+          {
+           "field_name": "d) For reimbursement of expenses",
+           "tag": "PYAUDEXP",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component"
+          },
+          {
+           "field_name": "Total payment to auditor (Total 6.12.22 (a) to (d))",
+           "tag": "TOTPYAUD",
+           "origin": "derived",
+           "sr_no": null,
+           "role": "subtotal",
+           "derivation": {
+            "method": "sum",
+            "inputs": []
+           }
+          }
+         ]
+        },
+        {
+         "field_name": "Payments to cost auditor",
+         "tag": "PYCAUD",
+         "origin": "extracted",
+         "sr_no": "6.11.23",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP"
+        },
+        {
+         "field_name": "Payments to political parties",
+         "tag": "PPPEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.24",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP",
+         "fields": [
+          {
+           "field_name": "Insurance Expense",
+           "tag": "INSEXP",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "TOTOTSGAEXP",
+           "not_considered": true
+          }
+         ]
+        },
+        {
+         "field_name": "Other Misc. Expenses",
+         "tag": "OTEXP",
+         "origin": "extracted",
+         "sr_no": "6.11.25",
+         "role": "line",
+         "redirect": "TOTOTSGAEXP",
+         "fields": [
+          {
+           "field_name": "Non-Operating Expenses - Cash Items",
+           "node_type": "group",
+           "sr_no": null,
+           "role": "sub_header",
+           "fields": [
+            {
+             "field_name": "Crystallized forex loss (Actual loss on realization/ payment of current assets and current liabilities in foreign currency)",
+             "tag": "CFL",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Exchange loss (Actual loss on ECB/ other foreign currency financing facilities)",
+             "tag": "EXCL",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Inventory Written Off /Write-off of stock-in-process",
+             "tag": "INVTWO",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Write off of Finished Goods",
+             "tag": "FCWO",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Loss on sale of fixed assets",
+             "tag": "NLFA",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Loss on sale of investments",
+             "tag": "NLINV",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Loss on sale of Others",
+             "tag": "NLOT",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary",
+             "redirect": "OTNONOEC"
+            },
+            {
+             "field_name": "Other non operating cash exp",
+             "tag": "OTNONOEC",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            }
+           ]
+          },
+          {
+           "field_name": "Non-Operating Expenses - Non Cash Items",
+           "node_type": "group",
+           "sr_no": null,
+           "role": "sub_header",
+           "fields": [
+            {
+             "field_name": "MTM forex loss (Notional loss on ECB/ other foreign currency financing facilities)",
+             "tag": "NONLMTM",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Notional loss on reinstatement of current assets in foreign currency",
+             "tag": "NONLRSA",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Notional loss on reinstatement of current liabilities in foreign currency",
+             "tag": "NONLRSL",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Write off of fixed assets",
+             "tag": "WOFA",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Write off of Investments",
+             "tag": "WOINV",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            },
+            {
+             "field_name": "Write off of Others(EX.Sundry advances written off)",
+             "tag": "WOOT",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary",
+             "redirect": "OTNONOENC"
+            },
+            {
+             "field_name": "Others",
+             "tag": "OTNONOENC",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "supplementary"
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "field_name": "Total other expenses (Total of 6.11.1 to 6.11.25)",
+         "tag": "TOTOTEXP",
+         "origin": "derived",
+         "sr_no": null,
+         "role": "subtotal",
+         "derivation": {
+          "method": "sum",
+          "inputs": [
+           "CSTNSP",
+           "PNF",
+           "RENTEXP",
+           "HCEXP",
+           "ADMINEXP",
+           "REP",
+           "RND",
+           "LNPC",
+           "DRSF",
+           "MGRE",
+           "DNS",
+           "ADVTEXP",
+           "AFTSS",
+           "BDEXP",
+           "COMEXP",
+           "SLNDEXP",
+           "RNB",
+           "EXCHEXP",
+           "CED",
+           "WOANL",
+           "CSREXP",
+           "PYCAUD",
+           "PPPEXP",
+           "OTEXP"
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "field_name": "Total expenses (Total of 6.1 to 6.11)",
+       "tag": "TOTEXPR",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "total_reported",
+       "reconciliation": {
+        "method": "sum",
+        "inputs": [
+         "COMC",
+         "PUSIT",
+         "CHINVT",
+         "MFEXP",
+         "OTOPEXP",
+         "EEBEXP",
+         "DEPEXP",
+         "IMPL"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Profit (loss) before prior period, exceptional, extraordinary items and tax (5 minus 6)",
+     "tag": "PB3NTAX",
+     "origin": "extracted",
+     "sr_no": "7",
+     "role": "line"
+    },
+    {
+     "field_name": "Prior period, exceptional, extraordinary items",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "8",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Prior period items before tax",
+       "tag": "PPI",
+       "origin": "extracted",
+       "sr_no": "8.1",
+       "role": "line"
+      },
+      {
+       "field_name": "Exceptional items before tax",
+       "tag": "EXI",
+       "origin": "extracted",
+       "sr_no": "8.2",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Exceptional items - Income - Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.3",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Exceptional Items- Interest received",
+           "tag": "EXINTOI",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "INTOI"
+          },
+          {
+           "field_name": "Exceptional Items- Dividends received from Companies",
+           "tag": "EXDIVOI",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "DIVOI"
+          },
+          {
+           "field_name": "Exceptional Items- Profit on sale of fixed assets",
+           "tag": "EXNGA",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "NGA"
+          },
+          {
+           "field_name": "Exceptional Items- Profit on sale of investments",
+           "tag": "EXNGINV",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "NGINV"
+          },
+          {
+           "field_name": "Exchange gain (Actual gain on ECB/ other foreign currency financing facilities)",
+           "tag": "EXEXCG",
+           "origin": "extracted",
+           "sr_no": "8.2.3.1",
+           "role": "line",
+           "redirect": "EXCG"
+          },
+          {
+           "field_name": "Crystallized forex Gain (Actual gain on realization/ payment of current assets and current liabilities in foreign currency)",
+           "tag": "EXCFG",
+           "origin": "extracted",
+           "sr_no": "8.2.3.2",
+           "role": "line",
+           "redirect": "CFG"
+          },
+          {
+           "field_name": "Other Non- Operating Cash Income(EX. (a) Gain on transfer of business)",
+           "tag": "EXOTNONOIC",
+           "origin": "extracted",
+           "sr_no": "8.2.3.3",
+           "role": "line",
+           "redirect": "OTNONOIC"
+          }
+         ]
+        },
+        {
+         "field_name": "Exceptional items - Income - Non Cash Items",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.4",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Notional profit on reinstatement of current assets in foreign currency",
+           "tag": "EXNPRCA",
+           "origin": "extracted",
+           "sr_no": "8.2.4.1",
+           "role": "line",
+           "redirect": "NPRCA"
+          },
+          {
+           "field_name": "Notional profit on reinstatement of current liabilities in foreign currency",
+           "tag": "EXNPRCL",
+           "origin": "extracted",
+           "sr_no": "8.2.4.2",
+           "role": "line",
+           "redirect": "NPRCL"
+          },
+          {
+           "field_name": "MTM Forex gain (Notional gain on ECB/ other foreign currency financing facilities)",
+           "tag": "EXNPMTM",
+           "origin": "extracted",
+           "sr_no": "8.2.4.3",
+           "role": "line",
+           "redirect": "NPMTM"
+          },
+          {
+           "field_name": "Other Non - Operating Non Cash Income",
+           "tag": "EXOTNONOINC",
+           "origin": "extracted",
+           "sr_no": "8.2.4.4",
+           "role": "line",
+           "redirect": "OTNONOINC"
+          }
+         ]
+        },
+        {
+         "field_name": "Exceptional items - Expense - Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.2",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Crystallized forex loss (Actual loss on realization/ payment of current assets and current liabilities in foreign currency)",
+           "tag": "EXCFL",
+           "origin": "extracted",
+           "sr_no": "8.2.2.1",
+           "role": "line",
+           "redirect": "CFL"
+          },
+          {
+           "field_name": "Inventory Written Off",
+           "tag": "EXINVTWO",
+           "origin": "extracted",
+           "sr_no": "8.2.2.3",
+           "role": "line",
+           "redirect": "INVTWO",
+           "fields": [
+            {
+             "field_name": "Exceptional Items- Write-off of stock-in-process",
+             "tag": "EXFCWO",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "component",
+             "redirect": "FCWO"
+            }
+           ]
+          },
+          {
+           "field_name": "Loss on sale of fixed assets",
+           "tag": "EXNLFA",
+           "origin": "extracted",
+           "sr_no": "8.2.2.4",
+           "role": "line",
+           "redirect": "NLFA"
+          },
+          {
+           "field_name": "Loss on sale of investments",
+           "tag": "EXNLINV",
+           "origin": "extracted",
+           "sr_no": "8.2.2.5",
+           "role": "line",
+           "redirect": "NLINV"
+          },
+          {
+           "field_name": "Exchange loss (Actual loss on ECB/ other foreign currency financing facilities)",
+           "tag": "EXEXCL",
+           "origin": "extracted",
+           "sr_no": "8.2.2.2",
+           "role": "line",
+           "redirect": "EXCL"
+          },
+          {
+           "field_name": "Loss on sale of Others",
+           "tag": "EXNLOT",
+           "origin": "extracted",
+           "sr_no": "8.2.2.6",
+           "role": "line",
+           "redirect": "NLOT"
+          },
+          {
+           "field_name": "Other Exceptional Items - Cash",
+           "tag": "EXOTNONOEC",
+           "origin": "extracted",
+           "sr_no": "8.2.2.7",
+           "role": "line",
+           "redirect": "OTNONOEC"
+          }
+         ]
+        },
+        {
+         "field_name": "Exceptional items - Expense - Non Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.1",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "MTM forex loss (Notional loss on ECB/ other foreign currency financing facilities)",
+           "tag": "EXMTMEL",
+           "origin": "extracted",
+           "sr_no": "8.2.1.1",
+           "role": "line",
+           "redirect": "NONLMTM"
+          },
+          {
+           "field_name": "Notional loss on reinstatement of current assets in foreign currency",
+           "tag": "EXNONLRSA",
+           "origin": "extracted",
+           "sr_no": "8.2.1.2",
+           "role": "line",
+           "redirect": "NONLRSA"
+          },
+          {
+           "field_name": "Notional loss on reinstatement of current liabilities in foreign currency",
+           "tag": "EXNONLRSL",
+           "origin": "extracted",
+           "sr_no": "8.2.1.3",
+           "role": "line",
+           "redirect": "NONLRSL"
+          },
+          {
+           "field_name": "Write off of fixed assets",
+           "tag": "EXWOFA",
+           "origin": "extracted",
+           "sr_no": "8.2.1.4",
+           "role": "line",
+           "redirect": "WOFA"
+          },
+          {
+           "field_name": "Write off of Investments",
+           "tag": "EXWOINV",
+           "origin": "extracted",
+           "sr_no": "8.2.1.5",
+           "role": "line",
+           "redirect": "WOINV"
+          },
+          {
+           "field_name": "Other write off",
+           "tag": "EXWOOT",
+           "origin": "extracted",
+           "sr_no": "8.2.1.6",
+           "role": "line",
+           "redirect": "OTNONOENC"
+          },
+          {
+           "field_name": "Other Exceptional Items - Non Cash",
+           "tag": "OTEXI",
+           "origin": "extracted",
+           "sr_no": "8.2.1.7",
+           "role": "line",
+           "redirect": "OTNONOENC"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "field_name": "Extraordinary items before tax",
+       "tag": "EOI",
+       "origin": "extracted",
+       "sr_no": "8.3",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "Extraordinary items - Income - Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.3",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Extraodinary Items- Interest received",
+           "tag": "EOINTOI",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "INTOI"
+          },
+          {
+           "field_name": "Extraodinary Items-Dividends received from Companies",
+           "tag": "EODIVOI",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "DIVOI"
+          },
+          {
+           "field_name": "Extraodinary Items-Profit on sale of fixed assets",
+           "tag": "EONGA",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "NGA"
+          },
+          {
+           "field_name": "Extraodinary Items- Profit on sale of investments",
+           "tag": "EONGINV",
+           "origin": "extracted",
+           "sr_no": null,
+           "role": "component",
+           "redirect": "NGINV"
+          },
+          {
+           "field_name": "Exchange gain (Actual gain on ECB/ other foreign currency financing facilities)",
+           "tag": "EOEXCG",
+           "origin": "extracted",
+           "sr_no": "8.2.3.1",
+           "role": "line",
+           "redirect": "EXCG"
+          },
+          {
+           "field_name": "Crystallized forex Gain (Actual gain on realization/ payment of current assets and current liabilities in foreign currency)",
+           "tag": "EOCFG",
+           "origin": "extracted",
+           "sr_no": "8.2.3.2",
+           "role": "line",
+           "redirect": "CFG"
+          },
+          {
+           "field_name": "Other Non- Operating Cash Income",
+           "tag": "EOOTNONOIC",
+           "origin": "extracted",
+           "sr_no": "8.2.3.3",
+           "role": "line",
+           "redirect": "OTNONOIC"
+          }
+         ]
+        },
+        {
+         "field_name": "Extraordinary items - Income - Non Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.4",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Notional profit on reinstatement of current assets in foreign currency",
+           "tag": "EONPRCA",
+           "origin": "extracted",
+           "sr_no": "8.2.4.1",
+           "role": "line",
+           "redirect": "NPRCA"
+          },
+          {
+           "field_name": "Notional profit on reinstatement of current liabilities in foreign currency",
+           "tag": "EONPRCL",
+           "origin": "extracted",
+           "sr_no": "8.2.4.2",
+           "role": "line",
+           "redirect": "NPRCL"
+          },
+          {
+           "field_name": "MTM Forex gain (Notional gain on ECB/ other foreign currency financing facilities)",
+           "tag": "EONPMTM",
+           "origin": "extracted",
+           "sr_no": "8.2.4.3",
+           "role": "line",
+           "redirect": "NPMTM"
+          },
+          {
+           "field_name": "Other Non - Operating Non Cash Income",
+           "tag": "EOOTNONOINC",
+           "origin": "extracted",
+           "sr_no": "8.2.4.4",
+           "role": "line",
+           "redirect": "OTNONOINC"
+          }
+         ]
+        },
+        {
+         "field_name": "Extraordinary items - Expense - Non Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.1",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "MTM forex loss (Notional loss on ECB/ other foreign currency financing facilities)",
+           "tag": "EOMTMEL",
+           "origin": "extracted",
+           "sr_no": "8.2.1.1",
+           "role": "line",
+           "redirect": "NONLMTM"
+          },
+          {
+           "field_name": "Notional loss on reinstatement of current assets in foreign currency",
+           "tag": "EONONLRSA",
+           "origin": "extracted",
+           "sr_no": "8.2.1.2",
+           "role": "line",
+           "redirect": "NONLRSA"
+          },
+          {
+           "field_name": "Notional loss on reinstatement of current liabilities in foreign currency",
+           "tag": "EONONLRSL",
+           "origin": "extracted",
+           "sr_no": "8.2.1.3",
+           "role": "line",
+           "redirect": "NONLRSL"
+          },
+          {
+           "field_name": "Write off of fixed assets",
+           "tag": "EOWOFA",
+           "origin": "extracted",
+           "sr_no": "8.2.1.4",
+           "role": "line",
+           "redirect": "WOFA"
+          },
+          {
+           "field_name": "Write off of Investments",
+           "tag": "EOEXWOINV",
+           "origin": "extracted",
+           "sr_no": "8.2.1.5",
+           "role": "line",
+           "redirect": "WOINV"
+          },
+          {
+           "field_name": "Other write off",
+           "tag": "EOEXWOOT",
+           "origin": "extracted",
+           "sr_no": "8.2.1.6",
+           "role": "line",
+           "redirect": "WOOT"
+          },
+          {
+           "field_name": "Other Extraordinary Items - Non Cash",
+           "tag": "OTEOI",
+           "origin": "extracted",
+           "sr_no": "8.2.1.7",
+           "role": "line",
+           "redirect": "OTNONOENC"
+          }
+         ]
+        },
+        {
+         "field_name": "Extraordinary items - Expense - Cash",
+         "tag": null,
+         "origin": "extracted",
+         "sr_no": "8.2.2",
+         "role": "line",
+         "fields": [
+          {
+           "field_name": "Crystallized forex loss (Actual loss on realization/ payment of current assets and current liabilities in foreign currency)",
+           "tag": "EOCFL",
+           "origin": "extracted",
+           "sr_no": "8.2.2.1",
+           "role": "line",
+           "redirect": "CFL"
+          },
+          {
+           "field_name": "Exchange loss (Actual loss on ECB/ other foreign currency financing facilities)",
+           "tag": "EOEXCL",
+           "origin": "extracted",
+           "sr_no": "8.2.2.2",
+           "role": "line",
+           "redirect": "EXCL"
+          },
+          {
+           "field_name": "Inventory Written Off",
+           "tag": "EOINVTWO",
+           "origin": "extracted",
+           "sr_no": "8.2.2.3",
+           "role": "line",
+           "redirect": "INVTWO",
+           "fields": [
+            {
+             "field_name": "Extraordinary Items- Write-off of stock-in-process",
+             "tag": "EOFCWO",
+             "origin": "extracted",
+             "sr_no": null,
+             "role": "component",
+             "redirect": "FCWO"
+            }
+           ]
+          },
+          {
+           "field_name": "Loss on sale of fixed assets",
+           "tag": "EONLFA",
+           "origin": "extracted",
+           "sr_no": "8.2.2.4",
+           "role": "line",
+           "redirect": "NLFA"
+          },
+          {
+           "field_name": "Loss on sale of investments",
+           "tag": "EONLINV",
+           "origin": "extracted",
+           "sr_no": "8.2.2.5",
+           "role": "line",
+           "redirect": "NLINV"
+          },
+          {
+           "field_name": "Loss on sale of Others",
+           "tag": "EONLOT",
+           "origin": "extracted",
+           "sr_no": "8.2.2.6",
+           "role": "line",
+           "redirect": "NLOT"
+          },
+          {
+           "field_name": "Other Extraordinary Items - Cash",
+           "tag": "EOOTNONOEC",
+           "origin": "extracted",
+           "sr_no": "8.2.2.7",
+           "role": "line",
+           "redirect": "OTNONOEC"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "field_name": "Total of Prior Period, Excp. & Extra. Items (Total of 8.1 to 8.3)",
+       "tag": "TOT3",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "PPI",
+         "EXI",
+         "EOI"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Profit (loss) before tax (7 plus / (minus) 8)",
+     "tag": "PBTR",
+     "origin": "extracted",
+     "sr_no": "9",
+     "role": "line"
+    },
+    {
+     "field_name": "Tax expense",
+     "tag": null,
+     "origin": "extracted",
+     "sr_no": "10",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Current tax",
+       "tag": "CT",
+       "origin": "extracted",
+       "sr_no": "10.1",
+       "role": "line"
+      },
+      {
+       "field_name": "Deferred tax",
+       "tag": "DT",
+       "origin": "extracted",
+       "sr_no": "10.2",
+       "role": "line",
+       "fields": [
+        {
+         "field_name": "MAT Credit Entitlment",
+         "tag": "MAT",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component"
+        }
+       ]
+      },
+      {
+       "field_name": "Other",
+       "tag": "OTTAX",
+       "origin": "derived",
+       "sr_no": "10.3",
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "OTTAXCT",
+         "OTTAXDT"
+        ]
+       },
+       "fields": [
+        {
+         "field_name": "Other tax items related to Current Tax(EX.-Adjustment of tax relating to earlier periods)",
+         "tag": "OTTAXCT",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "CTTAX"
+        },
+        {
+         "field_name": "Other tax items related to Deferred Tax",
+         "tag": "OTTAXDT",
+         "origin": "extracted",
+         "sr_no": null,
+         "role": "component",
+         "redirect": "DTTAX"
+        }
+       ]
+      },
+      {
+       "field_name": "Total tax expense (Total of 10.1 to 10.3)",
+       "tag": "TOTTAXEXP",
+       "origin": "derived",
+       "sr_no": null,
+       "role": "subtotal",
+       "derivation": {
+        "method": "sum",
+        "inputs": [
+         "CT",
+         "DT",
+         "OTTAX"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "field_name": "Profit (loss) After Tax (9 plus /(minus) 10)",
+     "tag": "PATR",
+     "origin": "extracted",
+     "sr_no": "11",
+     "role": "line"
+    },
+    {
+     "field_name": "Other comprehensive income (Net)",
+     "tag": "OTCI",
+     "origin": "extracted",
+     "sr_no": "12",
+     "role": "line",
+     "fields": [
+      {
+       "field_name": "Unrealized gain/ (loss) on investments/ financial assets",
+       "tag": "OCIURGI",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Unrealized gain/ (loss) on revaluation of fixed assets",
+       "tag": "OCIURGF",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Unrealized gain/ (loss) on cash flow hedges [MTM forex gain/ (loss)] (fair value)",
+       "tag": "OCIURGM",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Unrealized gain/ (loss) on defined benefit plans",
+       "tag": "OCIURGB",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Others",
+       "tag": "OCIOT",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Net deferred tax effect of above items (ex-income tax)",
+       "tag": "OCIDTA",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      }
+     ]
+    },
+    {
+     "field_name": "Profit (Loss) from discontd. op. after tax",
+     "tag": "TOTPNLDOP",
+     "origin": "extracted",
+     "sr_no": "13",
+     "role": "line"
+    },
+    {
+     "field_name": "Profit (loss) for period before minority interest (11 plus / minus 12 & 13)",
+     "tag": "PBMI",
+     "origin": "derived",
+     "sr_no": "14",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": [
+       "PATR",
+       "OTCI",
+       "TOTPNLDOP"
+      ]
+     }
+    },
+    {
+     "field_name": "Minority interest and associates",
+     "tag": "TOTMI",
+     "origin": "derived",
+     "sr_no": "15",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": []
+     }
+    },
+    {
+     "field_name": "Difference in Profit (Loss) for the period",
+     "tag": "DIFP",
+     "origin": "derived",
+     "sr_no": "16",
+     "role": "subtotal",
+     "derivation": {
+      "method": "sum",
+      "inputs": []
+     }
+    },
+    {
+     "field_name": "Profit (loss) for period (14 minus 15 and plus / (minus) 16)",
+     "tag": "TOTCIR",
+     "origin": "extracted",
+     "sr_no": "17",
+     "role": "total_reported",
+     "reconciliation": {
+      "method": "sum",
+      "inputs": []
+     },
+     "fields": [
+      {
+       "field_name": "(1) Basic",
+       "tag": "EPSB",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "(2) Diluted",
+       "tag": "EPSD",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      },
+      {
+       "field_name": "Nominal Value Per Equity Share",
+       "tag": "NVES",
+       "origin": "extracted",
+       "sr_no": null,
+       "role": "component"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

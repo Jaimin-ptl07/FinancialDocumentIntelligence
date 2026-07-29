@@ -17,6 +17,7 @@ export function PageHeader({
         padding: "var(--sp-8) var(--sp-8) var(--sp-6)",
         background: "var(--leaf)",
         borderBottom: "var(--hairline)",
+        boxShadow: "var(--shadow-sm)",
       }}
     >
       <div style={{ minWidth: 0 }}>

@@ -27,6 +27,23 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({}),
 }));
 
+// jsdom has no matchMedia implementation at all. Components read it to sense
+// prefers-color-scheme (see Spine's theme toggle); without this, any such
+// read throws "window.matchMedia is not a function" the moment a test
+// mounts them, regardless of what the test is actually checking.
+if (typeof window.matchMedia !== "function") {
+  window.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(() => false),
+  });
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => {
   server.resetHandlers();

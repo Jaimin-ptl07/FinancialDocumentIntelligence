@@ -156,6 +156,61 @@ def find_concept_rows(
     return matches
 
 
+def find_field_rows(
+    grid: Mapping[str, object], keywords: tuple[str, ...]
+) -> list[dict[str, object]]:
+    """Match `keywords` (a field's own tokens -- FieldSpec.keywords, already
+    aliases + locator_keywords, order-preserving deduplicated) against
+    `grid`'s row-label column (column 0), using the SAME normalized
+    word-token-subsequence containment `find_concept_rows` uses for ontology
+    synonyms -- keyed on a field directly instead of a CanonicalConcept, since
+    a FieldSpec has no ontology concept of its own. Header rows
+    (`grid["header_row_count"]`) are never treated as data.
+
+    Unlike `find_concept_rows` (which returns every column's value -- it
+    never picks "the" period), this returns each match's ROW INDEX, so the
+    caller can look up `cell_regions[row][col]` directly for a specific
+    column's geometry. `{row, row_label}` per match, in row order.
+
+    Same KNOWN LIMITATION as find_concept_rows: a keyword can appear inside a
+    label that means something else. Degrades to [] on a malformed/empty
+    `grid`. Never raises."""
+    n_rows_raw = grid.get("n_rows")
+    n_rows = n_rows_raw if isinstance(n_rows_raw, int) and not isinstance(n_rows_raw, bool) else 0
+    header_row_count_raw = grid.get("header_row_count")
+    header_row_count = (
+        header_row_count_raw
+        if isinstance(header_row_count_raw, int) and not isinstance(header_row_count_raw, bool)
+        else 0
+    )
+
+    rows_raw = grid.get("grid")
+    rows = cast("list[object]", rows_raw) if isinstance(rows_raw, list) else []
+
+    keyword_tokens = [
+        tokens for k in keywords if (tokens := normalize_label(k).split())
+    ]
+    if not keyword_tokens:
+        return []
+
+    matches: list[dict[str, object]] = []
+    for r in range(header_row_count, n_rows):
+        row_obj = rows[r] if r < len(rows) else None
+        row = cast("list[object]", row_obj) if isinstance(row_obj, list) else []
+
+        label_obj = row[0] if row else ""
+        label_raw = label_obj if isinstance(label_obj, str) else ""
+        label_tokens = normalize_label(label_raw).split()
+        if not label_tokens:
+            continue
+        if not any(_contains_subsequence(label_tokens, kw) for kw in keyword_tokens):
+            continue
+
+        matches.append({"row": r, "row_label": label_raw})
+
+    return matches
+
+
 def filter_tables(
     tables: list[Mapping[str, object]], keyword: str | None
 ) -> list[Mapping[str, object]]:

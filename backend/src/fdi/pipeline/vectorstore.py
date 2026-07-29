@@ -27,6 +27,8 @@ class VectorStore(Protocol):
 
     def count(self) -> int: ...
 
+    def delete_document(self, doc_id: str) -> None: ...
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b, strict=True))
@@ -127,3 +129,11 @@ class FakeVectorStore:
 
     def count(self) -> int:
         return len(self._items)
+
+    def delete_document(self, doc_id: str) -> None:
+        self._items = {
+            item_id: item
+            for item_id, item in self._items.items()
+            if dict(cast(Mapping[str, object], item.get("metadata") or {})).get("doc_id")
+            != doc_id
+        }

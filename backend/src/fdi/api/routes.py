@@ -82,8 +82,10 @@ from fdi.api.schemas import (
     VectorSearchResultView,
 )
 from fdi.core.extractor import parse_field_specs
+from fdi.core.factsheet import document_factsheet
 from fdi.core.ontology import CanonicalConcept
 from fdi.core.schema import bump_patch_version, validate_extraction_schema
+from fdi.core.xbrl import calculation_arcs, export_instance
 from fdi.pipeline.agent_tools import AgentContext
 from fdi.pipeline.ask import answer_question
 from fdi.pipeline.crossdoc import resolve_entities
@@ -407,6 +409,40 @@ async def list_documents(
         limit=limit,
         offset=offset,
     )
+
+
+@router.delete("/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    doc_id: str,
+    session: SessionDep,
+    store: StoreDep,
+    graph_store: GraphStoreDep,
+    vector_store: VectorStoreDep,
+) -> None:
+    """Erase a filing so the same file can be re-uploaded and re-run from
+    scratch -- Document.checksum is unique, so without this a re-upload of
+    the same PDF just 404s into the old row instead of starting fresh.
+
+    Fans out to every store a document can leave data in: Postgres (this
+    row + its stage_run history), the artifact store (both the DAG-stage
+    artifacts and any persisted extraction records), Neo4j, and Milvus. The
+    two doc-scoped MinIO prefixes are deleted before the Postgres row, so a
+    crash mid-delete leaves an orphaned MinIO prefix (harmless, re-deletable)
+    rather than a Postgres row with no artifacts behind it.
+    """
+    repo = DocumentRepository(session)
+    if await repo.get(doc_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+
+    await store.delete_prefix(f"artifacts/{doc_id}/")
+    await store.delete_prefix(f"extractions/{doc_id}/")
+    if graph_store is not None:
+        graph_store.delete_document(doc_id)
+    if vector_store is not None:
+        vector_store.delete_document(doc_id)
+
+    await repo.delete(doc_id)
+    await session.commit()
 
 
 @router.post(
@@ -948,6 +984,26 @@ async def extract_document_route(
             status_code=500, detail=f"document {doc.id} has no version"
         )
 
+    # `index` is the pipeline's terminal stage (same rule document_outcome_
+    # counts uses to call a document "complete") -- until it is `done`,
+    # Milvus has no searchable chunks for this doc yet, so every retrieval
+    # unit's hybrid_search legitimately returns nothing and extraction would
+    # silently produce well-formed null records for every field (decision
+    # 10's "never raise" degrades a failed search, not an absent one; there
+    # is nothing here to distinguish the two without this check). A 409
+    # tells the caller to wait and retry, rather than looking like a
+    # document with no readable figures.
+    index_run = await RegistryRepository(session).latest_run(doc.id, "index")
+    if index_run is None or index_run.status != "done":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this document's pipeline has not finished indexing yet -- "
+                "retrieval would find nothing. Wait for all stages to "
+                "complete, then try again"
+            ),
+        )
+
     schema, _source = await load_schema(store=store, seed_path=schema_path)
     fields = parse_field_specs(schema, body.module)
 
@@ -955,10 +1011,78 @@ async def extract_document_route(
         session=session, store=store, embedder=embedder, vector_store=vector_store,
         doc_id=doc.id, doc_key=body.doc_key, version=version,
     )
-    result = await extract_document(ctx=ctx, fields=fields, client=extractor_client)
+    result = await extract_document(
+        ctx=ctx, fields=fields, client=extractor_client, force=body.force
+    )
     return ExtractDocumentView.model_validate(
         {"doc_key": body.doc_key, "module": body.module, **result}
     )
+
+
+# --------------------------------------------------------------------------
+# M4 (audit surface): POST /factsheet/document -- the self-explaining,
+# self-validating Fact bundle. Runs the same extraction as /extract/document,
+# then layers the pure derivation/validation/confidence/coverage engines
+# (fdi.core.factsheet.document_factsheet) and an XBRL instance on top. `format`
+# selects the payload: "json" (default) returns the full bundle; "xbrl" returns
+# the XBRL instance document as application/xml.
+# --------------------------------------------------------------------------
+
+
+@router.post("/factsheet/document", response_model=None)
+async def factsheet_document_route(
+    body: ExtractRequest,
+    session: SessionDep,
+    store: StoreDep,
+    embedder: EmbedderDep,
+    vector_store: VectorStoreDep,
+    extractor_client: ExtractorClientDep,
+    schema_path: ExtractionSchemaPathDep,
+    fmt: str = Query(default="json", alias="format"),
+) -> object:
+    if extractor_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="factsheet is not configured: missing extractor_client",
+        )
+    versions = await DocumentRepository(session).list_by_doc_key(body.doc_key)
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"no documents for doc_key {body.doc_key!r}")
+    doc = versions[-1]
+    if doc.version is None:
+        raise HTTPException(status_code=500, detail=f"document {doc.id} has no version")
+
+    index_run = await RegistryRepository(session).latest_run(doc.id, "index")
+    if index_run is None or index_run.status != "done":
+        raise HTTPException(
+            status_code=409,
+            detail="this document's pipeline has not finished indexing yet -- retry later",
+        )
+
+    schema, _source = await load_schema(store=store, seed_path=schema_path)
+    fields = parse_field_specs(schema)  # whole schema: the factsheet spans all modules
+    ctx = ExtractContext(
+        session=session, store=store, embedder=embedder, vector_store=vector_store,
+        doc_id=doc.id, doc_key=body.doc_key, version=doc.version,
+    )
+    result = await extract_document(
+        ctx=ctx, fields=fields, client=extractor_client, force=body.force
+    )
+    records = result.get("fields") if isinstance(result, dict) else None
+    records = records if isinstance(records, list) else []
+
+    bundle = document_factsheet(schema, records)
+
+    if fmt == "xbrl":
+        facts = bundle.get("facts")
+        facts_map = facts if isinstance(facts, dict) else {}
+        xml = export_instance(facts_map, entity=f"urn:fdi:{body.doc_key}")
+        return Response(content=xml, media_type="application/xml")
+
+    derived = bundle.get("derived")
+    bundle["calculation_arcs"] = calculation_arcs(derived if isinstance(derived, dict) else {})
+    bundle["doc_key"] = body.doc_key
+    return bundle
 
 
 # --------------------------------------------------------------------------

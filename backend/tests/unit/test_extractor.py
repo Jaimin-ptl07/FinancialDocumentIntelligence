@@ -487,7 +487,7 @@ def test_assemble_result_full_llm_dict_passthrough() -> None:
     }
     out = assemble_result(_field(), raw, [_scored_cand("d1:s0", "Total assets 145", 0.9)])
     assert out == {
-        "field_name": "Total assets", "value": 145,
+        "field_name": "Total assets", "tag": "", "origin": "extracted", "value": 145,
         "source": {"page": 3, "snippet": "Total assets 145", "evidence_ids": ["d1:s0"]},
         "confidence": 0.8,
     }

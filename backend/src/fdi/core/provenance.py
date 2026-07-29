@@ -16,6 +16,8 @@ about where the join is lossy; see `resolve_chunk_regions`'s docstring."""
 import re
 from collections.abc import Mapping, Sequence
 
+from fdi.core.tables import find_field_rows
+
 
 def _paragraph_regions(
     ocr_paragraphs: list[object], index: object
@@ -282,3 +284,116 @@ def resolve_evidence_regions(
             chunk_id = raw
         out.extend(resolve_chunk_regions(chunk_id, provenance, structure))
     return _dedup_regions(out)
+
+
+def _table_grids(structure: Mapping[str, object]) -> list[Mapping[str, object]]:
+    tables = structure.get("tables")
+    if not isinstance(tables, list):
+        return []
+    out: list[Mapping[str, object]] = []
+    for t in tables:
+        if not isinstance(t, Mapping):
+            continue
+        grid = t.get("grid")
+        if isinstance(grid, Mapping):
+            out.append(grid)
+    return out
+
+
+def _cell_regions_at(grid: Mapping[str, object], row: int, col: int) -> list[dict[str, object]]:
+    cell_regions = grid.get("cell_regions")
+    if not isinstance(cell_regions, list) or row < 0 or row >= len(cell_regions):
+        return []
+    row_cells = cell_regions[row]
+    if not isinstance(row_cells, list) or col < 0 or col >= len(row_cells):
+        return []
+    return _regions_list(row_cells[col])
+
+
+def _cited_table_grids(
+    evidence_ids: Sequence[object], structure: Mapping[str, object]
+) -> list[Mapping[str, object]]:
+    """The grid(s) of every table `evidence_ids` actually names (via a `t{i}`
+    or `t{i}r{j}` chunk id -- same id shapes `resolve_chunk_regions` parses),
+    in citation order. A field's own keywords can coincidentally match a row
+    label in some OTHER, unrelated table elsewhere in a large document (a
+    generic label like "Total" or "Net block" recurs across dozens of
+    schedules) -- searching only the table(s) the LLM actually cited as its
+    evidence is what keeps a match scoped to the right page, rather than the
+    first lookalike row anywhere in the document."""
+    grids: list[Mapping[str, object]] = []
+    for raw in evidence_ids:
+        if not isinstance(raw, str):
+            continue
+        chunk_id = raw.rsplit(":", 1)[-1] if ":" in raw else raw
+        match = _TABLE_ROW_RE.match(chunk_id) or _TABLE_RE.match(chunk_id)
+        if match is None:
+            continue
+        table = _table_at(structure, int(match.group(1)))
+        if table is None:
+            continue
+        grid = table.get("grid")
+        if isinstance(grid, Mapping):
+            grids.append(grid)
+    return grids
+
+
+def _first_row_match(
+    grids: list[Mapping[str, object]], keywords: tuple[str, ...]
+) -> dict[str, list[dict[str, object]]] | None:
+    for grid in grids:
+        matches = find_field_rows(grid, keywords)
+        if not matches:
+            continue
+        row_obj = matches[0].get("row")
+        if not isinstance(row_obj, int):
+            continue
+        current = _dedup_regions(_cell_regions_at(grid, row_obj, 1))
+        prior = _dedup_regions(_cell_regions_at(grid, row_obj, 2))
+        if current or prior:
+            return {"current": current, "prior": prior}
+    return None
+
+
+def resolve_field_regions(
+    *,
+    keywords: tuple[str, ...],
+    evidence_ids: Sequence[object],
+    structure: Mapping[str, object],
+    fallback_current: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    """Cell-precise geometry for one extracted field, split by period.
+
+    Matches `keywords` (a FieldSpec's own tokens) against a table's row-label
+    column via `fdi.core.tables.find_field_rows` (same token-subsequence
+    algorithm `resolve_chunk_regions`'s row-id path was built on, now
+    reachable without an LLM-cited row id -- see
+    docs/superpowers/specs/2026-07-25-cell-precise-bounding-regions-design.md).
+
+    Searches ONLY the table(s) `evidence_ids` actually cites first -- a
+    generic row label ("Total", "Net block") recurs across many tables in a
+    large filing, and matching document-wide would silently pick whichever
+    lookalike row happens to come first, landing on the wrong page (measured:
+    168/190 fields on a real 190-field/157-table annual report). Falls back
+    to a document-wide search only when the cited table(s) have no usable
+    match (e.g. no per-cell geometry on an older OCR run).
+
+    current = column 1's cell region, prior = column 2's cell region
+    (fdi.core.table_render's existing column-1-is-current/column-2-is-prior
+    convention -- a table with fewer than 3 columns has no prior column and
+    `prior` stays []).
+
+    On no match anywhere (narrative field, no table row found, malformed
+    structure): `current` is `fallback_current` (whatever
+    resolve_evidence_regions already resolved -- whole-table or whole-
+    section geometry), `prior` is []. Never raises (decision 10): a failed
+    cell match degrades to a coarser box, never no box, never a crash.
+    """
+    cited = _cited_table_grids(evidence_ids, structure)
+    result = _first_row_match(cited, keywords)
+    if result is None:
+        result = _first_row_match(_table_grids(structure), keywords)
+    if result is not None:
+        return {"current": result["current"] or fallback_current, "prior": result["prior"]}
+
+    return {"current": fallback_current, "prior": []}
