@@ -84,7 +84,7 @@ async def test_put_schema_persists_and_bumps_the_patch_version(make_client) -> N
         after = (await client.get("/schema")).json()
 
     assert after["source"] == "store"
-    assert after["version"] == "3.2.1"
+    assert after["version"] == "4.1.1"
     assert "edited marker" in after["schema_document"]["modules"][0][
         "retrieval_units"
     ][0]["locator_keywords"]
