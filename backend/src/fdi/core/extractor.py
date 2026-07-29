@@ -94,6 +94,11 @@ class FieldSpec:
     basis_preference: str = "standalone"
     tag: str = ""
     origin: str = "extracted"
+    # Report-side label variants inherited from the field's parent CONCEPT, used
+    # to follow the note reference printed against that concept on the statement
+    # face. A leaf's own taxonomy name ("Buildings") almost never matches a
+    # report label ("Property, plant and equipment").
+    note_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -258,6 +263,7 @@ def _field_spec_from(
 
     tag = field.get("tag")
     origin = field.get("origin")
+    note_aliases = _str_tuple(field.get("note_aliases"))
 
     return FieldSpec(
         field_name=field_name, data_type=data_type, retrieval_query=retrieval_query,
@@ -273,6 +279,7 @@ def _field_spec_from(
         basis_preference=_basis_preference(unit.get("basis_preference")),
         tag=tag if isinstance(tag, str) else "",
         origin=origin if isinstance(origin, str) and origin else "extracted",
+        note_aliases=note_aliases,
     )
 
 
@@ -404,6 +411,11 @@ _SHARED_EXTRACTION_RULES = (
     "= \"Revenue from operations\"). "
     "Apart from parenthesis-negation, return the number exactly as printed "
     "in the context -- do not rescale, convert, or reinterpret units. "
+    "Digit-group separators are NOT decimal points and NOT column breaks: "
+    "read the whole grouped number. Indian grouping is lakh/crore-style, so "
+    "\"3,785\" is 3785 (never 3), \"8,685\" is 8685, \"1,10,270\" is 110270 "
+    "and \"2,20,938\" is 220938. Returning only the digits before the first "
+    "separator is always wrong. "
 )
 
 
