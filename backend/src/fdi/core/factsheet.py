@@ -80,6 +80,77 @@ def _schema_row(f: Mapping[str, object], block: str, tag: str) -> dict[str, obje
     return row
 
 
+def tree_from_schema(
+    schema: Mapping[str, object], facts: Mapping[str, Mapping[str, object]]
+) -> list[dict[str, object]]:
+    """The same modules -> units -> nested fields walk as rows_from_schema, but
+    NESTED (not flattened) and with each tagged node's resolved Fact attached.
+    This is what the taxonomy viewer renders directly: one entry per module,
+    each holding its statement's tree with values/confidence/origin/page baked
+    in by tag. A node with a tag but no matching fact (never extracted, or a
+    derived subtotal that didn't resolve) still appears, with value/confidence
+    /band/page all None -- absence is coverage information, not an error."""
+    out: list[dict[str, object]] = []
+    modules = schema.get("modules")
+    if not isinstance(modules, list):
+        return out
+    for m in modules:
+        if not isinstance(m, Mapping):
+            continue
+        statement = m.get("statement") or m.get("key")
+        statement_key = statement if isinstance(statement, str) else "module"
+        nodes: list[dict[str, object]] = []
+        units = m.get("retrieval_units")
+        if isinstance(units, list):
+            for u in units:
+                if not isinstance(u, Mapping):
+                    continue
+                unit_id = u.get("unit_id")
+                unit_key = unit_id if isinstance(unit_id, str) else "unit"
+                fields = u.get("fields")
+                if isinstance(fields, list):
+                    for i, f in enumerate(fields):
+                        if isinstance(f, Mapping):
+                            nodes.append(
+                                _tree_node(f, f"{statement_key}.{unit_key}.{i}", facts)
+                            )
+        out.append({
+            "key": m.get("key"),
+            "name": m.get("name"),
+            "statement": statement,
+            "tree": nodes,
+        })
+    return out
+
+
+def _tree_node(
+    f: Mapping[str, object], path: str, facts: Mapping[str, Mapping[str, object]]
+) -> dict[str, object]:
+    tag = f.get("tag")
+    tag = tag if isinstance(tag, str) and tag else None
+    fact = facts.get(tag) if tag is not None else None
+
+    children_out: list[dict[str, object]] = []
+    children_in = f.get("fields")
+    if isinstance(children_in, list):
+        for i, child in enumerate(children_in):
+            if isinstance(child, Mapping):
+                children_out.append(_tree_node(child, f"{path}.{i}", facts))
+
+    return {
+        "field_name": f.get("field_name"),
+        "tag": tag,
+        "path": path,
+        "origin": f.get("origin"),
+        "role": f.get("role"),
+        "value": fact.get("value") if fact else None,
+        "confidence": fact.get("confidence") if fact else None,
+        "band": fact.get("band") if fact else None,
+        "page": fact.get("page") if fact else None,
+        "children": children_out,
+    }
+
+
 def build_factsheet(
     statements: Sequence[Mapping[str, object]],
     extracted: Mapping[str, Mapping[str, object]],
@@ -148,8 +219,10 @@ def document_factsheet(
 ) -> dict[str, object]:
     """End-to-end factsheet from a v4 schema + extraction records (the API entry
     point). `records` are extraction output_contract records ({tag, value,
-    confidence, ...}); only extracted, tagged, valued records seed the Fact map,
-    and the derivation engine produces the rest. Adds a coverage report."""
+    confidence, source, ...}); only extracted, tagged, valued records seed the
+    Fact map, and the derivation engine produces the rest. Adds a coverage
+    report and the nested per-statement tree (tree_from_schema) the taxonomy
+    viewer renders directly."""
     statements = rows_from_schema(schema)
     extracted: dict[str, dict[str, object]] = {}
     for rec in records:
@@ -158,10 +231,17 @@ def document_factsheet(
             continue
         if rec.get("value") is None:
             continue
-        extracted[tag] = {"value": rec.get("value"), "confidence": rec.get("confidence", 0.0)}
+        source = rec.get("source")
+        page = source.get("page") if isinstance(source, Mapping) else None
+        extracted[tag] = {
+            "value": rec.get("value"),
+            "confidence": rec.get("confidence", 0.0),
+            "page": page,
+        }
 
     bundle = build_factsheet(statements, extracted, tolerance=tolerance)
     facts = bundle["facts"]
     if isinstance(facts, dict):
         bundle["coverage"] = coverage_report(statements, facts)
+        bundle["statements"] = tree_from_schema(schema, facts)
     return bundle
