@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { extractDocument, getDocument, pdfUrl } from "@/lib/api";
 import { filingLabel, hasSourceFile } from "@/lib/documents";
 import { fieldId as toFieldId } from "@/lib/format";
@@ -50,6 +51,24 @@ export function ReportViewer({ docId }: { docId: string }) {
     selected !== null
       ? (fields.find((f, i) => toFieldId(i, f.field_name) === selected) ?? null)
       : null;
+
+  const searchParams = useSearchParams();
+  // A deep link from the taxonomy viewer (StatementTable's provenance links)
+  // arrives as ?tag=<TAG>. Applied once, on the render where `fields` first
+  // becomes non-empty -- re-applying on every render would fight a user's
+  // own subsequent click.
+  const appliedDeepLinkRef = useRef(false);
+  useEffect(() => {
+    if (appliedDeepLinkRef.current || fields.length === 0) return;
+    const wantedTag = searchParams.get("tag");
+    if (!wantedTag) return;
+    appliedDeepLinkRef.current = true;
+    const index = fields.findIndex((f) => f.tag === wantedTag);
+    if (index === -1) return;
+    const target = fields[index];
+    setSelected(toFieldId(index, target.field_name));
+    if (target.source.page) setPage(target.source.page);
+  }, [fields, searchParams]);
 
   // Selecting a field is what turns the page. The reference mark says p84, so
   // clicking it must actually land on 84.

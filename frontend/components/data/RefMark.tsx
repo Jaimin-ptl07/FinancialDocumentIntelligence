@@ -30,7 +30,7 @@ export function RefMark({
       type="button"
       onClick={onClick}
       aria-label={label}
-      aria-pressed={active}
+      aria-current={active ? "true" : undefined}
       className="data"
       style={{
         alignSelf: "flex-start",

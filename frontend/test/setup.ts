@@ -6,12 +6,14 @@ import { handlers } from "./handlers";
 
 export const server = setupServer(...handlers);
 
-/** `usePathname` returns null outside a real App Router tree, which would make
- *  every component that reads it throw under test. Tests set the path they are
- *  pretending to be on via `setPathname`. */
 let pathname = "/";
 export function setPathname(next: string) {
   pathname = next;
+}
+
+let searchParams = new URLSearchParams();
+export function setSearchParams(next: URLSearchParams | string) {
+  searchParams = typeof next === "string" ? new URLSearchParams(next) : next;
 }
 
 vi.mock("next/navigation", () => ({
@@ -23,7 +25,7 @@ vi.mock("next/navigation", () => ({
     refresh: vi.fn(),
     prefetch: vi.fn(),
   }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParams,
   useParams: () => ({}),
 }));
 
@@ -49,5 +51,6 @@ afterEach(() => {
   server.resetHandlers();
   cleanup();
   pathname = "/";
+  searchParams = new URLSearchParams();
 });
 afterAll(() => server.close());
