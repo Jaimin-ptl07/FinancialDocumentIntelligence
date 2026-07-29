@@ -488,6 +488,13 @@ class ExtractSourceView(BaseModel):
 
 class ExtractFieldView(BaseModel):
     field_name: str
+    # The taxonomy tag and its extracted/derived origin -- assemble_result
+    # (core/extractor.py) always sets both, but this model dropped them
+    # silently until now (Pydantic ignores undeclared keys by default). A
+    # deep link from the taxonomy viewer matches a field by `tag`, since
+    # `field_name` is not unique across modules.
+    tag: str | None = None
+    origin: str | None = None
     value: object
     source: ExtractSourceView
     confidence: float

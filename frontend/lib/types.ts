@@ -66,6 +66,12 @@ export interface ExtractSourceView {
 
 export interface ExtractFieldView {
   field_name: string;
+  /** The taxonomy tag and its extracted/derived origin -- null for a field
+   *  extracted under a pre-taxonomy (v3.1-shaped) schema. A deep link from
+   *  the taxonomy viewer matches on `tag`, never `field_name` (which
+   *  collides across modules -- see fieldId's own comment in lib/format.ts). */
+  tag: string | null;
+  origin: "extracted" | "derived" | null;
   value: unknown;
   source: ExtractSourceView;
   confidence: number;

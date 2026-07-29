@@ -1874,6 +1874,11 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
     assert body["module"] is None
     assert body["field_count"] == 1
     assert body["fields"][0]["field_name"] == "Company overview text"
+    # This test's schema has no "tag" key on its one field (pre-taxonomy v3.1
+    # shape) -- proves the new key round-trips as null rather than being
+    # dropped, same as a real tagged v4.1 field would round-trip its tag.
+    assert body["fields"][0]["tag"] is None
+    assert body["fields"][0]["origin"] == "extracted"
 
 
 # --------------------------------------------------------------------------
