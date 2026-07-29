@@ -16,6 +16,10 @@ describe("Spine", () => {
     expect(
       screen.getByRole("link", { name: "Extraction schema" }),
     ).toHaveAttribute("href", "/schema");
+    expect(screen.getByRole("link", { name: "Taxonomy" })).toHaveAttribute(
+      "href",
+      "/taxonomy",
+    );
     expect(screen.getByRole("link", { name: "Quality" })).toHaveAttribute(
       "href",
       "/analytics",

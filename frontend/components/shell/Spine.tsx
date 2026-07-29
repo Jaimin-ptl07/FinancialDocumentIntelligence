@@ -10,6 +10,7 @@ const DESTINATIONS = [
   { href: "/", label: "Filings" },
   { href: "/ingest", label: "Add a filing" },
   { href: "/schema", label: "Extraction schema" },
+  { href: "/taxonomy", label: "Taxonomy" },
   { href: "/analytics", label: "Quality" },
   { href: "/costing", label: "Costing" },
 ] as const;
