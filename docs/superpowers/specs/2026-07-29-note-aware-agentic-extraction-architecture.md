@@ -243,6 +243,45 @@ Phase 0 is the correct first move: pure function over an artifact we already
 have, no Azure, no LLM, no graph store, and it produces a **number** that
 validates or invalidates the entire plan before any large build.
 
+## 8.1 Phase 0 result — GATE PASSED (2026-07-29)
+
+Measured on TCS FY2025-26, no LLM and no graph store involved.
+
+| Metric | Naive index | After title binding |
+|---|---|---|
+| Face references resolvable | 31/41 (75%) | **39/41 (95%)** |
+| False-null notes landing on the right page | 8/10 (80%) | **10/10 (100%)** |
+
+**The failure the spike found, and the design decision it forced.** Azure DI
+emits note headings as `sectionHeading` (`N)` top level, `(x)` sub-note). But
+TCS's `8)` heading was **never emitted**, so its sub-notes `(a)..(f)` inherited
+the previously-open note 7 (Leases): PPE — the single largest false-null cluster
+— was filed as `7(a)`, and a lookup of `8(a)` would have **confidently returned
+the wrong page**. Silent misdirection is worse than a null.
+
+Decision: **the face table is authoritative for the note number.** When a
+reference does not resolve against the heading-derived index, match the face
+row's LABEL to a sub-note heading's TITLE and rebind under the face's ref. This
+depends only on the Note column, which is mandatory under Ind-AS presentation,
+rather than on the OCR happening to tag every heading — so it generalizes better
+than heading detection alone.
+
+Two further constraints confirmed empirically:
+
+- **Basis scoping is mandatory.** TCS carries consolidated (p163–243) and
+  standalone (p244–360) statements; both have a "note 8". The index is built
+  per basis region (`basis_bounds`), or references resolve to the wrong
+  statement set.
+- **Tail bounding is mandatory.** The AGM notice restarts its own `1)`, `4)`,
+  `7)` numbering; `find_statement_pages` trims the notes section before the
+  notice begins.
+
+Delivered in `fdi.core.notes` (pure, total, 9 unit tests including a regression
+for the missing-heading case) and wired into `extract_unit`: note candidates are
+injected **after** the similarity/basis filters — evidence resolved from a
+printed reference must not be discarded by a heuristic — scored above the search
+pool and capped so a long schedule cannot crowd it out.
+
 ## 9. The generalization gate (Phase 4)
 
 Not a build step — a go/no-go checkpoint. RIL is chosen because it is
