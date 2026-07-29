@@ -228,3 +228,82 @@ export interface AnalyticsView {
   chunk_count: number;
   total_cost_inr: number;
 }
+
+/** One node in a statement's tree (from tree_from_schema, backend/src/fdi/
+ *  core/factsheet.py). `value` is `unknown` for the same reason
+ *  ExtractFieldView.value is: a scalar for a non-dual-period field, or
+ *  `{current, prior}` for one that is -- see isDualPeriod in lib/format.ts.
+ *  A node with `tag === null` is a pure section/group heading; a node can
+ *  carry BOTH a tag/value AND children (a derived subtotal that also breaks
+ *  out its inputs, e.g. Raw materials = Imported + Indigenous). */
+export interface TaxonomyTreeNode {
+  field_name: string;
+  tag: string | null;
+  path: string;
+  // Verified against the real v4.1 file: every node's `origin` is exactly
+  // "extracted", "derived", or absent (pure structural group headers) --
+  // never any other value.
+  origin: "extracted" | "derived" | null;
+  role: string | null;
+  value: unknown;
+  confidence: number | null;
+  band: "high" | "needs_review" | "low" | "failed" | null;
+  page: number | null;
+  children: TaxonomyTreeNode[];
+}
+
+export interface TaxonomyStatementView {
+  key: string;
+  name: string;
+  statement: string;
+  tree: TaxonomyTreeNode[];
+}
+
+/** Structurally identical to AuditFactSheet's own FactSheetBundle
+ *  (components/analytics/AuditFactSheet.tsx) plus the fields that component
+ *  doesn't need -- kept as a separate type rather than importing that one so
+ *  AuditFactSheet stays a self-contained, independently-testable
+ *  presentational component per its own file header. */
+export interface FactsheetRatioView {
+  key: string;
+  label: string;
+  value: number | null;
+  status: string;
+  caro_clause: string;
+  explanation: string;
+}
+
+export interface FactsheetValidationView {
+  rule_id: string;
+  kind: string;
+  expected: number | string;
+  actual: number | string;
+  delta: number;
+  severity: string;
+  passed: boolean;
+}
+
+export interface FactsheetDocumentView {
+  summary: {
+    extracted: number;
+    derived_ok: number;
+    derived_unresolved: number;
+    ratios_ok: number;
+    checks_total: number;
+    checks_failed: number;
+    bands: { high: number; needs_review: number; low: number; failed: number };
+  };
+  ratios: FactsheetRatioView[];
+  validations: FactsheetValidationView[];
+  coverage: {
+    totals: {
+      expected: number;
+      found_extracted: number;
+      derived_ok: number;
+      missing_extracted: number;
+      completeness_pct: number;
+    };
+  };
+  statements: TaxonomyStatementView[];
+  doc_key: string;
+}

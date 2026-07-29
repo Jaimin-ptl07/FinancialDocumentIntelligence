@@ -7,6 +7,7 @@ import type {
   DocumentView,
   ExtractDocumentView,
   ExtractionSchema,
+  FactsheetDocumentView,
   SchemaValidationView,
   SchemaView,
   StagesView,
@@ -83,6 +84,16 @@ export const extractDocument = (docKey: string, module?: string, force?: boolean
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ doc_key: docKey, module: module ?? null, force: force ?? false }),
+  });
+
+/** POST /factsheet/document: extraction + derivation/validation/ratios/coverage
+ *  in one call, plus the nested per-statement tree the taxonomy viewer renders.
+ *  Cache-first like extractDocument -- `force` re-runs extraction from scratch. */
+export const factsheetDocument = (docKey: string, force?: boolean) =>
+  request<FactsheetDocumentView>("/factsheet/document", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ doc_key: docKey, force: force ?? false }),
   });
 
 export const getSchema = () => request<SchemaView>("/schema");
