@@ -109,7 +109,9 @@ export function FieldEditor({
             marginTop: "var(--sp-1)",
           }}
         >
-          {field.canonical_label}
+          {/* `canonical_label` is undefined on a v4.1-shaped field -- falls
+              back to the raw field name. */}
+          {field.canonical_label ?? field.field_name}
         </h2>
         <p
           className="data"
@@ -148,7 +150,7 @@ export function FieldEditor({
           id="field-description"
           rows={2}
           className="input"
-          value={field.description}
+          value={field.description ?? ""}
           onChange={(e) => patch({ description: e.target.value })}
         />
       </Row>
@@ -162,7 +164,7 @@ export function FieldEditor({
           id="field-extraction-prompt"
           rows={5}
           className="input"
-          value={field.extraction_prompt}
+          value={field.extraction_prompt ?? ""}
           onChange={(e) => patch({ extraction_prompt: e.target.value })}
         />
       </Row>
@@ -172,10 +174,12 @@ export function FieldEditor({
         label="Aliases"
         hint="One label per line. These are the wordings the figure appears under in real filings; they also weight the reranker."
       >
+        {/* `field_path` and `aliases` are both undefined on a v4.1-shaped
+            group node -- key falls back to field_name, aliases to []. */}
         <AliasesBox
-          key={field.field_path}
+          key={field.field_path ?? field.field_name}
           id="field-aliases"
-          aliases={field.aliases}
+          aliases={field.aliases ?? []}
           onChange={(aliases) => patch({ aliases })}
         />
       </Row>

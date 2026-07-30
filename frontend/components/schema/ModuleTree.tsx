@@ -10,13 +10,17 @@ export interface FieldPath {
 
 /** A field answers to its machine name, the label an analyst reads, and every
  *  wording it has been seen under in a filing. Searching only the label would
- *  hide 198 fields behind vocabulary the analyst does not know yet. */
+ *  hide 198 fields behind vocabulary the analyst does not know yet.
+ *
+ *  `canonical_label`/`aliases` are undefined on a v4.1-shaped field (that
+ *  schema has no such properties) -- guarded here rather than assumed, since
+ *  this tree is not yet updated to really understand the v4.1 hierarchy. */
 function matches(field: SchemaField, needle: string): boolean {
   if (!needle) return true;
   return (
     field.field_name.toLowerCase().includes(needle) ||
-    field.canonical_label.toLowerCase().includes(needle) ||
-    field.aliases.some((a) => a.toLowerCase().includes(needle))
+    (field.canonical_label ?? "").toLowerCase().includes(needle) ||
+    (field.aliases ?? []).some((a) => a.toLowerCase().includes(needle))
   );
 }
 
@@ -26,26 +30,34 @@ export function filterModules(
   modules: SchemaModule[],
   query: string,
 ): SchemaModule[] {
+  const safeModules = modules ?? [];
   const needle = query.trim().toLowerCase();
-  if (!needle) return modules;
-  return modules
+  if (!needle) return safeModules;
+  return safeModules
     .map((module) => ({
       ...module,
-      retrieval_units: module.retrieval_units
+      retrieval_units: (module.retrieval_units ?? [])
         .map((unit) => ({
           ...unit,
-          fields: unit.fields.filter((f) => matches(f, needle)),
+          fields: (unit.fields ?? []).filter((f) => matches(f, needle)),
         }))
         .filter((unit) => unit.fields.length > 0),
     }))
     .filter((module) => module.retrieval_units.length > 0);
 }
 
+/** Guarded against a v4.1-shaped document (nested fields, units/modules
+ *  missing the v3.1 fields this counts): counts only top-level fields per
+ *  unit, not the full nested tree, so this stays a crash-free approximation
+ *  rather than a real v4.1 field count. */
 export function countFields(modules: SchemaModule[]): number {
-  return modules.reduce(
+  return (modules ?? []).reduce(
     (total, module) =>
       total +
-      module.retrieval_units.reduce((n, unit) => n + unit.fields.length, 0),
+      (module.retrieval_units ?? []).reduce(
+        (n, unit) => n + (unit.fields ?? []).length,
+        0,
+      ),
     0,
   );
 }
@@ -105,7 +117,7 @@ export function ModuleTree({
             </span>
           </h2>
 
-          {module.retrieval_units.map((unit) => (
+          {(module.retrieval_units ?? []).map((unit) => (
             <div key={unit.unit_id} style={{ paddingBottom: "var(--sp-2)" }}>
               <div
                 className="data"
@@ -124,16 +136,22 @@ export function ModuleTree({
                 <span aria-hidden="true" style={{ color: "var(--ink-faint)" }}>
                   &rsaquo;
                 </span>
-                <span>{unit.unit_id} · {unit.title}</span>
+                {/* `title` is undefined on a v4.1-shaped unit (no such
+                    property there) -- falls back to the retrieval query,
+                    then blank, rather than literally rendering "undefined". */}
+                <span>{unit.unit_id} · {unit.title ?? unit.retrieval_query ?? ""}</span>
               </div>
               <ul>
-                {unit.fields.map((field) => {
+                {(unit.fields ?? []).map((field) => {
                   const active =
                     selected?.moduleKey === module.key &&
                     selected.unitId === unit.unit_id &&
                     selected.fieldName === field.field_name;
                   return (
-                    <li key={field.field_path}>
+                    // `field_path` is undefined on a v4.1 group/parent node
+                    // (only leaves carry it there) -- fall back to the field
+                    // name so this never renders a duplicate-`undefined` key.
+                    <li key={field.field_path ?? field.field_name}>
                       <button
                         type="button"
                         aria-current={active ? "true" : undefined}
@@ -187,7 +205,9 @@ export function ModuleTree({
                           ›
                         </span>
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {field.canonical_label}
+                          {/* `canonical_label` is undefined on a v4.1-shaped
+                              field -- falls back to the raw field name. */}
+                          {field.canonical_label ?? field.field_name}
                         </span>
                       </button>
                     </li>
