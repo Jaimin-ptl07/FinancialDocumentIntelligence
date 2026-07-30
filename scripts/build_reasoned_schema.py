@@ -326,7 +326,8 @@ FATHER_TOTAL_OVERRIDES = {
     "equity": {"TOTEQNR": ["TOTEQ", "TOTOTEQ", "TOTRESV", "TOTRE/SOPL"]},
 }
 
-_REPORTING_UNIT = "INR Lakhs"
+# The document states its own unit ("(Rs crore)"); extraction never converts.
+_REPORTING_UNIT = "as reported"
 _LABELS = {"profit_and_loss": "Profit and Loss", "assets": "Assets",
            "liabilities": "Liabilities", "equity": "Equity"}
 
@@ -345,10 +346,20 @@ def data_type(particulars):
 
 
 def prompt(particulars, statement):
+    """Per-field instruction.
+
+    It must NOT name a target unit. The shared extraction rules already say
+    "return the number exactly as printed -- do not rescale, convert, or
+    reinterpret units"; an earlier version of this prompt said "report the
+    figures in INR Lakhs", which CONTRADICTED that rule and was measured
+    inflating TCS values 10x (Prepaid expenses 2,049 -> 20,490) once note
+    evidence entered the prompt. Canonicalising to a target unit is the
+    Normalization stage's job, downstream of extraction."""
     return (f"Extract the value of '{particulars}' from the "
             f"{_LABELS.get(statement, statement)} statement. Report the "
-            f"current-year and prior-year figures in {_REPORTING_UNIT}; "
-            f"return null if the line item is absent.")
+            f"current-year and prior-year figures exactly as printed in the "
+            f"document's own reporting unit; return null if the line item is "
+            f"absent.")
 
 
 def _uniq(base, seen):
@@ -360,18 +371,63 @@ def _uniq(base, seen):
     seen.add(f"{base}#{n}"); return f"{base}#{n}"
 
 
-def enrich(nodes, statement, seen, counter):
+ALIASES = ROOT / "docs" / "architecture" / "taxonomy" / "concept-note-aliases.json"
+DEFINITIONS = ROOT / "docs" / "architecture" / "taxonomy" / "concept-definitions.json"
+
+
+def _definition_table(statement):
+    """{normalized concept name: definition} for a statement."""
+    if not DEFINITIONS.exists():
+        return {}
+    raw = json.loads(DEFINITIONS.read_text("utf-8")).get("definitions", {})
+    return {
+        re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", k.lower())).strip(): v
+        for k, v in raw.get(statement, {}).items()
+    }
+
+
+def _alias_table(statement):
+    """{normalized concept name: [report-side label variants]} for a statement."""
+    if not ALIASES.exists():
+        return {}
+    raw = json.loads(ALIASES.read_text("utf-8")).get("concepts", {})
+    return {
+        re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", k.lower())).strip(): v
+        for k, v in raw.get(statement, {}).items()
+    }
+
+
+def enrich(nodes, statement, seen, counter, table=None, inherited=(), defs=None):
     """Add field_path (unique) to tagged nodes and data_type/extraction_prompt
     to extracted LEAVES, so parse_field_specs + validate_extraction_schema
     accept the tree. A tagless VALUED leaf (a subtotal the customer never tagged)
     gets a synthetic deterministic tag so it stays an addressable Fact. Group and
     derived nodes need no extraction_prompt."""
+    if table is None:
+        table = _alias_table(statement)
+    if defs is None:
+        defs = _definition_table(statement)
     for n in nodes:
+        # A concept's report-side aliases are INHERITED by its whole subtree:
+        # the note reference is printed against the parent ("Property, plant and
+        # equipment | 8(a)"), while the leaves carry taxonomy names ("Buildings").
+        key = re.sub(r"\s+", " ",
+                     re.sub(r"[^a-z0-9 ]", " ", n.get("field_name", "").lower())).strip()
+        aliases = table.get(key) or list(inherited)
+        # A definition is NOT inherited: it describes THIS concept, and an
+        # inherited one would wrongly claim a parent's scope for a child.
+        definition = defs.get(key)
+        if definition:
+            n["definition"] = definition
         children = n.get("fields")
         if children:
             if n.get("tag"):
                 n["field_path"] = _uniq(f"{statement}.{n['tag']}", seen)
-            enrich(children, statement, seen, counter)
+            # the PARENT carries the aliases too: it is the concept a report
+            # line is mapped against (fdi.core.concepts groups by parent).
+            if aliases:
+                n["note_aliases"] = list(dict.fromkeys(aliases))
+            enrich(children, statement, seen, counter, table, aliases, defs)
             continue
         # childless leaf
         tag = n.get("tag")
@@ -382,6 +438,8 @@ def enrich(nodes, statement, seen, counter):
             n["synthetic_tag"] = True
         if tag:
             n["field_path"] = _uniq(f"{statement}.{tag}", seen)
+        if aliases:
+            n["note_aliases"] = list(dict.fromkeys(aliases))
         if n.get("origin") == "extracted":
             dt, is_ratio = data_type(n.get("field_name", ""))
             n["data_type"] = dt
@@ -440,14 +498,14 @@ def assemble():
 
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema-descriptor",
-        "title": "FDI Taxonomy Field Schema (reasoned, v4.1)",
-        "version": "4.1.0",
+        "title": "FDI Taxonomy Field Schema (reasoned, v4.2 - concept note aliases)",
+        "version": "4.2.0",
         "reporting_unit": _REPORTING_UNIT,
         "taxonomy_source": "Q3VENI-taxonomy-source.xlsx",
         "modules": modules,
     }
     errors = validate_extraction_schema(schema)
-    out = ROOT / "docs" / "architecture" / "field-extraction-schema.v4_1.json"
+    out = ROOT / "docs" / "architecture" / "field-extraction-schema.v4_2.json"
     if errors:
         print("VALIDATION FAILED:", len(errors))
         for e in errors[:30]:

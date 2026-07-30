@@ -163,6 +163,78 @@ def repair_headers(grid: Mapping[str, object]) -> dict[str, object]:
     return out
 
 
+# A schedule narrower than this is not worth flipping: the "many entity
+# columns" shape is what makes a matrix hard to read positionally.
+_MATRIX_MIN_COLS = 4
+_MATRIX_MIN_PERIOD_ROWS = 2
+
+
+def is_matrix_schedule(grid: Mapping[str, object]) -> bool:
+    """True when the grid is a TRANSPOSED schedule: entities across the top,
+    movement rows down the side.
+
+    The PPE/intangibles schedule is the canonical case -- asset classes are
+    COLUMNS (Freehold land, Buildings, Plant and equipment...) and the rows are
+    movements ("Cost as at April 1, 2025", "Additions", "Disposals", "Net
+    carrying amount as at March 31, 2026"). Every other financial table puts the
+    period in the HEADER and line items down the side, which is the shape the
+    extraction prompt assumes ("label | current | prior").
+
+    The tell is therefore where the period lives: no period in the headers, but
+    periods in the row labels. Measured consequence of not handling this: TCS
+    Buildings gross block read 8 instead of 8,685 and Furniture read 88 off the
+    "Additions" row -- the model was doing a positional 2D lookup and missing.
+    """
+    if not isinstance(grid, Mapping):
+        return False
+    n_cols = _as_int(grid.get("n_cols"), 0)
+    headers = _extract_headers(grid, n_cols)
+    rows = _extract_grid_rows(grid)
+    if n_cols < _MATRIX_MIN_COLS or len(rows) < _MATRIX_MIN_PERIOD_ROWS:
+        return False
+    if any(_is_period(h) for h in headers[1:]):
+        return False
+    header_row_count = _as_int(grid.get("header_row_count"), 0)
+    labelled = [r[0] for r in rows[max(header_row_count, 0):] if r]
+    return sum(1 for label in labelled if _is_period(label)) >= _MATRIX_MIN_PERIOD_ROWS
+
+
+def transpose_grid(grid: Mapping[str, object]) -> dict[str, object]:
+    """Flip a matrix schedule so each ENTITY becomes a row and each movement
+    becomes a column -- the `label | value | value` shape the prompt expects.
+
+    Total: never raises; a grid that is not a matrix is returned unchanged.
+    """
+    src: Mapping[str, object] = grid if isinstance(grid, Mapping) else {}
+    if not is_matrix_schedule(src):
+        return dict(src)
+
+    n_cols = _as_int(src.get("n_cols"), 0)
+    headers = _extract_headers(src, n_cols)
+    rows = _extract_grid_rows(src)
+    header_row_count = _as_int(src.get("header_row_count"), 0)
+    body = [r for r in rows[max(header_row_count, 0):] if r]
+
+    new_headers = [headers[0] if headers else ""] + [
+        r[0] if r else "" for r in body
+    ]
+    new_rows: list[list[str]] = []
+    for col in range(1, n_cols):
+        label = headers[col] if col < len(headers) else ""
+        cells = [row[col] if col < len(row) else "" for row in body]
+        if label or any(c.strip() for c in cells):
+            new_rows.append([label, *cells])
+
+    out: dict[str, object] = dict(src)
+    out["column_headers"] = new_headers
+    out["grid"] = [list(new_headers), *new_rows]
+    out["n_cols"] = len(new_headers)
+    out["n_rows"] = len(new_rows) + 1
+    out["header_row_count"] = 1
+    out["transposed"] = True
+    return out
+
+
 def render_table_markdown(
     grid: Mapping[str, object], *, identity: str = "", units: str | None = None
 ) -> str:
@@ -180,6 +252,10 @@ def render_table_markdown(
             title += f" -- {units}"
 
     repaired = repair_headers(grid)
+    # A matrix schedule is flipped BEFORE rendering so the model reads it the
+    # same way as every other statement table, instead of doing a positional 2D
+    # lookup across a wide grid (which misread TCS Buildings as 8, not 8,685).
+    repaired = transpose_grid(repaired)
 
     n_cols = _as_int(repaired.get("n_cols"), 0)
     header_row_count = _as_int(repaired.get("header_row_count"), 0)

@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "description": "What each concept MEANS, for disambiguation when mapping a report line onto a taxonomy tag. A definition is only load-bearing where sibling names alone cannot decide the assignment -- 'Land' vs 'Buildings' is obvious, but an issuer's 'Computer equipment' could plausibly land on Plant and equipment, Office equipment, or Other tangible assets. Definitions therefore state what is INCLUDED and, critically, what is EXCLUDED, so a catch-all bucket does not silently absorb lines that belong to a named sibling. Keyed by taxonomy concept name per statement, matched case/punctuation-insensitively (fdi.core.concepts.normalize). Concepts absent here fall back to a structural description derived from the hierarchy; add an entry only when a real ambiguity is observed, not for completeness.",
+  "definitions": {
+    "profit_and_loss": {
+      "Revenue From Operations — Gross Revenue from Operations": "Turnover from the entity's principal business before deducting indirect taxes (GST/excise) and before other income. Excludes interest, dividend, rent and gains on asset/investment disposal, which are Other income.",
+      "Revenue from Sale of Products": "Revenue from goods manufactured or produced by the entity. Excludes goods bought and resold without processing (Revenue from Traded Goods) and service fees.",
+      "Revenue from Sale of Services": "Revenue from rendering services, including consultancy, IT, professional and support services. For a services company this is normally the dominant revenue line.",
+      "Revenue from Traded Goods": "Revenue from goods purchased and resold substantially unchanged, including equipment and third-party software licences resold to customers.",
+      "Other Operating Revenues": "Recurring income incidental to the principal business (scrap sales, export incentives, duty drawback). Excludes non-operating items such as interest and dividend.",
+      "Other income": "Income outside the principal business: interest, dividend, rent, net gains on disposal or fair valuation of assets and investments, and foreign-exchange gains.",
+      "Interest": "Interest earned on bank deposits, loans given, and financial assets. Excludes interest PAID, which is a finance cost.",
+      "Dividend": "Dividend income from investments, including dividends received from subsidiaries and associates.",
+      "Expenses": "All costs charged against income for the period, before tax and before exceptional or extraordinary items.",
+      "Cost of Materials Consumed": "Raw materials and components consumed in production. Excludes purchases of finished goods for resale (stock-in-trade) and stores/spares consumed.",
+      "Employee benefit expense": "All staff costs: salaries, wages, incentives, allowances, contributions to provident and other funds, share-based payments and staff welfare.",
+      "Finance costs": "Interest and borrowing costs on debt, lease-liability interest, and bank charges. Excludes principal repayment and excludes interest INCOME.",
+      "Depreciation, depl. & amortz. exp": "Systematic charge writing down tangible assets (depreciation), intangible assets (amortisation), right-of-use assets and depletion. Excludes impairment losses, which are a separate concept.",
+      "Impairment Loss - Other than IMPL, IMPA": "Write-down of an asset's carrying value below its recoverable amount. Distinct from routine depreciation/amortisation.",
+      "Other expenses": "Operating expenses not separately classified above: power and fuel, rent, repairs, travel, legal and professional fees, advertising, insurance, CSR, and miscellaneous items.",
+      "Tax expense": "Total income-tax charge for the period: current tax plus deferred tax, including prior-year adjustments. Excludes indirect taxes such as GST.",
+      "Current tax": "Tax payable on the taxable profit of the current period, including MAT where applicable. Excludes deferred tax.",
+      "Deferred tax": "Tax effect of temporary differences between accounting and tax bases. Often a credit (negative) when reversing.",
+      "Other comprehensive income (Net)": "Gains and losses recognised outside profit or loss: remeasurement of defined-benefit plans, fair-value changes on FVOCI investments, and cash-flow hedge movements.",
+      "Prior period, exceptional, extraordinary items": "Material, non-recurring items disclosed separately from ordinary operating results, such as restructuring costs, one-off legal provisions and statutory impacts."
+    },
+    "assets": {
+      "Fixed assets/PPE Gross Block - Closing": "Original cost of tangible fixed assets at period end, BEFORE deducting accumulated depreciation. Read the 'cost/gross carrying amount as at' row, never the net row.",
+      "Fixed assets/PPE Net Block - Closing": "Carrying amount of tangible fixed assets at period end AFTER deducting accumulated depreciation. Read the 'net carrying amount as at' row.",
+      "Land": "Freehold and leasehold land. Excludes buildings standing on it.",
+      "Buildings": "Structures and premises, including factory and office buildings. Excludes the land beneath them and excludes leasehold improvements to premises not owned.",
+      "Plant and equipment": "Machinery and operating equipment, including computer and IT hardware and office equipment where the issuer does not disclose those separately. Excludes land, buildings, vehicles and furniture.",
+      "Furniture and fixtures": "Furniture, fittings and fixtures. Excludes office equipment and computer hardware.",
+      "Vehicles": "Motor vehicles owned by the entity.",
+      "Leasehold improvements": "Capitalised improvements to premises the entity does not own. Excludes owned buildings.",
+      "Other tangible assets": "Tangible fixed assets that fit no named sibling. Use ONLY after checking every named class; do not use it as a default.",
+      "Intangible assets - Gross Block": "Original cost of intangible assets at period end before amortisation: software, goodwill, brands, licences, patents.",
+      "Intangible Assets-Net Block": "Carrying amount of intangible assets after accumulated amortisation and impairment.",
+      "Non-Current Investments": "Investments intended to be held beyond twelve months, including investments in subsidiaries, associates and joint ventures.",
+      "Current investments (Net)": "Investments realisable within twelve months, such as mutual funds, short-term bonds and reverse-repo balances.",
+      "Inventories": "Goods held for sale, in production, or consumed in production: raw materials, work-in-progress, finished goods, stock-in-trade, stores and spares.",
+      "Current trade receivables (Net)": "Amounts due from customers within twelve months, net of loss allowance. Includes billed and unbilled revenue where disclosed. Excludes advances paid to suppliers.",
+      "Cash, Bank balance and Bank depo.": "Cash on hand, balances in current accounts, and deposits. Note that 'cash and cash equivalents' as reported often already includes short-term bank balances; bank deposits held beyond three months or under lien are usually disclosed separately.",
+      "Cash balance": "Cash and cash equivalents: cash on hand, cheques on hand, remittances in transit, and bank balances in current and short-maturity deposit accounts.",
+      "Bank balance": "Bank balances disclosed SEPARATELY from cash and cash equivalents, typically deposits with maturity over three months, earmarked balances and amounts under lien.",
+      "Non Current financial assets": "Financial assets recoverable after twelve months: long-term loans, deposits, and other financial assets.",
+      "Current financial assets": "Financial assets recoverable within twelve months: advances, prepaid expenses, interest receivable, security deposits and other short-term financial assets."
+    },
+    "liabilities": {
+      "Non-current & current liabilities — Borrowings": "Interest-bearing debt from banks, financial institutions and others: term loans, working capital facilities, bonds, debentures, commercial paper and deposits. A debt-free entity reports none of these.",
+      "Term loans": "Borrowings repayable per a fixed schedule beyond one year, split into current and non-current portions.",
+      "Working capital loans, Short Term Loan, Cash Credit, Trade Credit": "Short-term bank facilities financing operations: cash credit, overdraft, packing credit and other working-capital lines.",
+      "Lease liabilities": "Obligation to make lease payments, measured at the present value of remaining payments, split into current and non-current.",
+      "Trade payables": "Amounts owed to suppliers for goods and services, including dues to micro and small enterprises disclosed separately under MSMED.",
+      "Other Liabilities": "Non-borrowing, non-trade obligations: statutory dues, employee payables, unearned and deferred revenue, unpaid dividends, security deposits received and other payables.",
+      "Provisions": "Liabilities of uncertain timing or amount recognised from a present obligation: employee benefits, warranties, litigation and other provisions. Excludes trade payables and accruals with certain amounts."
+    },
+    "equity": {
+      "Share capital": "Issued, subscribed and paid-up capital at face value. Excludes securities premium and all reserves.",
+      "Other Equity": "All shareholders' funds other than paid-up share capital: reserves, retained earnings, securities premium, and accumulated other comprehensive income.",
+      "Reserves": "Appropriations and statutory/specific reserves: general reserve, capital reserve, capital redemption reserve, securities premium, debenture redemption reserve and revaluation reserve.",
+      "Retained earnings or statement of profit and loss": "Cumulative undistributed profits carried forward, after dividends and transfers to and from other reserves."
+    }
+  }
+}

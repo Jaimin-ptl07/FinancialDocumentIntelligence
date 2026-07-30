@@ -79,12 +79,18 @@ from fdi.core.extractor import (
     unit_needs_tables,
     unit_top_k,
 )
+from fdi.core.notes import (
+    NoteMap,
+    basis_bounds,
+    build_note_map,
+    find_statement_pages,
+)
 from fdi.core.pricing import LlmCallUsage
 from fdi.core.provenance import resolve_evidence_regions, resolve_field_regions
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
-from fdi.pipeline.retrieval import hybrid_search
+from fdi.pipeline.retrieval import hybrid_search, read_chunks
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -163,6 +169,71 @@ _EXTRACT_TOP_K = 20
 # top_k -- strictly less context than the harness supplied, a silent recall
 # regression. top_k*2 mirrors the harness's fuse(k=top_k*2).
 _POOL_OVERFETCH = 2
+
+# Note candidates are FETCHED from a printed reference, not guessed by
+# similarity, so they outrank every searched candidate and survive reranking.
+_NOTE_SCORE = 1_000.0
+
+# Cap injected note chunks so a long schedule cannot crowd out the search pool.
+_NOTE_MAX = 12
+
+
+def _note_candidates(
+    chunks: Sequence[Mapping[str, object]], pages: Sequence[int], doc_id: str
+) -> list[Candidate]:
+    """Chunks lying on a resolved note's pages, as Candidates.
+
+    This is the deterministic half of retrieval: the note reference printed on
+    the face row (`Property, plant and equipment | 8(a)`) already says where the
+    breakdown lives, so those pages are FETCHED rather than searched for.
+    Similarity cannot do this -- "Land" is too generic and the schedule sits ~30
+    pages from the face -- which is why ~50 taxonomy leaves came back null on
+    TCS. Scored above the search pool so reranking cannot drop them."""
+    wanted = set(pages)
+    if not wanted:
+        return []
+    out: list[Candidate] = []
+    for chunk in chunks:
+        if not isinstance(chunk, Mapping):
+            continue
+        page = chunk.get("page")
+        if not isinstance(page, int) or page not in wanted:
+            continue
+        chunk_id = chunk.get("chunk_id")
+        if not isinstance(chunk_id, str):
+            continue
+        out.append(
+            Candidate(
+                evidence_id=f"{doc_id}:{chunk_id}",
+                text=str(chunk.get("text", "")),
+                page=page,
+                score=_NOTE_SCORE,
+                source_tool="note",
+            )
+        )
+    return out
+
+
+def _note_pages_for_unit(note_map: NoteMap | None, unit: UnitSpec) -> list[int]:
+    """Union of the note pages this unit's fields reference.
+
+    A taxonomy leaf ("Buildings") rarely matches a report label, so each field
+    also carries its parent concept's report-side aliases ("property, plant and
+    equipment") -- without that bridge only 4 of 402 v4.1 leaves resolved a note
+    at all. Every alias contributes: a concept legitimately spans more than one
+    note (advances sit in "other assets", interest receivable in "other
+    financial assets"), so taking only the first match drops real evidence."""
+    if note_map is None:
+        return []
+    pages: list[int] = []
+    seen: set[int] = set()
+    for field in unit.fields:
+        for label in (field.field_name, *field.note_aliases):
+            for page in note_map.pages_for_label(label):
+                if page not in seen:
+                    seen.add(page)
+                    pages.append(page)
+    return pages
 
 
 async def _pool_for(
@@ -292,6 +363,8 @@ async def extract_unit(
     client: ExtractorClient,
     basis_artifact: Mapping[str, object] | None = None,
     structure: Mapping[str, object] | None = None,
+    note_map: NoteMap | None = None,
+    chunks: Sequence[Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """ONE retrieval + ONE LLM call for every field in `unit` -- schema v3.1's
     "Retrieve-once, extract-many". Returns one output_contract record per
@@ -307,6 +380,22 @@ async def extract_unit(
     scoped = _filter_by_basis(
         scoped, basis_artifact=basis_artifact or {}, preference=unit.basis_preference,
     )
+    # Note-follow is injected AFTER the filters: these pages were resolved from a
+    # printed reference, so no similarity/basis heuristic may discard them.
+    note_pages = _note_pages_for_unit(note_map, unit)
+    if note_pages:
+        have = {c.evidence_id for c in scoped}
+        injected = [
+            c
+            for c in _note_candidates(chunks or [], note_pages, ctx.doc_id)
+            if c.evidence_id not in have
+        ][:_NOTE_MAX]
+        if injected:
+            log.info(
+                "extractor.note_follow",
+                unit=unit.unit_id, pages=len(note_pages), injected=len(injected),
+            )
+            scoped = injected + list(scoped)
     ranked = rerank_candidates(scoped, unit.locator_keywords, top_k=top_k)
     if not ranked:
         return assemble_unit_results(unit, {}, ranked)
@@ -394,6 +483,58 @@ def _attach_regions(
     return record
 
 
+async def _read_chunks_for(ctx: ExtractContext) -> list[Mapping[str, object]]:
+    """The document's chunk records, once. Never raises: no chunks -> no
+    note-follow, and retrieval degrades to search alone."""
+    try:
+        return list(await read_chunks(RegistryRepository(ctx.session), ctx.store, ctx.doc_id))
+    except Exception:  # noqa: BLE001 - decision 10
+        log.info("extractor.chunks_unavailable", doc_id=ctx.doc_id)
+        return []
+
+
+async def _note_map_for(
+    ctx: ExtractContext,
+    *,
+    basis_artifact: Mapping[str, object],
+    preference: str,
+) -> NoteMap | None:
+    """Build the note index for ONE basis region.
+
+    Scoping to a basis is not optional: a report carrying both consolidated and
+    standalone statements has two "note 8", and an unscoped index resolves a
+    reference to whichever came first. The AGM notice that follows the
+    statements restarts numbering too, so `find_statement_pages` trims the tail.
+    Never raises -- a missing OCR artifact degrades to no note-follow."""
+    ocr = await _read_latest_artifact(ctx, "ocr")
+    paragraphs = ocr.get("paragraphs")
+    tables = ocr.get("tables")
+    if not isinstance(paragraphs, list) or not paragraphs:
+        return None
+    lo, hi = basis_bounds(basis_artifact, preference)
+    pages = find_statement_pages(paragraphs)
+    if lo == 0 and hi == 0:
+        lo, hi = pages.page_lo, pages.page_hi
+    elif pages.page_hi:
+        hi = min(hi, pages.page_hi)
+    if lo <= 0 or hi < lo:
+        return None
+    face_pages = [p for p in pages.face_pages if lo <= p <= hi]
+    note_map = build_note_map(
+        paragraphs,
+        tables if isinstance(tables, list) else [],
+        face_pages=face_pages,
+        page_lo=lo,
+        page_hi=hi,
+    )
+    log.info(
+        "extractor.note_map_built",
+        doc_id=ctx.doc_id, basis=preference, notes=len(note_map.by_ref),
+        labels=len(note_map.by_label), unresolved=len(note_map.unresolved),
+    )
+    return note_map
+
+
 async def _basis_artifact_for(ctx: ExtractContext) -> Mapping[str, object]:
     """Read this document's `basis` artifact ONCE (TR-1 P4b). Never raises:
     `_read_latest_artifact` already degrades a missing run/artifact_key/
@@ -471,12 +612,23 @@ async def extract_document(
     basis_artifact = await _basis_artifact_for(ctx)
 
     units = group_fields_by_unit(fields)
+    note_maps: dict[str, NoteMap | None] = {}
+    chunks: list[Mapping[str, object]] = []
+    if units:
+        chunks = list(await _read_chunks_for(ctx))
+
     flat: list[dict[str, object]] = []
     for unit in units:
+        preference = unit.basis_preference
+        if preference not in note_maps:
+            note_maps[preference] = await _note_map_for(
+                ctx, basis_artifact=basis_artifact, preference=preference
+            )
         flat.extend(
             await extract_unit(
                 ctx=ctx, unit=unit, client=client,
                 basis_artifact=basis_artifact, structure=structure,
+                note_map=note_maps[preference], chunks=chunks,
             )
         )
 

@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "description": "Bridges the TAXONOMY's vocabulary to the REPORT's, so a note reference printed on a statement face row can be followed for taxonomy leaves that use different words. Measured need: only 4 of 402 v4.1 leaves matched a note label directly, because the note map is keyed by report labels ('Property, plant and equipment') while leaves carry taxonomy names ('Buildings', 'Land'). Aliases are attached to PARENT concepts (~40) and inherited by their leaves via the schema hierarchy -- the report side has only ~40 referenced face rows, so this is the whole surface that matters. Match is case/punctuation-insensitive (fdi.core.notes.normalize_label). Aliases are report-side label variants, NOT synonyms of the taxonomy name; add issuer wordings here as new reports are onboarded.",
+  "concepts": {
+    "profit_and_loss": {
+      "Revenue From Operations — Gross Revenue from Operations": [
+        "revenue from operations", "revenue recognition", "sale of products",
+        "sale of services", "consultancy services"
+      ],
+      "Net Revenue From Operations (1 minus 2)": ["revenue from operations"],
+      "Other income": ["other income"],
+      "Other Income General": ["other income"],
+      "Other Income Exceptional": ["other income", "exceptional items"],
+      "Expenses": ["total expenses"],
+      "Cost of Materials Consumed": [
+        "cost of materials consumed", "cost of equipment and software licences"
+      ],
+      "Changes in inventories (deduction)": ["changes in inventories", "inventories"],
+      "Employee benefit expense": [
+        "employee benefit expenses", "employee benefits", "employee benefit obligations"
+      ],
+      "Manufacturing expenses": ["other expenses", "cost recognition"],
+      "Finance costs": ["finance costs"],
+      "Depreciation, depl. & amortz. exp": [
+        "depreciation and amortisation expense", "property plant and equipment"
+      ],
+      "Provisions": ["provisions", "provisions and contingent liabilities"],
+      "Other expenses": [
+        "other expenses", "cost recognition",
+        "corporate social responsibility csr expenditure", "auditor s remuneration"
+      ],
+      "Tax expense": ["income taxes", "current tax", "deferred tax", "tax expense"],
+      "Deferred tax": ["deferred tax", "income taxes"],
+      "Other comprehensive income (Net)": ["other comprehensive income"],
+      "Prior period, exceptional, extraordinary items": [
+        "exceptional items", "provision towards legal claim"
+      ],
+      "Exceptional items before tax": ["exceptional items"],
+      "Profit (loss) for period (14 minus 15 and plus / (minus) 16)": [
+        "earnings per share", "earnings per equity share basic and diluted"
+      ]
+    },
+    "assets": {
+      "Fixed assets/PPE Gross Block - Closing": [
+        "property plant and equipment", "capital work in progress"
+      ],
+      "Fixed assets/PPE Net Block - Closing": [
+        "property plant and equipment", "capital work in progress"
+      ],
+      "Intangible assets - Gross Block": ["intangible assets"],
+      "Intangible Assets-Net Block": ["intangible assets"],
+      "Non-Current Investments": ["investments"],
+      "Non Current financial assets": [
+        "other financial assets", "other assets", "loans"
+      ],
+      "Current Assets": ["other assets"],
+      "Inventories": ["inventories"],
+      "Current investments (Net)": ["investments"],
+      "Current trade receivables (Net)": [
+        "trade receivables billed", "billed", "trade receivables"
+      ],
+      "Cash, Bank balance and Bank depo.": [
+        "cash and cash equivalents", "other balances with banks"
+      ],
+      "Current financial assets": [
+        "other financial assets", "other assets", "loans"
+      ]
+    },
+    "liabilities": {
+      "Non-current & current liabilities — Borrowings": ["borrowings"],
+      "Lease liabilities": ["lease liabilities", "leases", "right of use assets"],
+      "Trade payables": [
+        "trade payables", "dues of small enterprises and micro enterprises",
+        "dues of creditors other than small enterprises and micro enterprises"
+      ],
+      "Other Liabilities": ["other liabilities", "other financial liabilities"],
+      "Provisions": ["provisions", "provisions and contingent liabilities"],
+      "Securities deposits and Deposits": ["other financial liabilities"]
+    },
+    "equity": {
+      "Share capital": ["share capital", "equity instruments"],
+      "Other Equity": ["other equity"],
+      "Reserves": ["other equity"],
+      "Retained earnings or statement of profit and loss": ["other equity"]
+    }
+  }
+}
