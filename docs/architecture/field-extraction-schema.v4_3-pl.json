@@ -1,0 +1,572 @@
+{
+  "version": "4.3.0-pl-pilot",
+  "authored": "by hand from the Q3VENI taxonomy P&L sheet, not generated",
+  "reporting_unit": "as reported",
+  "design_rules": {
+    "parent_carries_tag": "A subtotal row's tag is hoisted onto the container it totals. A total is never a sibling of its own inputs.",
+    "tree_is_the_calculation_graph": "derivation.inputs == the tags of a node's child concepts. Presentation groups (headers with no total row) are transparent to this.",
+    "rolls_up_to_determines_placement": "Q3Redirection (sheet col 8) says which parent an unnumbered row feeds. Those rows are NESTED under that parent, so the invariant holds.",
+    "classified_as_is_not_a_roll_up": "redirection DatasetNo-2 (col 7) maps a tag into another dataset (EXINTOI -> INTOI = 'interest income shown as exceptional'). It is the SAME money reported once; summing it would double-count.",
+    "signed_weights": "'1 minus 2' and the income/expense split are subtractions. inputs may be {tag, weight}.",
+    "not_considered_is_metadata": "It is a value of the redirection column meaning 'no counterpart in that dataset' -- NOT an exclusion from sums. All of section 8 is NOT CONSIDERED yet is part of PBTR.",
+    "three_kinds_of_formula": "derivation = COMPOSITION (inputs are this node's children; the invariant applies). waterfall = a running-total step whose inputs are PEER nodes earlier in the statement (RFONET = 1 minus 2; PBMI = 11 plus 13) -- the invariant does NOT apply. reconciliation = a REPORTED value checked against a formula of either kind.",
+    "reported_wins": "A parent that the report prints keeps the reported value; the sum of children is a CHECK, not a replacement. This is what lets TCS's DEPEXP=4,288 stand while DEP/AMT are null."
+  },
+  "modules": [
+    {
+      "key": "module_profit_and_loss",
+      "name": "Profit and Loss",
+      "statement": "profit_and_loss",
+      "retrieval_units": [
+        {
+          "unit_id": "PL",
+          "statement_type": "profit_and_loss",
+          "basis_preference": "standalone",
+          "fields": [
+
+            { "tag": "RFOGRS", "field_name": "Gross Revenue from Operations", "sr_no": "1",
+              "origin": "derived",
+              "note_aliases": ["revenue from operations", "sale of products", "sale of services"],
+              "definition": "Turnover from the principal business before deducting indirect taxes and before other income.",
+              "derivation": {"method": "sum", "inputs": ["RFSP","RFSS","RFCC","RFTG","OTOR"]},
+              "fields": [
+                {"tag":"RFSP","field_name":"Revenue from Sale of Products","sr_no":"1.1","origin":"extracted","data_type":"decimal",
+                 "definition":"Revenue from goods manufactured by the entity. Excludes goods bought and resold unchanged."},
+                {"tag":"RFSS","field_name":"Revenue from Sale of Services","sr_no":"1.2","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["consultancy services","software services"],
+                 "definition":"Revenue from rendering services. For a services company this is normally the dominant line."},
+                {"tag":"RFCC","field_name":"Revenue from Contracts with Customers","sr_no":"1.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"RFTG","field_name":"Revenue from Traded Goods","sr_no":"1.4","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["sale of equipment and software licences","traded goods"],
+                 "definition":"Goods purchased and resold substantially unchanged, including equipment and third-party licences."},
+                {"tag":"OTOR","field_name":"Other Operating Revenues","sr_no":"1.5","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TOTTAX", "field_name": "Less: Taxes", "sr_no": "2",
+              "origin": "derived",
+              "derivation": {"method":"sum","inputs":["ED","EDEXP","GST","GSTEXP","OTDT","OTDTEXP"]},
+              "fields": [
+                {"tag":"ED","field_name":"Excise duty","sr_no":"2.1","origin":"extracted","data_type":"decimal"},
+                {"tag":"EDEXP","field_name":"Excise duty (from exp)","sr_no":"2.2","origin":"extracted","data_type":"decimal","role":"mirror","classified_as":"TOTRRNT"},
+                {"tag":"GST","field_name":"Goods and Service Tax","sr_no":"2.3","origin":"extracted","data_type":"decimal","classified_as":"OTNONOIC"},
+                {"tag":"GSTEXP","field_name":"Goods and Service Tax (from exp)","sr_no":"2.4","origin":"extracted","data_type":"decimal","role":"mirror","classified_as":"TOTRRNT"},
+                {"tag":"OTDT","field_name":"Other Duties and Taxes","sr_no":"2.5","origin":"extracted","data_type":"decimal","classified_as":"OTNONOIC"},
+                {"tag":"OTDTEXP","field_name":"Other Duties and Taxes (from exp)","sr_no":"2.6","origin":"extracted","data_type":"decimal","role":"mirror","classified_as":"TOTRRNT"}
+              ]},
+
+            { "tag": "RFONET", "field_name": "Net Revenue From Operations (1 minus 2)", "sr_no": "3",
+              "origin": "derived",
+              "note_aliases": ["revenue from operations"],
+              "waterfall": {"method":"sum","inputs":[
+                  {"tag":"RFOGRS","weight":1},{"tag":"TOTTAX","weight":-1}]} },
+
+            { "field_name": "Territory wise Revenue - Additional Information", "node_type": "group",
+              "role": "memo",
+              "comment": "Excluded from the statement arithmetic: an ICICI-specific disclosure block, not a P&L line.",
+              "fields": [
+                {"tag":"RFDS","field_name":"Domestic Sales","origin":"extracted","data_type":"decimal"},
+                {"tag":"RFES","field_name":"Export Sales","origin":"extracted","data_type":"decimal"},
+                {"tag":"GSC","field_name":"Gross Sales (Combined)","origin":"extracted","data_type":"decimal","classified_as":"RFDS"},
+                {"tag":"OTORT","field_name":"Other operating revenue - territory wise","origin":"extracted","data_type":"decimal","classified_as":"RFDS"},
+                {"tag":"NSDNE","field_name":"Net Sales Territory Wise","origin":"derived","data_type":"decimal"},
+                {"tag":"NSN","field_name":"Net Sales Nature Wise (1.3 minus 2)","origin":"derived","data_type":"decimal",
+                 "waterfall":{"method":"sum","inputs":[{"tag":"RFCC","weight":1},{"tag":"TOTTAX","weight":-1}]}}
+              ]},
+
+            { "tag": "TOTOTIN", "field_name": "Other income", "sr_no": "4",
+              "origin": "derived",
+              "note_aliases": ["other income"],
+              "definition": "Income outside the principal business: interest, dividend, rent, gains on disposal or fair valuation, and foreign-exchange gains.",
+              "derivation": {"method":"sum","inputs":["TOTOTING","TOTOTINEX","SOP"]},
+              "fields": [
+
+                { "tag":"TOTOTING","field_name":"Other Income General","sr_no":"4.1","origin":"derived",
+                  "derivation":{"method":"sum","inputs":["INTOI","DIVOI","COMOI","RENTOI","NONOI"]},
+                  "fields":[
+                    {"tag":"INTOI","field_name":"Interest","sr_no":"4.1.1","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["interest income"],
+                     "definition":"Interest earned on deposits, loans given and financial assets. Excludes interest PAID.",
+                     "mirrors":[{"tag":"INTOIEXP","field_name":"Interest (as shown in exp)","classified_as":"INTOI"}]},
+                    {"tag":"DIVOI","field_name":"Dividend","sr_no":"4.1.2","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["dividend income","dividend from subsidiaries"]},
+                    {"tag":"COMOI","field_name":"Commision","sr_no":"4.1.3","origin":"extracted","data_type":"decimal","classified_as":"OTNONOIC"},
+                    {"tag":"RENTOI","field_name":"Rent","sr_no":"4.1.4","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["rent income"],"classified_as":"OTNONOIC"},
+
+                    { "tag":"NONOI","field_name":"Non Operating Income","sr_no":"4.1.5","origin":"derived",
+                      "classified_as":"OTNONOIC",
+                      "comment":"Its children are the rows whose Q3Redirection points here. They are NOT summed into TOTOTING directly -- that is what prevents double counting.",
+                      "derivation":{"method":"sum","inputs":[
+                          "INSOI","INTUWOI","EXCG","CFG","OTNONOIC","NPRCA","NPRCL","NPMTM","OTNONOINC"]},
+                      "fields":[
+                        {"tag":"INSOI","field_name":"Insurance Income","origin":"extracted","data_type":"decimal","classified_as":"OTNONOIC"},
+                        {"tag":"INTUWOI","field_name":"Unwinding of Interest as income","origin":"extracted","data_type":"decimal","classified_as":"OTNONOINC"},
+                        { "node_type":"group","field_name":"Non-Operating Income - Cash Items","cash_flag":"cash",
+                          "fields":[
+                            {"tag":"EXCG","field_name":"Exchange gain","origin":"extracted","data_type":"decimal",
+                             "note_aliases":["net foreign exchange gain"]},
+                            {"tag":"CFG","field_name":"Crystallized forex Gain","origin":"extracted","data_type":"decimal"},
+                            {"tag":"OTNONOIC","field_name":"Other Non-Operating Cash Income","origin":"extracted","data_type":"decimal"}
+                          ]},
+                        { "node_type":"group","field_name":"Non-Operating Income - Non Cash Items","cash_flag":"non_cash",
+                          "fields":[
+                            {"tag":"NPRCA","field_name":"Notional profit on reinstatement of current assets","origin":"extracted","data_type":"decimal"},
+                            {"tag":"NPRCL","field_name":"Notional profit on reinstatement of current liabilities","origin":"extracted","data_type":"decimal"},
+                            {"tag":"NPMTM","field_name":"MTM Forex gain","origin":"extracted","data_type":"decimal"},
+                            {"tag":"OTNONOINC","field_name":"Other Non-Operating Non Cash Income","origin":"extracted","data_type":"decimal"}
+                          ]}
+                      ]}
+                  ]},
+
+                { "tag":"TOTOTINEX","field_name":"Other Income Exceptional","sr_no":"4.2","origin":"derived",
+                  "derivation":{"method":"sum","inputs":["NGINV","NGA","REVOI","REVOIEXP","OTINE"]},
+                  "fields":[
+                    {"tag":"NGINV","field_name":"Net gain on sale of investment","sr_no":"4.2.1","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["net gain on sale of investments"]},
+                    {"tag":"NGA","field_name":"Net gain on sale of assets","sr_no":"4.2.2","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["net gain on disposal of property plant and equipment"]},
+                    {"tag":"REVOI","field_name":"Reversal of Prov, impairment etc.","sr_no":"4.2.3","origin":"extracted","data_type":"decimal","classified_as":"OTNONOINC"},
+                    {"tag":"REVOIEXP","field_name":"Provisions, impairment etc. (as shown in exp)","sr_no":"4.2.4","origin":"extracted","data_type":"decimal","role":"mirror","classified_as":"OTNONOENC"},
+                    { "tag":"OTINE","field_name":"Others","sr_no":"4.2.5","origin":"derived",
+                      "derivation":{"method":"sum","inputs":["OTINEC","OTINENC"]},
+                      "fields":[
+                        {"tag":"OTINEC","field_name":"Other Cash Income","origin":"extracted","data_type":"decimal","cash_flag":"cash","classified_as":"OTNONOIC"},
+                        {"tag":"OTINENC","field_name":"Other Non Cash Income","origin":"extracted","data_type":"decimal","cash_flag":"non_cash","classified_as":"OTNONOINC"}
+                      ]}
+                  ]},
+
+                {"tag":"SOP","field_name":"Share of profit","sr_no":"4.3","origin":"extracted","data_type":"decimal",
+                 "classified_as":"OTNONOIC",
+                 "definition":"Share of profit of associates and joint ventures. Consolidated statements only."}
+              ]},
+
+            { "tag":"TOTRNOTINR","field_name":"Total Rev. from operation and Other Income","sr_no":"5",
+              "origin":"extracted","reported":true,
+              "note_aliases":["total income"],
+              "reconciliation":{"method":"sum","inputs":["RFONET","TOTOTIN"]} },
+
+            { "tag":"TOTEXPR","field_name":"Expenses","sr_no":"6",
+              "origin":"extracted","reported":true,
+              "note_aliases":["total expenses","total expenditure"],
+              "reconciliation":{"method":"sum","inputs":[
+                  "COMC","PUSIT","CHINVT","MFEXP","OTOPEXP","EEBEXP",
+                  "TOTFC","DEPEXP","IMPL","TOTPRVE","TOTOTEXP"]},
+              "fields":[
+
+                { "tag":"COMC","field_name":"Cost of Materials Consumed","sr_no":"6.1","origin":"derived",
+                  "note_aliases":["cost of materials consumed","cost of equipment and software licences"],
+                  "derivation":{"method":"sum","inputs":["AUTOPL001","AUTOPL002","OTCOMC"]},
+                  "fields":[
+                    { "tag":"AUTOPL001","field_name":"Raw Materials","sr_no":"6.1.1","origin":"derived","synthetic_tag":true,
+                      "derivation":{"method":"sum","inputs":["RMIM","RMID","RME"]},
+                      "fields":[
+                        {"tag":"RMIM","field_name":"Imported","sr_no":"6.1.1.1","origin":"extracted","data_type":"decimal"},
+                        {"tag":"RMID","field_name":"Indigenous","sr_no":"6.1.1.2","origin":"extracted","data_type":"decimal"},
+                        {"tag":"RME","field_name":"Combined","sr_no":"6.1.1.3","origin":"extracted","data_type":"decimal",
+                         "note_aliases":["raw materials sub-assemblies and components consumed"]}
+                      ]},
+                    { "tag":"AUTOPL002","field_name":"Other Spares","sr_no":"6.1.2","origin":"derived","synthetic_tag":true,
+                      "derivation":{"method":"sum","inputs":["OSIM","OSID","OSIMID"]},
+                      "fields":[
+                        {"tag":"OSIM","field_name":"Imported","sr_no":"6.1.2.1","origin":"extracted","data_type":"decimal"},
+                        {"tag":"OSID","field_name":"Indigenous","sr_no":"6.1.2.2","origin":"extracted","data_type":"decimal"},
+                        {"tag":"OSIMID","field_name":"Combined spares","sr_no":"6.1.2.3","origin":"extracted","data_type":"decimal"}
+                      ]},
+                    {"tag":"OTCOMC","field_name":"Other cost of materials consumed","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["equipment and software licences purchased"]}
+                  ]},
+
+                {"tag":"PUSIT","field_name":"Purchases of stock-in-trade","sr_no":"6.2","origin":"extracted","data_type":"decimal"},
+
+                { "tag":"CHINVT","field_name":"Changes in inventories","sr_no":"6.3","origin":"derived",
+                  "sign_convention":"deduction",
+                  "note_aliases":["changes in inventories"],
+                  "comment":"Net change = Opening minus Closing. Verified on TCS: opening 1, closing 3 -> (2), and 3,478 + (2) = 3,476.",
+                  "derivation":{"method":"sum","inputs":["AUTOPL003","AUTOPL004","AUTOPL005","OTCHINVT"]},
+                  "fields":[
+                    { "tag":"AUTOPL003","field_name":"Net Change in Stock-in-process","sr_no":"6.3.1","origin":"derived","synthetic_tag":true,
+                      "derivation":{"method":"diff","inputs":["OSIP","CSIP"]},
+                      "fields":[
+                        {"tag":"OSIP","field_name":"Opening Stock-in-process","sr_no":"6.3.1.1","origin":"extracted","data_type":"decimal"},
+                        {"tag":"CSIP","field_name":"Closing Stock-in-process","sr_no":"6.3.1.2","origin":"extracted","data_type":"decimal"}
+                      ]},
+                    { "tag":"AUTOPL004","field_name":"Net Change in Finished Goods","sr_no":"6.3.2","origin":"derived","synthetic_tag":true,
+                      "derivation":{"method":"diff","inputs":["OSFG","CSFG"]},
+                      "fields":[
+                        {"tag":"OSFG","field_name":"Opening Stock of Finished Goods","sr_no":"6.3.2.1","origin":"extracted","data_type":"decimal","note_aliases":["opening stock"]},
+                        {"tag":"CSFG","field_name":"Closing Stock of Finished Goods","sr_no":"6.3.2.2","origin":"extracted","data_type":"decimal","note_aliases":["closing stock"]}
+                      ]},
+                    { "tag":"AUTOPL005","field_name":"Net Change in Other Inventory","sr_no":"6.3.3","origin":"derived","synthetic_tag":true,
+                      "derivation":{"method":"diff","inputs":["OSOT","CSOT"]},
+                      "fields":[
+                        {"tag":"OSOT","field_name":"Opening stock others","sr_no":"6.3.3.1","origin":"extracted","data_type":"decimal","classified_as":"OSFG"},
+                        {"tag":"CSOT","field_name":"Closing stock others","sr_no":"6.3.3.2","origin":"extracted","data_type":"decimal","classified_as":"CSFG"}
+                      ]},
+                    {"tag":"OTCHINVT","field_name":"Other change in Inventory","sr_no":"6.3.4","origin":"extracted","data_type":"decimal"}
+                  ]},
+
+                { "tag":"MFEXP","field_name":"Manufacturing expenses","sr_no":"6.4","origin":"derived","legacy_tag":true,
+                  "derivation":{"method":"sum","inputs":["PCWC","FMTC","OOME"]},
+                  "fields":[
+                    {"tag":"PCWC","field_name":"Processing / Job Work Charges","sr_no":"6.4.1","origin":"extracted","data_type":"decimal"},
+                    {"tag":"FMTC","field_name":"Freight and Transportation Charges","sr_no":"6.4.2","origin":"extracted","data_type":"decimal"},
+                    {"tag":"OOME","field_name":"Others manufacturing expenses","sr_no":"6.4.3","origin":"extracted","data_type":"decimal"}
+                  ]},
+
+                {"tag":"OTOPEXP","field_name":"Other operating expenses","sr_no":"6.5","origin":"extracted","data_type":"decimal","classified_as":"OOME"},
+
+                { "tag":"EEBEXP","field_name":"Employee benefit expense","sr_no":"6.6","origin":"derived","legacy_tag":true,
+                  "note_aliases":["employee benefit expenses","employee benefits"],
+                  "definition":"All staff costs: salaries, wages, incentives, contributions to funds, share-based payments and staff welfare.",
+                  "derivation":{"method":"sum","inputs":["FWS","OTEEBEXP"]},
+                  "fields":[
+                    {"tag":"FWS","field_name":"Direct Labour (Factory wages & salaries)","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["salaries incentives and allowances"]},
+                    {"tag":"OTEEBEXP","field_name":"Other Employee Benefits","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["staff welfare expenses","contributions to provident and other funds"]}
+                  ]},
+
+                { "tag":"TOTFC","field_name":"Finance costs","sr_no":"6.7","origin":"derived",
+                  "note_aliases":["finance costs"],
+                  "definition":"Interest and borrowing costs on debt, lease-liability interest and bank charges. Excludes interest INCOME.",
+                  "derivation":{"method":"sum","inputs":["INTEXP","BC","OTFC"]},
+                  "fields":[
+                    { "tag":"INTEXP","field_name":"Interest","sr_no":"6.7.1","origin":"derived","legacy_tag":true,
+                      "derivation":{"method":"sum","inputs":["INTTL","INTWC"]},
+                      "fields":[
+                        { "tag":"INTTL","field_name":"Interest on Fixed Loans / Term loans","origin":"derived",
+                          "derivation":{"method":"sum","inputs":["INTTLWC","INTOT"]},
+                          "fields":[
+                            {"tag":"INTTLWC","field_name":"Interest on Fixed / Term / Working capital loans","origin":"extracted","data_type":"decimal"},
+                            {"tag":"INTOT","field_name":"Other Interest","origin":"extracted","data_type":"decimal",
+                             "note_aliases":["other interest costs"]}
+                          ]},
+                        {"tag":"INTWC","field_name":"Interest on Working capital loans","origin":"extracted","data_type":"decimal"}
+                      ]},
+                    { "tag":"BC","field_name":"Borrowing costs","sr_no":"6.7.2","origin":"extracted","data_type":"decimal",
+                      "note_aliases":["interest on lease liabilities"],
+                      "comment":"BNKC is nested here because its Q3Redirection points to BC, even though the sheet prints it under 6.7.1.",
+                      "derivation":{"method":"sum","inputs":["BNKC"]},
+                      "fields":[{"tag":"BNKC","field_name":"Bank Charges","origin":"extracted","data_type":"decimal"}]},
+                    {"tag":"OTFC","field_name":"Others finance cost","sr_no":"6.7.3","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["interest on tax matters"]}
+                  ]},
+
+                { "tag":"DEPEXP","field_name":"Depreciation, depletion & amortization expense","sr_no":"6.8","origin":"derived","legacy_tag":true,
+                  "note_aliases":["depreciation and amortisation expense"],
+                  "definition":"Systematic write-down of tangible assets, intangibles and right-of-use assets. Excludes impairment.",
+                  "derivation":{"method":"sum","inputs":["DEP","AMT"]},
+                  "fields":[
+                    {"tag":"DEP","field_name":"Depreciation, depletion expense","sr_no":"6.8.1","origin":"extracted","data_type":"decimal"},
+                    {"tag":"AMT","field_name":"Amortization expense","sr_no":"6.8.2","origin":"extracted","data_type":"decimal"}
+                  ]},
+
+                { "tag":"IMPL","field_name":"Impairment Loss","sr_no":"6.9","origin":"derived","classified_as":"OTNONOENC",
+                  "derivation":{"method":"sum","inputs":["IMPLA","IMPLI"]},
+                  "fields":[
+                    {"tag":"IMPLA","field_name":"Impairment of Assets","sr_no":"6.9.1","origin":"extracted","data_type":"decimal"},
+                    {"tag":"IMPLI","field_name":"Impairment of Investment","sr_no":"6.9.2","origin":"extracted","data_type":"decimal"}
+                  ]},
+
+                { "tag":"TOTPRVE","field_name":"Provisions","sr_no":"6.10","origin":"derived",
+                  "derivation":{"method":"sum","inputs":["PRVDD","OTPRVE"]},
+                  "fields":[
+                    {"tag":"PRVDD","field_name":"Provisions for bad, doubtful debts","sr_no":"6.10.1","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["bad debts and advances written off allowance for expected credit losses"]},
+                    {"tag":"OTPRVE","field_name":"Other provisions","sr_no":"6.10.2","origin":"extracted","data_type":"decimal"}
+                  ]},
+
+                { "tag":"TOTOTEXP","field_name":"Other expenses","sr_no":"6.11","origin":"derived",
+                  "note_aliases":["other expenses"],
+                  "derivation":{"method":"sum","inputs":[
+                      "CSTNSP","PNF","RENTEXP","HCEXP","ADMINEXP","REP","RND","LNPC","DRSF",
+                      "MGRE","DNS","ADVTEXP","AFTSS","BDEXP","COMEXP","SLNDEXP","RNB",
+                      "EXCHEXP","CED","WOANL","CSREXP","TOTPYAUD","PYCAUD","PPPEXP","OTEXP"]},
+                  "fields":[
+                    {"tag":"CSTNSP","field_name":"Consumption of stores & spare parts","sr_no":"6.11.1","origin":"extracted","data_type":"decimal","classified_as":"OSID"},
+                    {"tag":"PNF","field_name":"Power, fuel, conveyance & electricity","sr_no":"6.11.2","origin":"extracted","data_type":"decimal"},
+                    {"tag":"RENTEXP","field_name":"Rent","sr_no":"6.11.3","origin":"extracted","data_type":"decimal","classified_as":"TOTRRNT"},
+                    { "tag":"HCEXP","field_name":"Hire Charges","sr_no":"6.11.4","origin":"extracted","data_type":"decimal","classified_as":"TOTRRNT",
+                      "derivation":{"method":"sum","inputs":["LREXP"]},
+                      "fields":[{"tag":"LREXP","field_name":"Lease Rental Expense","origin":"extracted","data_type":"decimal"}]},
+                    { "tag":"ADMINEXP","field_name":"Administrative expenses","sr_no":"6.11.5","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP",
+                      "derivation":{"method":"sum","inputs":["TCEXP"]},
+                      "fields":[{"tag":"TCEXP","field_name":"Travelling & Conveyance expenses","origin":"extracted","data_type":"decimal",
+                                 "note_aliases":["travel expenses"]}]},
+                    { "tag":"REP","field_name":"Repairs to building, plants etc","sr_no":"6.11.6","origin":"derived","legacy_tag":true,
+                      "derivation":{"method":"sum","inputs":["REPPNE","REPOT"]},
+                      "fields":[
+                        {"tag":"REPPNE","field_name":"Repair of Plant and Equipment","origin":"extracted","data_type":"decimal","classified_as":"OOME"},
+                        {"tag":"REPOT","field_name":"Repair of Building, Others","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"}
+                      ]},
+                    {"tag":"RND","field_name":"Research and development expense","sr_no":"6.11.7","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    {"tag":"LNPC","field_name":"Legal, professional and licence expense","sr_no":"6.11.8","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["fees to external consultants","legal and professional fees"]},
+                    {"tag":"DRSF","field_name":"Directors sitting fees & commission","sr_no":"6.11.9","origin":"extracted","data_type":"decimal","classified_as":"TOTMGRE"},
+                    {"tag":"MGRE","field_name":"Managerial remuneration","sr_no":"6.11.10","origin":"extracted","data_type":"decimal","classified_as":"TOTMGRE"},
+                    {"tag":"DNS","field_name":"Donations and subscriptions","sr_no":"6.11.11","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    {"tag":"ADVTEXP","field_name":"Advertising & promotional expenses","sr_no":"6.11.12","origin":"extracted","data_type":"decimal"},
+                    {"tag":"AFTSS","field_name":"After sales service & claims","sr_no":"6.11.13","origin":"extracted","data_type":"decimal","classified_as":"TOTCOMDSC"},
+                    {"tag":"BDEXP","field_name":"Bad debts and Others","sr_no":"6.11.14","origin":"extracted","data_type":"decimal"},
+                    { "tag":"COMEXP","field_name":"Commission","sr_no":"6.11.15","origin":"extracted","data_type":"decimal","classified_as":"TOTCOMDSC",
+                      "derivation":{"method":"sum","inputs":["DISC","SERCH"]},
+                      "fields":[
+                        {"tag":"DISC","field_name":"Discount","origin":"extracted","data_type":"decimal","classified_as":"TOTCOMDSC"},
+                        {"tag":"SERCH","field_name":"Service Charge","origin":"extracted","data_type":"decimal","classified_as":"TOTCOMDSC"}
+                      ]},
+                    {"tag":"SLNDEXP","field_name":"Selling and distribution expenses","sr_no":"6.11.16","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    {"tag":"RNB","field_name":"Royalty and Brands","sr_no":"6.11.17","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    { "tag":"EXCHEXP","field_name":"Exchange difference","sr_no":"6.11.18","origin":"derived","legacy_tag":true,
+                      "open_question":"CFL/EXCL/NONLMTM/NONLRSA/NONLRSL have no roll-up pointer in the sheet. They are forex items and EXCHEXP is the legacy forex bucket, but this is INFERRED and must be confirmed before it is treated as a calculation edge.",
+                      "derivation":{"method":"sum","inputs":[]} },
+                    {"tag":"CED","field_name":"Cost effluent and Environment expense","sr_no":"6.11.19","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    { "tag":"WOANL","field_name":"W/off & loss on sale - assets/Investments","sr_no":"6.11.20","origin":"derived","legacy_tag":true,
+                      "comment":"Children are the six write-off/loss rows whose Q3Redirection points here.",
+                      "derivation":{"method":"sum","inputs":["NLFA","NLINV","NLOT","WOFA","WOINV","WOOT"]},
+                      "fields":[
+                        {"tag":"NLFA","field_name":"Loss on sale of fixed assets","origin":"extracted","data_type":"decimal","cash_flag":"cash"},
+                        {"tag":"NLINV","field_name":"Loss on sale of investments","origin":"extracted","data_type":"decimal","cash_flag":"cash"},
+                        {"tag":"NLOT","field_name":"Loss on sale of Others","origin":"extracted","data_type":"decimal","cash_flag":"cash","classified_as":"OTNONOEC"},
+                        {"tag":"WOFA","field_name":"Write off of fixed assets","origin":"extracted","data_type":"decimal","cash_flag":"non_cash"},
+                        {"tag":"WOINV","field_name":"Write off of Investments","origin":"extracted","data_type":"decimal","cash_flag":"non_cash"},
+                        {"tag":"WOOT","field_name":"Write off of Others","origin":"extracted","data_type":"decimal","cash_flag":"non_cash","classified_as":"OTNONOENC"}
+                      ]},
+                    {"tag":"CSREXP","field_name":"Corporate social responsibility","sr_no":"6.11.21","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["corporate social responsibility csr expenditure"],"classified_as":"TOTOTSGAEXP"},
+                    { "tag":"TOTPYAUD","field_name":"Payments to auditor","sr_no":"6.11.22","origin":"derived",
+                      "note_aliases":["auditor s remuneration","payments to auditor"],
+                      "derivation":{"method":"sum","inputs":["PYAUDAS","PYAUDMS","PYAUDOS","PYAUDEXP"]},
+                      "fields":[
+                        {"tag":"PYAUDAS","field_name":"For audit services","origin":"extracted","data_type":"decimal"},
+                        {"tag":"PYAUDMS","field_name":"For management services","origin":"extracted","data_type":"decimal"},
+                        {"tag":"PYAUDOS","field_name":"For other services","origin":"extracted","data_type":"decimal"},
+                        {"tag":"PYAUDEXP","field_name":"For reimbursement of expenses","origin":"extracted","data_type":"decimal"}
+                      ]},
+                    {"tag":"PYCAUD","field_name":"Payments to cost auditor","sr_no":"6.11.23","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    {"tag":"PPPEXP","field_name":"Payments to political parties","sr_no":"6.11.24","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                    { "tag":"OTEXP","field_name":"Other Misc. Expenses","sr_no":"6.11.25","origin":"extracted","data_type":"decimal",
+                      "note_aliases":["other expenses"],"classified_as":"TOTOTSGAEXP",
+                      "derivation":{"method":"sum","inputs":["INSEXP","OTNONOEC","OTNONOENC"]},
+                      "fields":[
+                        {"tag":"INSEXP","field_name":"Insurance Expense","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
+                        { "tag":"OTNONOEC","field_name":"Other non operating cash expense","origin":"derived","cash_flag":"cash",
+                          "derivation":{"method":"sum","inputs":["CFL","EXCL","INVTWO","FCWO"]},
+                          "fields":[
+                            {"tag":"CFL","field_name":"Crystallized forex loss","origin":"extracted","data_type":"decimal"},
+                            {"tag":"EXCL","field_name":"Exchange loss","origin":"extracted","data_type":"decimal"},
+                            {"tag":"INVTWO","field_name":"Inventory Written Off / write-off of stock-in-process","origin":"extracted","data_type":"decimal"},
+                            {"tag":"FCWO","field_name":"Write off of Finished Goods","origin":"extracted","data_type":"decimal"}
+                          ]},
+                        { "tag":"OTNONOENC","field_name":"Other non operating non cash expense","origin":"derived","cash_flag":"non_cash",
+                          "derivation":{"method":"sum","inputs":["NONLMTM","NONLRSA","NONLRSL"]},
+                          "fields":[
+                            {"tag":"NONLMTM","field_name":"MTM forex loss","origin":"extracted","data_type":"decimal"},
+                            {"tag":"NONLRSA","field_name":"Notional loss on reinstatement of current assets","origin":"extracted","data_type":"decimal"},
+                            {"tag":"NONLRSL","field_name":"Notional loss on reinstatement of current liabilities","origin":"extracted","data_type":"decimal"}
+                          ]}
+                      ]}
+                  ]}
+              ]},
+
+            { "tag":"PB3NTAX","field_name":"Profit (loss) before prior period, exceptional, extraordinary items","sr_no":"7",
+              "origin":"extracted","reported":true,
+              "note_aliases":["profit before exceptional items and tax"],
+              "reconciliation":{"method":"sum","inputs":[
+                  {"tag":"TOTRNOTINR","weight":1},{"tag":"TOTEXPR","weight":-1}]} },
+
+            { "tag":"TOT3","field_name":"Prior period, exceptional, extraordinary items","sr_no":"8",
+              "origin":"derived",
+              "derivation":{"method":"sum","inputs":["PPI","EXI","EOI"]},
+              "fields":[
+                {"tag":"PPI","field_name":"Prior period items before tax","sr_no":"8.1","origin":"extracted","data_type":"decimal"},
+
+                { "tag":"EXI","field_name":"Exceptional items before tax","sr_no":"8.2","origin":"extracted","reported":true,
+                  "note_aliases":["exceptional items"],
+                  "comment":"Income groups carry weight +1, expense groups -1. TCS reports three exceptional items (restructuring, labour codes, legal claim) that match none of these labels -- the structure is right, the taxonomy has no slot for them.",
+                  "derivation":{"method":"sum","inputs":[
+                      {"tag":"AUTOPL010","weight":1},{"tag":"AUTOPL011","weight":1},
+                      {"tag":"AUTOPL012","weight":-1},{"tag":"AUTOPL013","weight":-1}]},
+                  "fields":[
+                    { "tag":"AUTOPL010","field_name":"Exceptional items - Income - Cash","sr_no":"8.2.3","origin":"derived","synthetic_tag":true,"cash_flag":"cash","flow":"income",
+                      "derivation":{"method":"sum","inputs":["EXINTOI","EXDIVOI","EXNGA","EXNGINV","EXEXCG","EXCFG","EXOTNONOIC"]},
+                      "fields":[
+                        {"tag":"EXINTOI","field_name":"Exceptional Items - Interest received","origin":"extracted","data_type":"decimal","classified_as":"INTOI"},
+                        {"tag":"EXDIVOI","field_name":"Exceptional Items - Dividends received","origin":"extracted","data_type":"decimal","classified_as":"DIVOI"},
+                        {"tag":"EXNGA","field_name":"Exceptional Items - Profit on sale of fixed assets","origin":"extracted","data_type":"decimal","classified_as":"NGA"},
+                        {"tag":"EXNGINV","field_name":"Exceptional Items - Profit on sale of investments","origin":"extracted","data_type":"decimal","classified_as":"NGINV"},
+                        {"tag":"EXEXCG","field_name":"Exchange gain","sr_no":"8.2.3.1","origin":"extracted","data_type":"decimal","classified_as":"EXCG"},
+                        {"tag":"EXCFG","field_name":"Crystallized forex Gain","sr_no":"8.2.3.2","origin":"extracted","data_type":"decimal","classified_as":"CFG"},
+                        {"tag":"EXOTNONOIC","field_name":"Other Non-Operating Cash Income","sr_no":"8.2.3.3","origin":"extracted","data_type":"decimal","classified_as":"OTNONOIC"}
+                      ]},
+                    { "tag":"AUTOPL011","field_name":"Exceptional items - Income - Non Cash","sr_no":"8.2.4","origin":"derived","synthetic_tag":true,"cash_flag":"non_cash","flow":"income",
+                      "derivation":{"method":"sum","inputs":["EXNPRCA","EXNPRCL","EXNPMTM","EXOTNONOINC"]},
+                      "fields":[
+                        {"tag":"EXNPRCA","field_name":"Notional profit on reinstatement of current assets","sr_no":"8.2.4.1","origin":"extracted","data_type":"decimal","classified_as":"NPRCA"},
+                        {"tag":"EXNPRCL","field_name":"Notional profit on reinstatement of current liabilities","sr_no":"8.2.4.2","origin":"extracted","data_type":"decimal","classified_as":"NPRCL"},
+                        {"tag":"EXNPMTM","field_name":"MTM Forex gain","sr_no":"8.2.4.3","origin":"extracted","data_type":"decimal","classified_as":"NPMTM"},
+                        {"tag":"EXOTNONOINC","field_name":"Other Non-Operating Non Cash Income","sr_no":"8.2.4.4","origin":"extracted","data_type":"decimal","classified_as":"OTNONOINC"}
+                      ]},
+                    { "tag":"AUTOPL012","field_name":"Exceptional items - Expense - Cash","sr_no":"8.2.2","origin":"derived","synthetic_tag":true,"cash_flag":"cash","flow":"expense",
+                      "derivation":{"method":"sum","inputs":["EXCFL","EXEXCL","EXINVTWO","EXFCWO","EXNLFA","EXNLINV","EXNLOT","EXOTNONOEC"]},
+                      "fields":[
+                        {"tag":"EXCFL","field_name":"Crystallized forex loss","sr_no":"8.2.2.1","origin":"extracted","data_type":"decimal","classified_as":"CFL"},
+                        {"tag":"EXEXCL","field_name":"Exchange loss","sr_no":"8.2.2.2","origin":"extracted","data_type":"decimal","classified_as":"EXCL"},
+                        {"tag":"EXINVTWO","field_name":"Inventory Written Off","sr_no":"8.2.2.3","origin":"extracted","data_type":"decimal","classified_as":"INVTWO"},
+                        {"tag":"EXFCWO","field_name":"Write-off of stock-in-process","origin":"extracted","data_type":"decimal","classified_as":"FCWO"},
+                        {"tag":"EXNLFA","field_name":"Loss on sale of fixed assets","sr_no":"8.2.2.4","origin":"extracted","data_type":"decimal","classified_as":"NLFA"},
+                        {"tag":"EXNLINV","field_name":"Loss on sale of investments","sr_no":"8.2.2.5","origin":"extracted","data_type":"decimal","classified_as":"NLINV"},
+                        {"tag":"EXNLOT","field_name":"Loss on sale of Others","sr_no":"8.2.2.6","origin":"extracted","data_type":"decimal","classified_as":"NLOT"},
+                        {"tag":"EXOTNONOEC","field_name":"Other Exceptional Items - Cash","sr_no":"8.2.2.7","origin":"extracted","data_type":"decimal","classified_as":"OTNONOEC"}
+                      ]},
+                    { "tag":"AUTOPL013","field_name":"Exceptional items - Expense - Non Cash","sr_no":"8.2.1","origin":"derived","synthetic_tag":true,"cash_flag":"non_cash","flow":"expense",
+                      "derivation":{"method":"sum","inputs":["EXMTMEL","EXNONLRSA","EXNONLRSL","EXWOFA","EXWOINV","EXWOOT","OTEXI"]},
+                      "fields":[
+                        {"tag":"EXMTMEL","field_name":"MTM forex loss","sr_no":"8.2.1.1","origin":"extracted","data_type":"decimal","classified_as":"NONLMTM"},
+                        {"tag":"EXNONLRSA","field_name":"Notional loss on reinstatement of current assets","sr_no":"8.2.1.2","origin":"extracted","data_type":"decimal","classified_as":"NONLRSA"},
+                        {"tag":"EXNONLRSL","field_name":"Notional loss on reinstatement of current liabilities","sr_no":"8.2.1.3","origin":"extracted","data_type":"decimal","classified_as":"NONLRSL"},
+                        {"tag":"EXWOFA","field_name":"Write off of fixed assets","sr_no":"8.2.1.4","origin":"extracted","data_type":"decimal","classified_as":"WOFA"},
+                        {"tag":"EXWOINV","field_name":"Write off of Investments","sr_no":"8.2.1.5","origin":"extracted","data_type":"decimal","classified_as":"WOINV"},
+                        {"tag":"EXWOOT","field_name":"Other write off","sr_no":"8.2.1.6","origin":"extracted","data_type":"decimal","classified_as":"OTNONOENC"},
+                        {"tag":"OTEXI","field_name":"Other Exceptional Items - Non Cash","sr_no":"8.2.1.7","origin":"extracted","data_type":"decimal","classified_as":"OTNONOENC"}
+                      ]}
+                  ]},
+
+                { "tag":"EOI","field_name":"Extraordinary items before tax","sr_no":"8.3","origin":"derived",
+                  "obsolete_under":"Ind-AS",
+                  "comment":"Ind-AS abolished extraordinary items. These 25 tags cannot fill for any Indian filer under current standards; retained only for older filings.",
+                  "derivation":{"method":"sum","inputs":[
+                      {"tag":"AUTOPL014","weight":1},{"tag":"AUTOPL015","weight":1},
+                      {"tag":"AUTOPL016","weight":-1},{"tag":"AUTOPL017","weight":-1}]},
+                  "fields":[
+                    { "tag":"AUTOPL014","field_name":"Extraordinary items - Income - Cash","origin":"derived","synthetic_tag":true,"cash_flag":"cash","flow":"income",
+                      "derivation":{"method":"sum","inputs":["EOINTOI","EODIVOI","EONGA","EONGINV","EOEXCG","EOCFG","EOOTNONOIC"]},
+                      "fields":[
+                        {"tag":"EOINTOI","field_name":"Extraordinary Items - Interest received","origin":"extracted","data_type":"decimal","classified_as":"INTOI"},
+                        {"tag":"EODIVOI","field_name":"Extraordinary Items - Dividends received","origin":"extracted","data_type":"decimal","classified_as":"DIVOI"},
+                        {"tag":"EONGA","field_name":"Extraordinary Items - Profit on sale of fixed assets","origin":"extracted","data_type":"decimal","classified_as":"NGA"},
+                        {"tag":"EONGINV","field_name":"Extraordinary Items - Profit on sale of investments","origin":"extracted","data_type":"decimal","classified_as":"NGINV"},
+                        {"tag":"EOEXCG","field_name":"Exchange gain","origin":"extracted","data_type":"decimal","classified_as":"EXCG"},
+                        {"tag":"EOCFG","field_name":"Crystallized forex Gain","origin":"extracted","data_type":"decimal","classified_as":"CFG"},
+                        {"tag":"EOOTNONOIC","field_name":"Other Non-Operating Cash Income","origin":"extracted","data_type":"decimal","classified_as":"OTNONOIC"}
+                      ]},
+                    { "tag":"AUTOPL015","field_name":"Extraordinary items - Income - Non Cash","origin":"derived","synthetic_tag":true,"cash_flag":"non_cash","flow":"income",
+                      "derivation":{"method":"sum","inputs":["EONPRCA","EONPRCL","EONPMTM","EOOTNONOINC"]},
+                      "fields":[
+                        {"tag":"EONPRCA","field_name":"Notional profit on reinstatement of current assets","origin":"extracted","data_type":"decimal","classified_as":"NPRCA"},
+                        {"tag":"EONPRCL","field_name":"Notional profit on reinstatement of current liabilities","origin":"extracted","data_type":"decimal","classified_as":"NPRCL"},
+                        {"tag":"EONPMTM","field_name":"MTM Forex gain","origin":"extracted","data_type":"decimal","classified_as":"NPMTM"},
+                        {"tag":"EOOTNONOINC","field_name":"Other Non-Operating Non Cash Income","origin":"extracted","data_type":"decimal","classified_as":"OTNONOINC"}
+                      ]},
+                    { "tag":"AUTOPL016","field_name":"Extraordinary items - Expense - Cash","origin":"derived","synthetic_tag":true,"cash_flag":"cash","flow":"expense",
+                      "derivation":{"method":"sum","inputs":["EOCFL","EOEXCL","EOINVTWO","EOFCWO","EONLFA","EONLINV","EONLOT","EOOTNONOEC"]},
+                      "fields":[
+                        {"tag":"EOCFL","field_name":"Crystallized forex loss","origin":"extracted","data_type":"decimal","classified_as":"CFL"},
+                        {"tag":"EOEXCL","field_name":"Exchange loss","origin":"extracted","data_type":"decimal","classified_as":"EXCL"},
+                        {"tag":"EOINVTWO","field_name":"Inventory Written Off","origin":"extracted","data_type":"decimal","classified_as":"INVTWO"},
+                        {"tag":"EOFCWO","field_name":"Write-off of stock-in-process","origin":"extracted","data_type":"decimal","classified_as":"FCWO"},
+                        {"tag":"EONLFA","field_name":"Loss on sale of fixed assets","origin":"extracted","data_type":"decimal","classified_as":"NLFA"},
+                        {"tag":"EONLINV","field_name":"Loss on sale of investments","origin":"extracted","data_type":"decimal","classified_as":"NLINV"},
+                        {"tag":"EONLOT","field_name":"Loss on sale of Others","origin":"extracted","data_type":"decimal","classified_as":"NLOT"},
+                        {"tag":"EOOTNONOEC","field_name":"Other Extraordinary Items - Cash","origin":"extracted","data_type":"decimal","classified_as":"OTNONOEC"}
+                      ]},
+                    { "tag":"AUTOPL017","field_name":"Extraordinary items - Expense - Non Cash","origin":"derived","synthetic_tag":true,"cash_flag":"non_cash","flow":"expense",
+                      "derivation":{"method":"sum","inputs":["EOMTMEL","EONONLRSA","EONONLRSL","EOWOFA","EOEXWOINV","EOEXWOOT","OTEOI"]},
+                      "fields":[
+                        {"tag":"EOMTMEL","field_name":"MTM forex loss","origin":"extracted","data_type":"decimal","classified_as":"NONLMTM"},
+                        {"tag":"EONONLRSA","field_name":"Notional loss on reinstatement of current assets","origin":"extracted","data_type":"decimal","classified_as":"NONLRSA"},
+                        {"tag":"EONONLRSL","field_name":"Notional loss on reinstatement of current liabilities","origin":"extracted","data_type":"decimal","classified_as":"NONLRSL"},
+                        {"tag":"EOWOFA","field_name":"Write off of fixed assets","origin":"extracted","data_type":"decimal","classified_as":"WOFA"},
+                        {"tag":"EOEXWOINV","field_name":"Write off of Investments","origin":"extracted","data_type":"decimal","classified_as":"WOINV"},
+                        {"tag":"EOEXWOOT","field_name":"Other write off","origin":"extracted","data_type":"decimal","classified_as":"WOOT"},
+                        {"tag":"OTEOI","field_name":"Other Extraordinary Items - Non Cash","origin":"extracted","data_type":"decimal","classified_as":"OTNONOENC"}
+                      ]}
+                  ]}
+              ]},
+
+            { "tag":"PBTR","field_name":"Profit (loss) before tax","sr_no":"9",
+              "origin":"extracted","reported":true,
+              "note_aliases":["profit before tax"],
+              "reconciliation":{"method":"sum","inputs":[
+                  {"tag":"PB3NTAX","weight":1},{"tag":"TOT3","weight":1}]} },
+
+            { "tag":"TOTTAXEXP","field_name":"Tax expense","sr_no":"10","origin":"derived",
+              "note_aliases":["total tax expense","tax expense","income taxes"],
+              "definition":"Total income-tax charge: current plus deferred, including prior-year adjustments. Excludes indirect taxes.",
+              "derivation":{"method":"sum","inputs":["CT","DT","OTTAX"]},
+              "fields":[
+                {"tag":"CT","field_name":"Current tax","sr_no":"10.1","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["current tax"]},
+                {"tag":"DT","field_name":"Deferred tax","sr_no":"10.2","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["deferred tax"],
+                 "definition":"Tax effect of temporary differences. Often a credit (negative) when reversing."},
+                { "tag":"OTTAX","field_name":"Other tax","sr_no":"10.3","origin":"derived","legacy_tag":true,
+                  "derivation":{"method":"sum","inputs":["MAT","OTTAXCT","OTTAXDT"]},
+                  "fields":[
+                    {"tag":"MAT","field_name":"MAT Credit Entitlement","origin":"extracted","data_type":"decimal"},
+                    {"tag":"OTTAXCT","field_name":"Other tax items related to Current Tax","origin":"extracted","data_type":"decimal","classified_as":"CTTAX"},
+                    {"tag":"OTTAXDT","field_name":"Other tax items related to Deferred Tax","origin":"extracted","data_type":"decimal","classified_as":"DTTAX"}
+                  ]}
+              ]},
+
+            { "tag":"PATR","field_name":"Profit (loss) After Tax","sr_no":"11",
+              "origin":"extracted","reported":true,
+              "note_aliases":["profit for the year","profit after tax"],
+              "reconciliation":{"method":"sum","inputs":[
+                  {"tag":"PBTR","weight":1},{"tag":"TOTTAXEXP","weight":-1}]} },
+
+            { "tag":"OTCI","field_name":"Other comprehensive income (Net)","sr_no":"12",
+              "origin":"extracted","reported":true,
+              "note_aliases":["total other comprehensive income","other comprehensive income"],
+              "comment":"OCI FEEDS PBMI (14 = 11 plus/minus 12 & 13), so comprehensive income IS representable: PBMI is total comprehensive income before minority interest and TOTCIR is the share attributable to owners.",
+              "derivation":{"method":"sum","inputs":["OCIURGI","OCIURGF","OCIURGM","OCIURGB","OCIOT","OCIDTA"]},
+              "fields":[
+                {"tag":"OCIURGI","field_name":"Unrealized gain/(loss) on investments / financial assets","origin":"extracted","data_type":"decimal","cash_flag":"non_cash",
+                 "note_aliases":["net change in fair values of investments"]},
+                {"tag":"OCIURGF","field_name":"Unrealized gain/(loss) on revaluation of fixed assets","origin":"extracted","data_type":"decimal","cash_flag":"non_cash"},
+                {"tag":"OCIURGM","field_name":"Unrealized gain/(loss) on cash flow hedges (MTM)","origin":"extracted","data_type":"decimal","cash_flag":"non_cash",
+                 "note_aliases":["net change in intrinsic value of derivatives designated as cash flow hedges"]},
+                {"tag":"OCIURGB","field_name":"Unrealized gain/(loss) on defined benefit plans","origin":"extracted","data_type":"decimal","cash_flag":"non_cash",
+                 "note_aliases":["remeasurement of defined employee benefit plans"]},
+                {"tag":"OCIOT","field_name":"Others","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["exchange differences on translation of financial statements of foreign operations"],
+                 "comment":"TCS consolidated reports translation differences (3,149) here for want of a dedicated tag."},
+                {"tag":"OCIDTA","field_name":"Net deferred tax effect of above items","origin":"extracted","data_type":"decimal","is_tax_effect":true,
+                 "note_aliases":["income tax on items that will not be reclassified","income tax on items that will be reclassified"]}
+              ]},
+
+            {"tag":"TOTPNLDOP","field_name":"Profit (Loss) from discontinued operations after tax","sr_no":"13","origin":"extracted","data_type":"decimal"},
+
+            { "tag":"PBMI","field_name":"Profit (loss) for period before minority interest (11 plus/minus 12 & 13)","sr_no":"14","origin":"extracted","reported":true,
+              "note_aliases":["total comprehensive income for the year"],
+              "definition":"TOTAL COMPREHENSIVE INCOME before minority interest. Despite the label saying 'Profit', the formula includes OCI (12), so this is comprehensive income, not profit.",
+              "comment":"Formula confirmed on BOTH TCS bases: consolidated 49,454 + 2,750 + 0 = 52,204 (face: TOTAL COMPREHENSIVE INCOME 52,204); standalone 49,096 - 600 = 48,496 (face: 48,496).",
+              "waterfall":{"method":"sum","inputs":[
+                  {"tag":"PATR","weight":1},{"tag":"OTCI","weight":1},{"tag":"TOTPNLDOP","weight":1}]} },
+
+            {"tag":"TOTMI","field_name":"Minority interest and associates","sr_no":"15","origin":"extracted","data_type":"decimal",
+             "note_aliases":["non-controlling interests"],
+             "definition":"Non-controlling interests' share of TOTAL COMPREHENSIVE INCOME (not just profit), since PBMI includes OCI. TCS consolidated: 283 = 244 profit + 39 OCI. Consolidated statements only."},
+
+            {"tag":"DIFP","field_name":"Difference in Profit (Loss) for the period","sr_no":"16","origin":"extracted","data_type":"decimal","role":"balancing_figure"},
+
+            { "tag":"TOTCIR","field_name":"Profit (loss) for period","sr_no":"17",
+              "origin":"extracted","reported":true,
+              "note_aliases":["profit for the year attributable to shareholders of the company"],
+              "comment":"Total comprehensive income attributable to owners. Validated on TCS consolidated: 52,204 - 283 = 51,921, matching the SOCIE 'Total comprehensive income' row.",
+              "reconciliation":{"method":"sum","inputs":[
+                  {"tag":"PBMI","weight":1},{"tag":"TOTMI","weight":-1},{"tag":"DIFP","weight":1}]} },
+
+            { "node_type":"group","field_name":"Per share information","role":"memo",
+              "fields":[
+                {"tag":"EPSB","field_name":"Basic earnings per share","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["earnings per equity share basic and diluted","earnings per share"]},
+                {"tag":"EPSD","field_name":"Diluted earnings per share","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["earnings per equity share basic and diluted"]},
+                {"tag":"NVES","field_name":"Nominal Value Per Equity Share","origin":"extracted","data_type":"decimal"}
+              ]}
+          ]
+        }
+      ]
+    }
+  ]
+}
