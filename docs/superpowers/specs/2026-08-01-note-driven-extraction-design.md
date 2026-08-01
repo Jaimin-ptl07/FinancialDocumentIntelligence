@@ -205,18 +205,39 @@ Measured on the pilot: **10 derived facts** including three-level chains
 (`INTTLWC + INTOT → INTTL → INTEXP → TOTFC`) and the roll-up groups
 (`EXCG/CFG/NPRCA… → NONOI`, `PYAUD*×4 → TOTPYAUD`).
 
-### 5.1 The precedence rule
+### 5.1 The precedence rule — CORRECTED BY MEASUREMENT
+
+This spec originally said *"reported → else COMPLETE sum of children → else
+null"*. That was implemented and **falsified**: requiring every input collapsed
+derivation from 10 facts to 1, suppressing 37 nodes. No real filer discloses
+every child the taxonomy defines -- TCS reports 2 of 5 revenue lines and 1 of 9
+non-operating income items -- so "all inputs present" nulls almost every parent.
+It also failed to fix the case it was written for: `ADMINEXP` has a single child,
+so "all present" was trivially satisfied and it still synthesised 2,581 from
+`TCEXP` alone.
+
+The rule that survived measurement:
 
 ```
-reported value  →  else complete sum of children  →  else null
+reported value
+  → else the sum of the children that ARE present, WITH completeness recorded
+  → else null
 ```
-with the sum always computed as a **check** when both exist.
 
-**Not yet implemented, and it matters:** the pilot commits a sum even when
-children are incomplete, which promoted single values upward (`INTEXP` and
-`INTTL` both = 435 from one input) and produced 4 of the run's false positives.
-A composition must only commit when its inputs are complete or the parent is
-reported.
+Each derived fact carries `complete`, `coverage` ("3/4"), `confidence` and the
+`missing` tags. Two hard constraints:
+
+1. **A partial value may never satisfy a reported total's reconciliation.** It
+   cannot be used to claim the books tie. `TOTRNOTINR` is reported `unverified`
+   because `RFONET` is partial -- which is the correct answer, not a failure.
+2. **A node that is itself extractable-and-absent is never synthesised.** This
+   is what stopped `ADMINEXP` and `FWS` being invented from one child.
+
+Measured outcome: 9 derived facts, all correctly flagged partial; false
+positives 4 → 3; recall and precision unchanged at 62% / 91%. The output splits
+into **43 facts a consumer may trust** and **9 shown with their coverage** --
+which is the honest shape for a bank: show the number, show that it is
+incomplete, and never let an incomplete number vouch for a total.
 
 ---
 
@@ -276,7 +297,7 @@ design, and it silently disables fallback retrieval.
 | Phase | Work | Gate |
 |---|---|---|
 | **A** | Verify mapper **accuracy** (not coverage) on RITES + RIL by hand | newly mapped concepts are correct, not merely present |
-| **B** | Partial-input suppression in derivation | the 4 false positives disappear; no total is a promoted single child |
+| **B** | ~~Partial-input suppression~~ → completeness-marking (see 5.1) | DONE: 9 partial facts flagged with coverage; footing gate rejects partial inputs |
 | **C** | Port to `fdi.core` + `fdi.pipeline`: `note_index`, `face_index`, note-unit extractor, mapper wiring | TCS P&L reproduces the pilot: ~8 calls, ≥62% recall, ≥91% precision |
 | **D** | Author Assets / Liabilities / Equity in v4.3 shape | 0 invariant violations per module |
 | **E** | Add a **cash-flow module** | the taxonomy has none, and CF anchors miss RITES and RIL — two independent gaps pointing at the same hole |
