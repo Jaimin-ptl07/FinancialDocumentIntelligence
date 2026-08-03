@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from fdi.core.basis import basis_regions
+from fdi.core.fog import Edge, LineItem, line_item_id
 from fdi.core.statements import (
     STATEMENT_ANCHORS,
     describe_footing,
@@ -124,3 +125,81 @@ def build_note_index(
         bases[basis] = {"notes": notes, "page_lo": lo, "page_hi": hi}
 
     return {"schema_version": 1, "bases": bases}
+
+
+def _region_of(index: Mapping[str, object], basis: str) -> Mapping[str, object]:
+    """One basis's slice of a `build_note_index` artifact, or an empty one."""
+    bases = index.get("bases") if isinstance(index, Mapping) else None
+    region = bases.get(basis) if isinstance(bases, Mapping) else None
+    return region if isinstance(region, Mapping) else {}
+
+
+def _note_refs(note_index: Mapping[str, object], basis: str) -> set[str]:
+    """The refs this basis actually resolved -- used to reject dangling
+    pointers. An edge to a node that is not in the graph is worse than no edge:
+    it looks like navigation and leads nowhere."""
+    notes = _region_of(note_index, basis).get("notes")
+    return {
+        str(n["ref"])
+        for n in (notes if isinstance(notes, list) else [])
+        if isinstance(n, Mapping) and isinstance(n.get("ref"), str)
+    }
+
+
+def face_line_items(
+    ocr: Mapping[str, object],
+    statement_index: Mapping[str, object],
+    note_index: Mapping[str, object],
+    *,
+    basis: str,
+) -> tuple[list[LineItem], list[Edge]]:
+    """Every valued face row of every statement in `basis`, as LineItems, plus
+    CONTAINS and REFERENCES edges.
+
+    This is the deterministic bootstrap: values, concepts and note pointers in
+    ONE parse, with no model call. On TCS P&L, 22 of 31 facts came from here.
+
+    A REFERENCES edge is emitted ONLY when the printed ref resolves to a note
+    this basis actually has. Total: never raises."""
+    tables = _tables_of(ocr)
+    resolved = _note_refs(note_index, basis)
+    raw_statements = (
+        statement_index.get("statements") if isinstance(statement_index, Mapping) else None
+    )
+
+    items: list[LineItem] = []
+    edges: list[Edge] = []
+    for stmt in raw_statements if isinstance(raw_statements, list) else []:
+        if not isinstance(stmt, Mapping) or stmt.get("basis") != basis:
+            continue
+        stmt_id = stmt.get("id")
+        table_index = stmt.get("table_index")
+        page = stmt.get("page")
+        if not isinstance(stmt_id, str) or not isinstance(table_index, int):
+            continue
+        if not (0 <= table_index < len(tables)):
+            continue
+        table = tables[table_index]
+        if not isinstance(table, Mapping):
+            continue
+
+        for row_index, row in enumerate(parse_face_table(table)):
+            item = LineItem(
+                id=line_item_id(stmt_id, row_index),
+                parent=stmt_id,
+                origin="face",
+                label=row.label,
+                caption=row.caption,
+                ref=row.ref,
+                current=row.current,
+                prior=row.prior,
+                page=page if isinstance(page, int) else 0,
+                table_index=table_index,
+                row_index=row_index,
+            )
+            items.append(item)
+            edges.append(Edge("CONTAINS", stmt_id, item.id))
+            if row.ref and row.ref in resolved:
+                edges.append(Edge("REFERENCES", item.id, f"nt:{basis}:{row.ref}"))
+
+    return items, edges
