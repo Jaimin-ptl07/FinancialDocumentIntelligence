@@ -14,12 +14,14 @@ from collections.abc import Mapping, Sequence
 
 from fdi.core.basis import basis_regions
 from fdi.core.fog import Edge, LineItem, line_item_id
+from fdi.core.numbers import parse_amount
 from fdi.core.statements import (
     STATEMENT_ANCHORS,
     describe_footing,
     find_statement_tables,
     note_windows,
     parse_face_table,
+    table_rows,
     tables_in_window,
 )
 
@@ -203,3 +205,100 @@ def face_line_items(
                 edges.append(Edge("REFERENCES", item.id, f"nt:{basis}:{row.ref}"))
 
     return items, edges
+
+
+def _note_rows(table: Mapping[str, object]) -> list[tuple[str, float | None, float | None]]:
+    """A note table's `(label, current, prior)` rows, header skipped.
+
+    A note table has no note column to dodge, so every non-label cell is a
+    candidate amount -- but a row with NO amount anywhere is a caption or a
+    section break and is dropped, matching `parse_face_table`'s rule."""
+    rows = table_rows(table)
+    out: list[tuple[str, float | None, float | None]] = []
+    for r in sorted(rows):
+        cols = rows[r]
+        label = cols.get(0, "").strip()
+        if not label:
+            continue
+        amounts = [
+            parsed
+            for c in sorted(cols)
+            if c != 0 and (parsed := parse_amount(cols.get(c))) is not None
+        ]
+        if not amounts:
+            continue
+        out.append((label, amounts[0], amounts[1] if len(amounts) > 1 else None))
+    return out
+
+
+def note_line_items(
+    ocr: Mapping[str, object],
+    note_index: Mapping[str, object],
+    *,
+    basis: str,
+) -> tuple[list[LineItem], list[Edge]]:
+    """Every valued row of every note in `basis`, as LineItems + CONTAINS edges.
+
+    THE ACCURACY LEVER. Today a disclosed line with no taxonomy home -- TCS's
+    "Facility expenses 2,966" -- vanishes silently. As a LineItem it is a
+    visible node that Phase 3 can mark `unmapped` rather than lose, and the
+    note's own total becomes available as the arbiter for its components.
+
+    `origin` is "note", which is not cosmetic: face rows are summaries and match
+    PARENT concepts, note rows are detail and match DESCENDANTS. Conflating the
+    two candidate sets left 15 of TCS's 28 face rows unmapped. Total: never
+    raises."""
+    tables = _tables_of(ocr)
+    notes = _region_of(note_index, basis).get("notes")
+
+    items: list[LineItem] = []
+    edges: list[Edge] = []
+    for note in notes if isinstance(notes, list) else []:
+        if not isinstance(note, Mapping):
+            continue
+        note_id = note.get("id")
+        indices = note.get("table_indices")
+        if not isinstance(note_id, str) or not isinstance(indices, list):
+            continue
+
+        row_index = 0
+        for table_index in indices:
+            if not isinstance(table_index, int) or not (0 <= table_index < len(tables)):
+                continue
+            table = tables[table_index]
+            if not isinstance(table, Mapping):
+                continue
+            page = _page_of_table(table)
+            for label, current, prior in _note_rows(table):
+                item = LineItem(
+                    id=line_item_id(note_id, row_index),
+                    parent=note_id,
+                    origin="note",
+                    label=label,
+                    caption="",
+                    ref="",
+                    current=current,
+                    prior=prior,
+                    page=page,
+                    table_index=table_index,
+                    row_index=row_index,
+                )
+                items.append(item)
+                edges.append(Edge("CONTAINS", note_id, item.id))
+                # Counter runs across ALL of a note's tables, deliberately: a
+                # note split over two tables must not restart at r0 and collide.
+                row_index += 1
+
+    return items, edges
+
+
+def _page_of_table(table: Mapping[str, object]) -> int:
+    """A table's first page, or 0. Total."""
+    regions = table.get("bounding_regions")
+    if not isinstance(regions, list) or not regions:
+        return 0
+    first = regions[0]
+    if not isinstance(first, Mapping):
+        return 0
+    page = first.get("page_number")
+    return page if isinstance(page, int) and not isinstance(page, bool) else 0
