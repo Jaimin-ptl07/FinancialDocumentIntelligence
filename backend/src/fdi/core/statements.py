@@ -344,3 +344,37 @@ def tables_in_window(
         if offset is not None and start <= offset < end:
             out.append(table)
     return out
+
+
+# The arithmetic each face must satisfy, as (plus, minus, target) fragments
+# matched against row labels. Cash flow has NO rule: its anchors already miss
+# RITES and RIL entirely (see the design's Phase 5 hole), so asserting one would
+# manufacture failures on documents whose face is perfectly correct.
+FOOTING_RULES: Mapping[str, tuple[tuple[str, ...], tuple[str, ...], str]] = {
+    "profit_and_loss": (("total income",), ("total expenses",), "profit before tax"),
+    "balance_sheet": (("total equity", "total liabilities"), (), "total assets"),
+}
+
+_FOOTING_TOLERANCE = 1.0
+
+
+def describe_footing(rows: Sequence[FaceRow], statement: str) -> dict[str, object]:
+    """Whether this face's arithmetic ties, as a recordable verdict.
+
+    `passed is None` means COULD NOT CHECK -- a needed line is absent, or the
+    statement has no rule. That is deliberately distinct from False: discarding
+    a correct table because it labels one line unusually is worse than not
+    checking it. `checked` makes the distinction explicit on the artifact."""
+    rule = FOOTING_RULES.get(statement)
+    if rule is None:
+        return {"rule": "", "passed": None, "checked": False}
+    plus, minus, target = rule
+    passed = verify_footing(
+        rows, plus, minus, target, tolerance=_FOOTING_TOLERANCE
+    )
+    parts = " + ".join(plus) + ("".join(f" - {m}" for m in minus))
+    return {
+        "rule": f"{parts} = {target}",
+        "passed": passed,
+        "checked": passed is not None,
+    }
