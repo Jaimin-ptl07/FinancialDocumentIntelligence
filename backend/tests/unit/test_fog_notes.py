@@ -27,7 +27,7 @@ _HEAD = {
     "spans": [{"offset": 2000, "length": 18}],
 }
 
-_BASIS = {
+_BASIS: dict[str, object] = {
     "default_basis": "unknown",
     "regions": [{"basis": "consolidated", "start_page": 300, "end_page": 400}],
 }
@@ -89,6 +89,51 @@ def test_provenance_is_carried():
     facility = next(i for i in items if i.label == "Facility expenses")
     assert facility.page == 301
     assert facility.table_index == 0
+    # `row_index` counts VALUED rows (the id hashes on it); `source_row` is the
+    # raw grid row, and only that can address a cell in `core/provenance.py`.
+    assert facility.row_index == 0
+    assert facility.source_row == 1
+
+
+def test_a_bare_year_header_does_not_become_a_line_item():
+    """`parse_amount("2025-26")` is None, so the fixtures never noticed -- but
+    `parse_amount("2025")` is 2025.0, and `Particulars | 2025 | 2024` minted a
+    LineItem labelled 'Particulars' worth 2025. A year entering the graph as an
+    amount is the class of bug the comma fix already paid for."""
+    table = {
+        "bounding_regions": [{"page_number": 301}],
+        "spans": [{"offset": 2150, "length": 100}],
+        "cells": [
+            _cell(0, 0, "Particulars"), _cell(0, 1, "2025"), _cell(0, 2, "2024"),
+            _cell(1, 0, "Facility expenses"), _cell(1, 1, "2,966"), _cell(1, 2, "2,700"),
+        ],
+    }
+    ocr = {"paragraphs": [_HEAD], "tables": [table]}
+    items, _ = note_line_items(ocr, build_note_index(ocr, _BASIS), basis="consolidated")
+    assert [i.label for i in items] == ["Facility expenses"]
+
+
+def test_a_repeated_label_under_two_blocks_keeps_its_caption():
+    """A PPE note prints `Additions` once under 'Gross block' and once under
+    'Accumulated depreciation'. Without the caption they are two
+    indistinguishable nodes and the note total cannot arbitrate its own
+    components -- which is the stated reason note rows exist at all."""
+    ppe = {
+        "bounding_regions": [{"page_number": 305}],
+        "spans": [{"offset": 2150, "length": 200}],
+        "cells": [
+            _cell(0, 0, "Particulars"), _cell(0, 1, "2025-26"),
+            _cell(1, 0, "Gross block"),
+            _cell(2, 0, "Additions"), _cell(2, 1, "120"),
+            _cell(3, 0, "Accumulated depreciation"),
+            _cell(4, 0, "Additions"), _cell(4, 1, "45"),
+        ],
+    }
+    ocr = {"paragraphs": [_HEAD], "tables": [ppe]}
+    items, _ = note_line_items(ocr, build_note_index(ocr, _BASIS), basis="consolidated")
+    additions = [i for i in items if i.label == "Additions"]
+    assert [i.caption for i in additions] == ["Gross block", "Accumulated depreciation"]
+    assert len({i.id for i in additions}) == 2
 
 
 def test_ids_are_unique_across_notes_sharing_a_page():

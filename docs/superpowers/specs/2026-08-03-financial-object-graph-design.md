@@ -92,7 +92,8 @@ Note        ref · title · offset_window COMPOSES         LineItem→LineItem  
             page_span · basis           RECONCILES_WITH  face LineItem ↔ note total
 LineItem    label · caption · ref       SAME_AS          cross-basis / cross-period
             current · prior · unit
-            row_index · origin
+            row_index · source_row
+            origin
 Period      label · end_date · current
 
 RESERVED, not built in domain 1 (see decision 5):
@@ -102,12 +103,22 @@ Policy      section_id · page · span    GOVERNED_BY      LineItem→Policy
 `Policy` / `GOVERNED_BY` are named here so the schema version that adds them is
 additive rather than breaking. **Domain 1 emits neither.**
 
-Every node carries its **address**: `page · table_index · row_index ·
+Every node carries its **address**: `page · table_index · source_row ·
 span_offset`. That address resolves to exactly one table cell, so geometry
 (`bounding_regions`) is derived **read-side** through the existing
 `core/provenance.py` helpers rather than copied onto every node — which is how
 `resolve_field_regions` already works today, and keeps the artifact from
 duplicating polygon data that the `structure` grid already holds.
+
+**`source_row`, not `row_index`, is the addressing component**, and the two are
+deliberately both kept. `row_index` is the ordinal within a table's *valued*
+rows: it is what `line_item_id` hashes on, so it must stay put when a header or
+caption row is reclassified. `source_row` is the raw `cell.row_index` in the OCR
+grid. `core/provenance.py::_table_row_regions` indexes the raw grid, so handing
+it a valued-row ordinal returns the geometry of a different line — off by
+however many header and caption rows precede it — or `None` near the end of the
+table. A read-side highlight box drawn from `row_index` points at the wrong
+line, silently.
 
 The audit trail is therefore complete and cell-precise, without the FOG storing
 a second copy of the geometry that would then have to be kept in sync.

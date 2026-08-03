@@ -38,7 +38,15 @@ class LineItem:
     `origin` is "face" or "note". `ref` is the note reference printed in the
     face's note column, or "" -- an EMPTY ref on a face row means the issuer
     printed no pointer (RIL prints no note column at all), which is `absent`,
-    not `missed`."""
+    not `missed`.
+
+    TWO ROW NUMBERS, AND WHY BOTH ARE NEEDED. `row_index` is the ordinal within
+    the VALUED rows of the table -- it is what `line_item_id` hashes on, so it
+    must not move when a header or caption row is reclassified. `source_row` is
+    the RAW `cell.row_index` in the OCR grid, and it is the only one that can
+    address a cell: `core/provenance.py::_table_row_regions` indexes the raw
+    grid, so handing it a valued-row ordinal returns the geometry of a
+    different line (or `None`) and draws the highlight box on the wrong row."""
 
     id: str
     parent: str
@@ -51,6 +59,7 @@ class LineItem:
     page: int
     table_index: int
     row_index: int
+    source_row: int
 
 
 @dataclass(frozen=True)
@@ -84,6 +93,7 @@ def line_item_body(item: LineItem) -> dict[str, object]:
         "page": item.page,
         "table_index": item.table_index,
         "row_index": item.row_index,
+        "source_row": item.source_row,
     }
 
 
@@ -128,7 +138,9 @@ def build_fog_artifact(
             ],
         }
     return {
-        "schema_version": 1,
+        # v2 adds `source_row` to every LineItem body -- see LineItem's
+        # docstring for why the valued-row ordinal could not address a cell.
+        "schema_version": 2,
         "doc_id": doc_id,
         "bases": bases,
         "diagnostics": dict(diagnostics),

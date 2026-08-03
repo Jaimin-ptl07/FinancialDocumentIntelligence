@@ -102,13 +102,99 @@ def test_each_basis_gets_its_own_note_namespace():
     assert "13" not in standalone_refs
 
 
+def test_front_matter_numbering_cannot_hijack_a_note_reference():
+    """The Board's Report restarts its own `1.`/`2.` numbering and precedes the
+    statements, and `note_windows` keeps the FIRST occurrence by offset. Without
+    a statement-page bound the face's printed `1` binds to 'FINANCIAL RESULTS'
+    on page 12 -- and the FOG reports that as a healthy resolution."""
+    whole_document = {
+        "default_basis": "unknown",
+        "regions": [{"basis": "consolidated", "start_page": 1, "end_page": 400}],
+    }
+    ocr = {
+        "paragraphs": [
+            _head("1. FINANCIAL RESULTS", 12, 100),
+            _head("2. DIVIDEND", 13, 200),
+            _head("Consolidated Balance Sheet", 148, 800),
+            _head("1. Corporate information", 150, 1000),
+            _head("2. Significant accounting policies", 151, 1100),
+        ],
+        "tables": [],
+    }
+    notes = {n["ref"]: n for n in build_note_index(ocr, whole_document)
+             ["bases"]["consolidated"]["notes"]}
+    assert notes["1"]["page"] == 150
+    assert notes["1"]["title"] == "Corporate information"
+    assert notes["2"]["page"] == 151
+
+
+def test_two_regions_of_one_basis_are_merged_not_overwritten():
+    """`core/basis.py` collapses only CONSECUTIVE same-basis anchors, so
+    [standalone, consolidated, standalone] is a real shape. Assigning per region
+    threw the first region's notes away silently."""
+    basis = {
+        "default_basis": "unknown",
+        "regions": [
+            {"basis": "standalone", "start_page": 100, "end_page": 155},
+            {"basis": "consolidated", "start_page": 156, "end_page": 180},
+            {"basis": "standalone", "start_page": 181, "end_page": 200},
+        ],
+    }
+    ocr = {
+        "paragraphs": [
+            _head("5. Trade receivables", 150, 1000),
+            _head("7. Borrowings", 190, 5000),
+        ],
+        "tables": [],
+    }
+    region = build_note_index(ocr, basis)["bases"]["standalone"]
+    assert {n["ref"] for n in region["notes"]} == {"5", "7"}
+    # The merge is VISIBLE: a reader can tell a merged basis from a single one.
+    assert len(region["regions"]) == 2
+    assert region["page_lo"] == 100
+    assert region["page_hi"] == 200
+
+
+def test_a_ref_a_second_region_re_uses_is_recorded_not_silently_dropped():
+    basis = {
+        "default_basis": "unknown",
+        "regions": [
+            {"basis": "standalone", "start_page": 100, "end_page": 155},
+            {"basis": "consolidated", "start_page": 156, "end_page": 180},
+            {"basis": "standalone", "start_page": 181, "end_page": 200},
+        ],
+    }
+    ocr = {
+        "paragraphs": [
+            _head("5. Trade receivables", 150, 1000),
+            _head("5. Trade receivables", 190, 5000),
+        ],
+        "tables": [],
+    }
+    region = build_note_index(ocr, basis)["bases"]["standalone"]
+    assert [n["page"] for n in region["notes"]] == [150]
+    assert region["duplicate_refs"] == ["5"]
+
+
 def test_output_is_deterministic():
-    assert build_note_index(_OCR, _BASIS) == build_note_index(_OCR, _BASIS)
+    """`==` cannot see set or dict ordering leaking into the body. The artifact
+    is content-ADDRESSED, so assert the canonical BYTES and an externally-fixed
+    order."""
+    from fdi.core.serialization import canonical_json_bytes
+
+    first = build_note_index(_OCR, _BASIS)
+    assert canonical_json_bytes(first) == canonical_json_bytes(
+        build_note_index(_OCR, _BASIS)
+    )
+    assert [n["ref"] for n in first["bases"]["consolidated"]["notes"]] == [
+        "10", "13", "13(a)", "13(b)",
+    ]
 
 
 def test_malformed_input_never_raises():
     assert build_note_index({}, {})["bases"] == {"unknown": {
-        "notes": [], "page_lo": 1, "page_hi": 100_000}}
+        "notes": [], "page_lo": 1, "page_hi": 100_000,
+        "regions": [{"page_lo": 1, "page_hi": 100_000}], "duplicate_refs": []}}
 
 
 def test_the_stage_is_registered_with_the_right_deps():
@@ -117,3 +203,4 @@ def test_the_stage_is_registered_with_the_right_deps():
 
     stage = REGISTRY.get("note_index")
     assert stage.deps == ("ocr", "structure", "basis")
+    assert stage.version == 2

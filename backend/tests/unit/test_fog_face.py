@@ -111,6 +111,9 @@ def test_provenance_is_carried_on_every_item():
     # that filtered sequence -- not the raw table row. The header and the
     # "INCOME" caption row carry no amount, so revenue is the first item.
     assert revenue.row_index == 0
+    # ...which is precisely why it cannot address a cell. `core/provenance.py`
+    # indexes the RAW grid, where revenue is row 2 (header 0, "INCOME" 1).
+    assert revenue.source_row == 2
     assert revenue.origin == "face"
 
 

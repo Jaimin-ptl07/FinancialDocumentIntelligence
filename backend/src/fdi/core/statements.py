@@ -181,13 +181,19 @@ def find_statement_tables(
 
 @dataclass(frozen=True)
 class FaceRow:
-    """One face row: what it says, where its detail lives, and what it is worth."""
+    """One face row: what it says, where its detail lives, and what it is worth.
+
+    `source_row` is the RAW `cell.row_index` this row was read from, kept
+    because the position of a row within the returned (header- and
+    caption-filtered) list cannot address a cell in the OCR grid. It defaults to
+    -1 = unknown so a hand-built FaceRow in a caller's test stays valid."""
 
     label: str
     caption: str
     ref: str
     current: float | None
     prior: float | None
+    source_row: int = -1
 
 
 def _is_note_header(text: str) -> bool:
@@ -244,6 +250,7 @@ def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
             label=label, caption=caption, ref=ref,
             current=amounts[0],
             prior=amounts[1] if len(amounts) > 1 else None,
+            source_row=r,
         ))
     return out
 

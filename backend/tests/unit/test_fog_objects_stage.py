@@ -91,7 +91,52 @@ def test_an_issuer_with_no_note_column_records_absent_not_zero_items():
 
 
 def test_the_artifact_is_deterministic_for_content_addressing():
-    assert _fog() == _fog()
+    """`f(x) == f(x)` in one process cannot fail for the reason it names: set
+    iteration order for strings is stable WITHIN an interpreter and dict order
+    is invisible to `==`. The property that matters is the canonical BYTES --
+    the exact bytes stored and hashed -- plus an externally-fixed node order."""
+    from fdi.core.serialization import canonical_json_bytes
+
+    first = _fog()
+    assert canonical_json_bytes(first) == canonical_json_bytes(_fog())
+    region = first["bases"]["consolidated"]
+    assert [i["id"] for i in region["line_items"]] == [
+        "li:st:consolidated:profit_and_loss:r0",
+        "li:st:consolidated:profit_and_loss:r1",
+        "li:st:consolidated:profit_and_loss:r2",
+        "li:st:consolidated:profit_and_loss:r3",
+        "li:nt:consolidated:10:r0",
+    ]
+    assert [(e["type"], e["source"], e["target"]) for e in region["edges"]] == sorted(
+        (e["type"], e["source"], e["target"]) for e in region["edges"]
+    )
+
+
+def test_the_body_hashes_the_same_under_a_different_hash_seed():
+    """PYTHONHASHSEED is fixed per interpreter, so an implementation that dumped
+    a `set` straight into `edges` would pass every in-process check and only
+    break across worker processes -- which is exactly where the cache lives."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from fdi.core.serialization import canonical_json_bytes
+
+    script = (
+        "import json,sys;"
+        "from fdi.core.fog_build import build_fog,build_note_index,build_statement_index;"
+        "ocr,basis=json.loads(sys.stdin.read());"
+        "si=build_statement_index(ocr,basis);ni=build_note_index(ocr,basis);"
+        "sys.stdout.write(json.dumps(build_fog(ocr,si,ni,doc_id='doc-1'),"
+        "sort_keys=True,separators=(',',':'),ensure_ascii=False))"
+    )
+    env = {**os.environ, "PYTHONHASHSEED": "1"}
+    out = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", script], input=json.dumps([_OCR, _BASIS]),
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert out.stdout.encode("utf-8") == canonical_json_bytes(_fog())
 
 
 def test_no_maps_to_edges_are_emitted_mapping_is_phase_3():
@@ -107,7 +152,7 @@ def test_no_governed_by_edges_are_emitted_policy_is_domain_2():
 def test_malformed_input_yields_a_well_formed_empty_fog():
     fog = build_fog({}, {}, {}, doc_id="d")
     assert fog["doc_id"] == "d"
-    assert fog["schema_version"] == 1
+    assert fog["schema_version"] == 2
 
 
 def test_the_stage_is_registered_with_the_right_deps():
@@ -115,8 +160,10 @@ def test_the_stage_is_registered_with_the_right_deps():
     from fdi.pipeline.registry import REGISTRY
 
     stage = REGISTRY.get("fog_objects")
-    assert stage.deps == ("statement_index", "note_index", "structure")
-    assert stage.version == 1
+    # `ocr` is DECLARED because the stage reads it: `run.py` builds input_hash
+    # from declared deps only, so an undeclared read sits outside the cache key.
+    assert stage.deps == ("ocr", "statement_index", "note_index", "structure")
+    assert stage.version == 2
 
 
 def test_the_dag_resolves_and_orders_fog_objects_after_its_indices():
@@ -127,3 +174,4 @@ def test_the_dag_resolves_and_orders_fog_objects_after_its_indices():
     order = DagResolver(REGISTRY.all()).topological_order()
     assert order.index("statement_index") < order.index("fog_objects")
     assert order.index("note_index") < order.index("fog_objects")
+    assert order.index("ocr") < order.index("fog_objects")

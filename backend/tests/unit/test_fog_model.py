@@ -25,6 +25,7 @@ _ITEM = LineItem(
     page=253,
     table_index=88,
     row_index=4,
+    source_row=6,
 )
 
 
@@ -34,8 +35,27 @@ def test_the_line_item_id_is_derived_from_its_parent_and_row():
     )
 
 
-def test_the_same_inputs_always_produce_the_same_id():
-    assert line_item_id("nt:standalone:13(b)", 7) == line_item_id("nt:standalone:13(b)", 7)
+def test_ids_from_different_parents_never_collide():
+    """A face row and a note row at the same ordinal are different nodes, as are
+    the same ordinal under two bases. Asserting an f-string equals itself
+    cannot fail; this can."""
+    ids = {
+        line_item_id("st:consolidated:profit_and_loss", 4),
+        line_item_id("st:standalone:profit_and_loss", 4),
+        line_item_id("nt:consolidated:13", 4),
+        line_item_id("nt:consolidated:13(b)", 4),
+        line_item_id("nt:consolidated:13", 40),
+    }
+    assert len(ids) == 5
+
+
+def test_the_valued_row_ordinal_and_the_raw_grid_row_are_both_carried():
+    """`row_index` is what the id hashes on and must not move when a header row
+    is reclassified; `source_row` is the only one that can address a cell,
+    because `core/provenance.py` indexes the RAW grid."""
+    body = line_item_body(_ITEM)
+    assert body["row_index"] == 4
+    assert body["source_row"] == 6
 
 
 def test_line_item_body_round_trips_every_field():
@@ -51,7 +71,7 @@ def test_line_item_body_round_trips_every_field():
 def test_a_null_amount_stays_null_not_zero():
     item = LineItem(
         id="x", parent="p", origin="note", label="Land", caption="", ref="",
-        current=None, prior=None, page=1, table_index=0, row_index=0,
+        current=None, prior=None, page=1, table_index=0, row_index=0, source_row=0,
     )
     body = line_item_body(item)
     assert body["current"] is None
@@ -86,7 +106,8 @@ def test_the_artifact_keys_everything_by_basis():
 def test_the_artifact_carries_its_doc_id_and_schema_version():
     artifact = build_fog_artifact({}, doc_id="doc-1", diagnostics={})
     assert artifact["doc_id"] == "doc-1"
-    assert artifact["schema_version"] == 1
+    # v2 added `source_row` to every LineItem body.
+    assert artifact["schema_version"] == 2
 
 
 def test_edges_are_sorted_so_the_artifact_hashes_stably():

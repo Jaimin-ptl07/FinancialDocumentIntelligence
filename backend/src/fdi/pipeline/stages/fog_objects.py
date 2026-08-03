@@ -1,9 +1,14 @@
 """FogObjectsStage: the deterministic Financial Object Graph.
 
-Zero LLM calls -- every value here is parsed, not read by a model. Deps
-`(statement_index, note_index, structure)`; `ocr` is reached through the
-indices' own dependency chain, and `structure` is depended on so a re-stitch
-invalidates the graph."""
+Zero LLM calls -- every value here is parsed, not read by a model.
+
+`ocr` IS A DECLARED DEP because this stage READS it. `pipeline/run.py` builds
+`input_hash` from the DECLARED deps only, so an undeclared read sits outside the
+cache key: an OCR re-run that corrects a cell value inside a note table changes
+neither `note_index` (it holds no values) nor `statement_index` (page,
+table_index, anchor score and footing verdict all unchanged), and the FOG would
+be served stale. `structure` is depended on so a re-stitch invalidates the
+graph."""
 
 from collections.abc import Mapping
 from typing import cast
@@ -15,8 +20,10 @@ from fdi.pipeline.stage import StageContext
 
 class FogObjectsStage:
     name = "fog_objects"
-    version = 1
-    deps: tuple[str, ...] = ("statement_index", "note_index", "structure")
+    # v2: LineItem bodies carry `source_row`, and a basis with several regions
+    # no longer mints duplicate ids. The body shape is part of the cache key.
+    version = 2
+    deps: tuple[str, ...] = ("ocr", "statement_index", "note_index", "structure")
 
     async def run(self, ctx: StageContext) -> object:
         ocr = cast(Mapping[str, object], await ctx.read("ocr"))

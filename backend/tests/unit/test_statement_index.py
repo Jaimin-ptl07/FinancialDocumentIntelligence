@@ -83,13 +83,59 @@ def test_a_document_with_no_basis_regions_still_indexes():
     assert index["statements"][0]["basis"] == "unknown"
 
 
+def test_a_tie_on_anchors_is_broken_by_a_face_that_actually_foots():
+    """A front-matter 'Financial Highlights' table can tie the real face on
+    anchor count and win purely by sitting on an earlier page. Footing is the
+    evidence the design names as 'what proves the right table was chosen'."""
+    ocr = {
+        "paragraphs": [],
+        "tables": [_pl_table(150, pbt="44"), _pl_table(160)],
+    }
+    stmt = build_statement_index(ocr, _BASIS)["statements"][0]
+    assert stmt["page"] == 160
+    assert stmt["footing"]["passed"] is True
+
+
+def test_an_unverifiable_face_is_not_demoted_none_is_not_a_failure():
+    """`describe_footing` returns passed=None for 'could not check'. Treating
+    that as a failure would discard a correct face that labels one line
+    unusually -- so page order still decides."""
+    cf = {
+        "bounding_regions": [{"page_number": 150}],
+        "spans": [{"offset": 1, "length": 10}],
+        "cells": [
+            _cell(0, 0, "Cash flows from operating activities"), _cell(0, 1, "10"),
+            _cell(1, 0, "Cash flows from investing"), _cell(1, 1, "20"),
+            _cell(2, 0, "Cash flows from financing"), _cell(2, 1, "30"),
+        ],
+    }
+    later = dict(cf, bounding_regions=[{"page_number": 160}])
+    index = build_statement_index({"paragraphs": [], "tables": [cf, later]}, _BASIS)
+    stmt = next(s for s in index["statements"] if s["statement"] == "cash_flow")
+    assert stmt["footing"]["passed"] is None
+    assert stmt["page"] == 150
+
+
 def test_output_is_deterministic_for_content_addressing():
+    """`==` cannot see set or dict ordering. The artifact is content-ADDRESSED,
+    so the property that matters is the canonical BYTES, plus an ordering fixed
+    externally rather than by whatever the implementation happened to emit."""
+    from fdi.core.serialization import canonical_json_bytes
+
     ocr = {"paragraphs": [], "tables": [_pl_table(150), _pl_table(100)]}
-    assert build_statement_index(ocr, _BASIS) == build_statement_index(ocr, _BASIS)
+    first = build_statement_index(ocr, _BASIS)
+    assert canonical_json_bytes(first) == canonical_json_bytes(
+        build_statement_index(ocr, _BASIS)
+    )
+    assert [s["id"] for s in first["statements"]] == [
+        "st:consolidated:profit_and_loss", "st:standalone:profit_and_loss",
+    ]
 
 
 def test_malformed_input_never_raises():
-    assert build_statement_index({}, {}) == {"schema_version": 1, "statements": []}
+    assert build_statement_index({}, {}) == {
+        "schema_version": 2, "statements": [], "discarded": [],
+    }
     assert build_statement_index({"tables": "nope"}, {})["statements"] == []
 
 
@@ -99,7 +145,7 @@ def test_the_stage_is_registered_with_the_right_deps():
 
     stage = REGISTRY.get("statement_index")
     assert stage.deps == ("ocr", "structure", "basis")
-    assert stage.version == 1
+    assert stage.version == 2
 
 
 def test_the_dag_still_resolves_with_the_new_stage():

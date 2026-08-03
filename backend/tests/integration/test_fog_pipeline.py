@@ -5,6 +5,7 @@ from collections.abc import Mapping
 
 import pytest
 
+from fdi.core.serialization import canonical_json_bytes
 from fdi.pipeline.stage import StageContext
 from fdi.pipeline.stages.fog_objects import FogObjectsStage
 from fdi.pipeline.stages.note_index import NoteIndexStage
@@ -76,7 +77,9 @@ async def test_the_three_stages_chain_into_a_populated_fog():
 
 async def test_a_second_run_produces_a_byte_identical_body():
     """Content-addressed caching depends on this. Any set iteration or dict
-    ordering leaking into the body breaks it silently."""
+    ordering leaking into the body breaks it silently -- and `==` cannot see
+    either, so this asserts the CANONICAL BYTES that are actually stored and
+    hashed, plus a node order fixed here rather than by the implementation."""
     artifacts: dict[str, object] = {"ocr": _OCR, "structure": {}, "basis": _BASIS}
 
     async def read(_doc_id: str, stage: str) -> object:
@@ -86,4 +89,18 @@ async def test_a_second_run_produces_a_byte_identical_body():
     artifacts["statement_index"] = await StatementIndexStage().run(ctx)
     artifacts["note_index"] = await NoteIndexStage().run(ctx)
 
-    assert await FogObjectsStage().run(ctx) == await FogObjectsStage().run(ctx)
+    first = await FogObjectsStage().run(ctx)
+    second = await FogObjectsStage().run(ctx)
+    assert canonical_json_bytes(first) == canonical_json_bytes(second)
+
+    assert isinstance(first, Mapping)
+    region = first["bases"]["consolidated"]
+    assert [i["id"] for i in region["line_items"]] == [
+        "li:st:consolidated:profit_and_loss:r0",
+        "li:st:consolidated:profit_and_loss:r1",
+        "li:st:consolidated:profit_and_loss:r2",
+        "li:st:consolidated:profit_and_loss:r3",
+        "li:nt:consolidated:10:r0",
+    ]
+    edges = [(e["type"], e["source"], e["target"]) for e in region["edges"]]
+    assert edges == sorted(edges)
