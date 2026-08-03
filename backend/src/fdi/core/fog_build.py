@@ -17,7 +17,9 @@ from fdi.core.statements import (
     STATEMENT_ANCHORS,
     describe_footing,
     find_statement_tables,
+    note_windows,
     parse_face_table,
+    tables_in_window,
 )
 
 # A document with no basis anchors is a real shape (see core/basis.py): it
@@ -79,3 +81,46 @@ def build_statement_index(
 
     statements.sort(key=lambda s: (str(s["basis"]), str(s["statement"])))
     return {"schema_version": 1, "statements": statements}
+
+
+def build_note_index(
+    ocr: Mapping[str, object], basis_artifact: Mapping[str, object]
+) -> dict[str, object]:
+    """ref -> offset window, title and the tables inside it, per basis.
+
+    Basis scoping is not optional: a report carrying both consolidated and
+    standalone statements has two "note 8", and an unscoped index resolves a
+    reference to whichever came first.
+
+    Offsets, not pages: TCS p301 carries note 13(a) at offset 897,095 and 13(b)
+    at 897,486, so a page-granular fetch hands both to whichever concept asks
+    first. Total: never raises."""
+    paragraphs_raw = ocr.get("paragraphs") if isinstance(ocr, Mapping) else None
+    paragraphs = paragraphs_raw if isinstance(paragraphs_raw, list) else []
+    tables = _tables_of(ocr)
+
+    bases: dict[str, object] = {}
+    for basis, lo, hi in _regions_of(basis_artifact):
+        windows = note_windows(paragraphs, lo, hi)
+        notes: list[dict[str, object]] = []
+        for ref in sorted(windows):
+            window = windows[ref]
+            # Identity, NOT equality -- see build_statement_index. Two notes can
+            # hold structurally identical tables, and `.index()` would bind both
+            # to the first.
+            in_window = tables_in_window(tables, window)
+            indices = [
+                i for i, t in enumerate(tables) if any(t is w for w in in_window)
+            ]
+            notes.append({
+                "id": f"nt:{basis}:{ref}",
+                "ref": ref,
+                "title": window.title,
+                "page": window.page,
+                "start_offset": window.start,
+                "end_offset": window.end,
+                "table_indices": sorted(indices),
+            })
+        bases[basis] = {"notes": notes, "page_lo": lo, "page_hi": hi}
+
+    return {"schema_version": 1, "bases": bases}
