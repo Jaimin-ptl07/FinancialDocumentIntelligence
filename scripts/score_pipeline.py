@@ -4,8 +4,15 @@ Reads BOTH output shapes -- today's extraction record (`extractions/{doc_id}/
 v2/{hash}.json`) and the Phase 2+ FOG artifact -- so the Phase 6 cutover
 comparison is apples to apples on one harness.
 
-    uv run --directory backend python ../scripts/score_pipeline.py \
-        --gt-dir docs/groundtruth --extraction path/to/record.json --issuer TCS
+    uv run --directory backend python ../scripts/score_pipeline.py \\
+        --gt-dir docs/groundtruth --extraction path/to/record.json \\
+        --issuer TCS --basis consolidated
+
+An extraction record is ONE statement set, so its basis must be stated (by
+`--basis` or by a `basis` key on the record) -- otherwise a consolidated run
+would be credited against the standalone ground truth too. `--fog` needs no
+flag: the FOG is keyed by basis and the region is selected per ground-truth
+file.
 
 Exit code is always 0: this is a measurement tool, not a gate. The number it
 prints is the gate.
@@ -103,13 +110,54 @@ def report(rows: Sequence[tuple[GroundTruth, Score]]) -> str:
     return "\n".join(lines)
 
 
+def extraction_basis(record: Mapping[str, object], override: str | None) -> str | None:
+    """Which basis an extraction record speaks for, or None if it cannot say.
+
+    An extraction record is ONE statement set. Scoring it against every ground
+    truth in the directory credits a consolidated run against the standalone
+    truth as well, and prints the result under a row labelled `standalone` --
+    a number that does not respect its own label. `--basis` wins; otherwise the
+    record must declare it. Unknown is unknown: guessing here would put a lie in
+    the baseline the whole project is gated on."""
+    if override:
+        return override
+    declared = record.get("basis") if isinstance(record, Mapping) else None
+    return declared if isinstance(declared, str) and declared else None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gt-dir", required=True, type=Path)
     parser.add_argument("--extraction", type=Path, help="an extraction record JSON")
     parser.add_argument("--fog", type=Path, help="a FOG artifact JSON")
     parser.add_argument("--issuer", help="score only this issuer")
+    parser.add_argument(
+        "--basis",
+        help="the basis --extraction was produced for; required unless the "
+             "record carries a `basis` key. --fog needs no flag: facts_from_fog "
+             "selects the region per ground-truth file.",
+    )
     args = parser.parse_args()
+
+    # Read and parse ONCE, outside the loop: the previous version re-read and
+    # re-parsed the same file for every ground-truth row it scored.
+    produced_facts: dict[str, object] = {}
+    record_basis: str | None = None
+    fog: Mapping[str, object] | None = None
+    if args.extraction is not None:
+        record = json.loads(args.extraction.read_text(encoding="utf-8"))
+        produced_facts = facts_from_extraction(record)
+        record_basis = extraction_basis(record, args.basis)
+        if record_basis is None:
+            print(
+                "REFUSING to score: --extraction carries no basis and --basis "
+                "was not given. Scoring one statement set against both bases' "
+                "ground truth produces rows whose numbers do not match their "
+                "labels."
+            )
+            return
+    elif args.fog is not None:
+        fog = json.loads(args.fog.read_text(encoding="utf-8"))
 
     rows: list[tuple[GroundTruth, Score]] = []
     for path in sorted(args.gt_dir.glob("*.json")):
@@ -119,14 +167,12 @@ def main() -> None:
             continue
         if args.issuer and gt.issuer != args.issuer:
             continue
-        if args.extraction is not None:
-            produced = facts_from_extraction(
-                json.loads(args.extraction.read_text(encoding="utf-8"))
-            )
-        elif args.fog is not None:
-            produced = facts_from_fog(
-                json.loads(args.fog.read_text(encoding="utf-8")), basis=gt.basis
-            )
+        if record_basis is not None:
+            if gt.basis != record_basis:
+                continue
+            produced: Mapping[str, object] = produced_facts
+        elif fog is not None:
+            produced = facts_from_fog(fog, basis=gt.basis)
         else:
             produced = {}
         rows.append((gt, score_document(gt, produced)))

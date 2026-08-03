@@ -6,7 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
-from score_pipeline import facts_from_extraction, facts_from_fog, report  # noqa: E402
+from score_pipeline import (  # noqa: E402
+    extraction_basis,
+    facts_from_extraction,
+    facts_from_fog,
+    report,
+)
 
 from fdi.core.scoring import GroundTruth, score_document  # noqa: E402
 
@@ -59,3 +64,22 @@ def test_report_renders_a_row_per_ground_truth_file():
 
 def test_report_of_nothing_is_a_message_not_a_crash():
     assert "no ground truth" in report([]).lower()
+
+
+def test_an_extraction_record_declares_which_basis_it_speaks_for():
+    """One extraction record is ONE statement set. Scoring it against every
+    ground-truth file credits a consolidated run against the standalone truth
+    too, and labels the row `standalone` -- a number that does not respect its
+    own label."""
+    assert extraction_basis({"basis": "consolidated"}, None) == "consolidated"
+
+
+def test_the_basis_flag_overrides_the_record():
+    assert extraction_basis({"basis": "consolidated"}, "standalone") == "standalone"
+
+
+def test_an_undeclared_basis_stays_unknown_rather_than_being_guessed():
+    """A guess here would put a lie into the baseline the project is gated on."""
+    assert extraction_basis({}, None) is None
+    assert extraction_basis({"basis": ""}, None) is None
+    assert extraction_basis({"basis": 7}, None) is None
