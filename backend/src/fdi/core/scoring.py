@@ -1,47 +1,26 @@
 """Score a produced fact map against hand-keyed ground truth.
 
 WHY `not_reported` IS HALF THE RECORD
+-------------------------------------
+The taxonomy is a FIXED list of ~402 tags, and ~180 of them cannot apply to a
+services company at all (25 extraordinary-item tags cannot apply to ANY Ind-AS
+filer). Scoring recall against the whole list therefore measures the taxonomy's
+breadth, not the extractor's reach. Ground truth must state, per statement, both
+what the issuer reports AND what it genuinely does not -- which is the only way
+to tell ABSENT from MISSED.
 
-
----
-
-# Plan header (global constraints)
-
-# Financial Object Graph — Phases 0–2 Implementation Plan
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** Build a measurable ground-truth harness, score today's pipeline against it to get an honest baseline, then build the complete **deterministic, zero-LLM** Financial Object Graph — every statement face row and every note row as a persistent, provenance-carrying `LineItem`.
-
-**Architecture:** Three new DAG stages (`statement_index`, `note_index`, `fog_objects`) that compose the already-measured pure cores in `fdi.core` rather than reimplementing them. The FOG is a per-document MinIO artifact keyed by basis. No LLM call is made anywhere in this plan — `fog_mapping` is Phase 3, a separate plan.
-
-**Tech Stack:** Python 3.12 · FastAPI · Celery · SQLAlchemy async · MinIO · pytest (`asyncio_mode = "auto"`) · `uv` for the runner · ruff + mypy as gates.
-
-**Spec:** [`docs/superpowers/specs/2026-08-03-financial-object-graph-design.md`](../specs/2026-08-03-financial-object-graph-design.md)
-
-## Global Constraints
-
-- **`fdi.core` is pure and total.** No I/O, no config, no clock, no RNG. **Never raises on any input shape** — malformed input degrades field-by-field (`page → None`, `basis → "unknown"`). A `fdi.core` module may not import `fdi.pipeline`, `fdi.platform`, `fdi.api` or `fdi.workers`.
-- **Layering (enforced by import-linter):** `core` ← `pipeline` → `platform`. `api` and `workers` are siblings; neither imports the other.
-- **Decision 10 — never raise.** Every I/O step in a pipeline module is individually guarded. One note's failure degrades *that note's* output, never the document's.
-- **Degradation is explicit in the graph.** A missing `REFERENCES` edge means "this issuer printed no note column", recorded as such. It never becomes a silent null. `absent ≠ missed` is a property of the data structure.
-- **Determinism is mandatory.** Stage artifacts are content-addressed; any set iteration, `id()`, or dict-ordering dependence in an artifact body breaks caching. Sort explicitly.
-- **The model never parses a number.** All amounts go through `fdi.core.numbers.parse_amount`.
-- **Basis:** consolidated is primary, standalone secondary. Both are emitted when present.
-- **Test runner:** `uv run --directory backend pytest -m "not integration and not e2e" -q`
-- **Gates before every commit:** `uv run --directory backend ruff check .` and `uv run --directory backend mypy src` must both be clean.
-- **CRLF warning:** several files in this repo are CRLF. If the `Edit` tool desyncs mid-edit, apply replacements via a Python script using `open(..., newline="")`.
-
----
+Pure (`fdi.core` law): no I/O, deterministic, total.
 """
 
+from __future__ import annotations
+
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 
 @dataclass(frozen=True)
 class GroundTruth:
-    """Hand-keyed ground truth for a financial statement."""
+    """One issuer's hand-read truth for ONE statement on ONE basis."""
 
     issuer: str
     fiscal_year: str
@@ -51,62 +30,13 @@ class GroundTruth:
     not_reported: tuple[str, ...]
 
 
-def parse_groundtruth(body: Mapping[str, object]) -> GroundTruth | None:
-    """Parse and validate a ground truth record.
-
-    Returns None if the record is malformed or if values and not_reported
-    have overlapping tags.
-    """
-    try:
-        issuer = body.get("issuer")
-        fiscal_year = body.get("fiscal_year")
-        basis = body.get("basis")
-        statement = body.get("statement")
-        values_raw = body.get("values")
-        not_reported_raw = body.get("not_reported")
-
-        if not isinstance(issuer, str):
-            return None
-        if not isinstance(fiscal_year, str):
-            return None
-        if not isinstance(basis, str):
-            return None
-        if not isinstance(statement, str):
-            return None
-        if not isinstance(values_raw, Mapping):
-            return None
-        if not isinstance(not_reported_raw, (list, tuple)):
-            return None
-
-        values: dict[str, float] = {}
-        for k, v in values_raw.items():
-            if not isinstance(k, str) or not isinstance(v, (int, float)):
-                return None
-            values[k] = float(v)
-
-        not_reported = tuple(not_reported_raw)
-
-        # Validate disjointness
-        values_set = set(values.keys())
-        not_reported_set = set(not_reported)
-        if values_set & not_reported_set:
-            return None
-
-        return GroundTruth(
-            issuer=issuer,
-            fiscal_year=fiscal_year,
-            basis=basis,
-            statement=statement,
-            values=values,
-            not_reported=not_reported,
-        )
-    except (KeyError, TypeError, AttributeError, ValueError):
-        return None
-
-
 @dataclass(frozen=True)
 class Score:
-    """Scoring result for a produced fact map."""
+    """`reported` is the denominator of recall; `committed` of precision.
+
+    `absent_correct` is reported but never credited to recall: staying silent
+    on a tag the issuer does not disclose is correct behaviour, not extraction.
+    Crediting it would let a system that extracts nothing score well."""
 
     reported: int
     correct: int
@@ -118,114 +48,103 @@ class Score:
 
     @property
     def recall(self) -> float:
-        """Recall: correct / reported (0.0 if no tags reported)."""
-        if self.reported == 0:
-            return 0.0
-        return self.correct / self.reported
+        return self.correct / self.reported if self.reported else 0.0
 
     @property
     def precision(self) -> float:
-        """Precision: correct / committed (0.0 if no tags committed)."""
-        if self.committed == 0:
-            return 0.0
-        return self.correct / self.committed
+        return self.correct / self.committed if self.committed else 0.0
+
+
+def parse_groundtruth(body: Mapping[str, object]) -> GroundTruth | None:
+    """A ground-truth file body as a `GroundTruth`, or None if malformed.
+
+    Returns None -- never raises -- so a typo in one file skips that file
+    instead of taking the whole scoring run down. The disjointness check is a
+    hard reject: a tag that is both valued and `not_reported` makes the
+    absent-vs-missed split undefined, and silently preferring one list would
+    make the resulting number a lie.
+
+    A single unparseable VALUE is skipped rather than rejecting the file: one
+    stray entry must not silently shrink the denominator to zero and report
+    perfect recall."""
+    if not isinstance(body, Mapping):
+        return None
+    issuer = body.get("issuer")
+    fiscal_year = body.get("fiscal_year")
+    basis = body.get("basis")
+    statement = body.get("statement")
+    raw_values = body.get("values")
+    raw_absent = body.get("not_reported", [])
+    if not all(isinstance(x, str) and x for x in (issuer, fiscal_year, basis, statement)):
+        return None
+    if not isinstance(raw_values, Mapping) or not isinstance(raw_absent, list):
+        return None
+
+    values: dict[str, float] = {}
+    for tag, value in raw_values.items():
+        if not isinstance(tag, str) or not tag:
+            continue
+        # `bool` is an `int` subclass; True would otherwise score as 1.0.
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            continue
+        values[tag] = float(value)
+
+    # Sorted + de-duplicated: this tuple reaches artifact bodies, and any
+    # ordering wobble there breaks content-addressed caching.
+    absent = tuple(sorted({t for t in raw_absent if isinstance(t, str) and t}))
+    if set(absent) & set(values):
+        return None
+
+    return GroundTruth(
+        issuer=str(issuer), fiscal_year=str(fiscal_year), basis=str(basis),
+        statement=str(statement), values=values, not_reported=absent,
+    )
+
+
+def _current(value: object) -> float | None:
+    """The current-year number out of a scalar or a {current, prior} record."""
+    if isinstance(value, Mapping):
+        value = value.get("current")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def score_document(
-    gt: GroundTruth,
-    produced: Mapping[str, object],
-    *,
-    tolerance: float = 0.01,
+    gt: GroundTruth, produced: Mapping[str, object], *, tolerance: float = 0.01
 ) -> Score:
-    """Score a produced fact map against ground truth.
+    """Score `produced` (tag -> scalar or {current, prior}) against `gt`.
 
-    Args:
-        gt: The ground truth record.
-        produced: The extracted values (tag -> value mapping).
-        tolerance: Float comparison tolerance (default 0.01).
+    Only tags IN SCOPE for this statement are judged: a balance-sheet tag
+    appearing in a P&L score is ignored rather than counted as a false
+    positive, because this record makes no claim about it.
 
-    Returns:
-        A Score object with detailed breakdown.
+    Tolerance is absolute and tight (0.01) by design -- ground truth is keyed
+    AS PRINTED, so anything beyond float noise is a real disagreement, not
+    rounding. Total: never raises."""
+    correct = wrong = missed = false_positive = absent_correct = committed = 0
 
-    Scoring rules:
-    - Values in gt.values that match (within tolerance) are correct.
-    - Values in gt.values that don't match are wrong.
-    - Tags in gt.values not produced are missed.
-    - Tags in gt.not_reported that are produced are false positives.
-    - Tags in gt.not_reported correctly not produced are absent_correct.
-    - None values and missing dict["current"] keys count as not produced.
-    - Tags outside GT are ignored (not counted as false positives).
-    """
-    reported = len(gt.values)
-    correct = 0
-    wrong = 0
-    missed = 0
-    false_positive = 0
-    absent_correct = 0
-    committed = 0
-
-    # Score tags in gt.values
-    for tag, expected_value in gt.values.items():
-        if tag in produced:
-            produced_value = produced[tag]
-
-            # Handle dual-period values (dict with current/prior)
-            if isinstance(produced_value, Mapping):
-                if "current" in produced_value:
-                    produced_value = produced_value["current"]
-                else:
-                    # Dict doesn't have "current" key, treat as missed
-                    missed += 1
-                    continue
-
-            # At this point, produced_value is either a scalar or None
-            if produced_value is None:
-                missed += 1
-            elif isinstance(produced_value, (int, float)):
-                if abs(produced_value - expected_value) <= tolerance:
-                    correct += 1
-                else:
-                    wrong += 1
-                committed += 1
-            else:
-                # Non-numeric value, count as wrong
-                wrong += 1
-                committed += 1
-        else:
-            # Tag not produced
+    for tag, expected in gt.values.items():
+        actual = _current(produced.get(tag))
+        if actual is None:
             missed += 1
-
-    # Score tags in not_reported
-    for tag in gt.not_reported:
-        if tag in produced:
-            produced_value = produced[tag]
-
-            # Handle dual-period values
-            if isinstance(produced_value, Mapping):
-                if "current" in produced_value:
-                    produced_value = produced_value["current"]
-                else:
-                    # Dict doesn't have "current" key, treat as correctly absent
-                    absent_correct += 1
-                    continue
-
-            # At this point, produced_value is either a scalar or None
-            if produced_value is None:
-                absent_correct += 1
-            else:
-                # Tag is in not_reported but was produced → false positive
-                false_positive += 1
-                committed += 1
+            continue
+        committed += 1
+        if abs(actual - expected) <= tolerance:
+            correct += 1
         else:
-            # Tag correctly not produced
-            absent_correct += 1
+            wrong += 1
 
+    for tag in gt.not_reported:
+        if _current(produced.get(tag)) is None:
+            absent_correct += 1
+        else:
+            committed += 1
+            false_positive += 1
+
+    # Tags in neither list are deliberately never visited -- see the docstring.
     return Score(
-        reported=reported,
-        correct=correct,
-        wrong=wrong,
-        missed=missed,
-        false_positive=false_positive,
-        absent_correct=absent_correct,
+        reported=len(gt.values), correct=correct, wrong=wrong, missed=missed,
+        false_positive=false_positive, absent_correct=absent_correct,
         committed=committed,
     )

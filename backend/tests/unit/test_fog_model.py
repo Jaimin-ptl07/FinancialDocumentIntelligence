@@ -98,7 +98,8 @@ def test_edges_are_sorted_so_the_artifact_hashes_stably():
     artifact = build_fog_artifact(
         {"consolidated": ([], [], [], edges)}, doc_id="d", diagnostics={}
     )
-    got = [(e["type"], e["source"], e["target"]) for e in artifact["bases"]["consolidated"]["edges"]]
+    edges_out = artifact["bases"]["consolidated"]["edges"]
+    got = [(e["type"], e["source"], e["target"]) for e in edges_out]
     assert got == sorted(got)
 
 

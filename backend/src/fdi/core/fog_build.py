@@ -10,7 +10,7 @@ Pure (`fdi.core` law): no I/O, deterministic, total.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from fdi.core.basis import basis_regions
 from fdi.core.fog import Edge, LineItem, build_fog_artifact, line_item_id
