@@ -102,9 +102,15 @@ Policy      section_id · page · span    GOVERNED_BY      LineItem→Policy
 `Policy` / `GOVERNED_BY` are named here so the schema version that adds them is
 additive rather than breaking. **Domain 1 emits neither.**
 
-Every node carries `page · table_index · row_index · bounding_regions ·
-span_offset`. This is the audit trail, and it is already produced by the
-`provenance` stage — it costs nothing new.
+Every node carries its **address**: `page · table_index · row_index ·
+span_offset`. That address resolves to exactly one table cell, so geometry
+(`bounding_regions`) is derived **read-side** through the existing
+`core/provenance.py` helpers rather than copied onto every node — which is how
+`resolve_field_regions` already works today, and keeps the artifact from
+duplicating polygon data that the `structure` grid already holds.
+
+The audit trail is therefore complete and cell-precise, without the FOG storing
+a second copy of the geometry that would then have to be kept in sync.
 
 ### 3.3 Two consequences worth stating explicitly
 
