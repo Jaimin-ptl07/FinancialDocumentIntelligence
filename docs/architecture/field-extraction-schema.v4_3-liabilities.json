@@ -1,0 +1,243 @@
+{
+  "version": "4.3.0-liabilities",
+  "authored": "by hand from the Q3VENI taxonomy Liabilities sheet, not generated",
+  "reporting_unit": "as reported",
+  "design_rules": {
+    "see": "field-extraction-schema.v4_3-pl.json carries the full rule text; the same seven rules apply here.",
+    "current_noncurrent_is_a_split_not_a_hierarchy": "Almost every liability here is reported twice -- a current and a non-current portion -- and the taxonomy tags each separately (STxxx / LTxxx). The concept is the PARENT; the two portions are its children and sum to it. This is why `TL` composes STLRTL + LTRTL rather than being a leaf.",
+    "the_sheet_subtotal_is_not_the_container": "TOTBOR is explicitly 'Total Borrowings (1.1 to 1.13)', so it EXCLUDES line of credit, other borrowings, mobilisation advances and preference shares at 1.14-1.19. A `BOR` container holds all of 1.x; TOTBOR is a waterfall over the range the sheet actually names. Collapsing the two would silently widen the issuer's own subtotal."
+  },
+  "modules": [
+    {
+      "key": "module_liabilities",
+      "name": "Liabilities",
+      "statement": "liabilities",
+      "retrieval_units": [
+        {
+          "unit_id": "LI",
+          "statement_type": "liabilities",
+          "basis_preference": "standalone",
+          "fields": [
+
+            { "tag": "BOR", "field_name": "Borrowings", "sr_no": "1",
+              "origin": "derived",
+              "note_aliases": ["borrowings", "financial liabilities borrowings"],
+              "definition": "The whole 1.x block. TOTBOR below is the sheet's own subtotal and covers only 1.1 to 1.13.",
+              "derivation": {"method":"sum","inputs":["TL","WCL","WCL2","STBP","LROD","ICBOR","BORFIA","BCP","DPL","BSD","BLNARPT","BND","BOTLNA","LOC","OTBR","STMA","LTMA","STLPS","LTPS"]},
+              "fields": [
+                {"tag":"TL","field_name":"Term loans","sr_no":"1.1","origin":"derived","note_aliases":["term loans"],
+                 "derivation":{"method":"sum","inputs":["STLRTL","LTRTL"]},
+                 "fields":[{"tag":"STLRTL","field_name":"Term loans - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTRTL","field_name":"Term loans - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"WCL","field_name":"Working capital loans","sr_no":"1.2","origin":"derived",
+                 "note_aliases":["working capital loans","cash credit","short term loan","packing credit","invoice financing"],
+                 "definition":"Includes short-term loans, cash credit, trade credit, export packing limit, packing credit, invoice financing, letters of credit and merchant cash advances.",
+                 "derivation":{"method":"sum","inputs":["WCLI","WCLB","WCLO"]},
+                 "fields":[{"tag":"WCLI","field_name":"Working capital loans - from ICICI Bank","origin":"extracted","data_type":"decimal"},
+                           {"tag":"WCLB","field_name":"Working capital loans - from other banks","origin":"extracted","data_type":"decimal"},
+                           {"tag":"WCLO","field_name":"Working capital loans - from others","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"WCL2","taxonomy_tag":"WCL","field_name":"Buyers Credit","sr_no":"1.3","origin":"derived",
+                 "note_aliases":["buyers credit","buyer's credit"],
+                 "definition":"The sheet reuses the code WCL for this concept as well as for working-capital loans. Two structurally different concepts cannot share one tag -- every tag-keyed structure downstream keeps the first and discards the second -- so this one is WCL2 and the customer's original code is kept as taxonomy_tag.",
+                 "derivation":{"method":"sum","inputs":["STBYCRD","LTBYCRD"]},
+                 "fields":[{"tag":"STBYCRD","field_name":"Buyers Credit - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTBYCRD","field_name":"Buyers Credit - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"STBP","field_name":"Bill discounting and bill purchasing","sr_no":"1.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"LROD","field_name":"Loans repayable on demand","sr_no":"1.5","origin":"extracted","data_type":"decimal","note_aliases":["loans repayable on demand"]},
+                {"tag":"ICBOR","field_name":"Intercorporate borrowings","sr_no":"1.6","origin":"extracted","data_type":"decimal"},
+
+                {"tag":"BORFIA","field_name":"Borrowings from foreign institutions","sr_no":"1.7","origin":"derived",
+                 "note_aliases":["external commercial borrowings","foreign currency loan"],
+                 "derivation":{"method":"sum","inputs":["STLFCL","LTFCL"]},
+                 "fields":[{"tag":"STLFCL","field_name":"External commercial borrowings - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTFCL","field_name":"External commercial borrowings - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"BCP","field_name":"Commercial papers","sr_no":"1.8","origin":"extracted","data_type":"decimal","note_aliases":["commercial paper"]},
+                {"tag":"DPL","field_name":"Deferred payment liabilities","sr_no":"1.9","origin":"extracted","data_type":"decimal"},
+
+                {"tag":"BSD","field_name":"Deposits","sr_no":"1.10","origin":"derived","note_aliases":["public deposits","fixed deposits"],
+                 "derivation":{"method":"sum","inputs":["STTD","LTTD"]},
+                 "fields":[{"tag":"STTD","field_name":"Deposits - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTTD","field_name":"Deposits - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"BLNARPT","field_name":"Loans and advances from related parties","sr_no":"1.11","origin":"derived",
+                 "note_aliases":["loans from related parties"],
+                 "derivation":{"method":"sum","inputs":["STBLNARPT","LTBLNARPT"]},
+                 "fields":[{"tag":"STBLNARPT","field_name":"Loans and advances from related parties - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTBLNARPT","field_name":"Loans and advances from related parties - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"BND","field_name":"Bonds and debentures","sr_no":"1.12","origin":"derived",
+                 "note_aliases":["debentures","bonds","non-convertible debentures"],
+                 "definition":"Senior notes are part of debentures.",
+                 "derivation":{"method":"sum","inputs":["STBOND","LTBOND","STLD","LTDEB"]},
+                 "fields":[{"tag":"STBOND","field_name":"Bonds - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTBOND","field_name":"Bonds - non-current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"STLD","field_name":"Debentures - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTDEB","field_name":"Debentures - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"BOTLNA","field_name":"Other loans and advances","sr_no":"1.13","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STBOTLNA","LTBOTLNA"]},
+                 "fields":[{"tag":"STBOTLNA","field_name":"Other loans and advances - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTBOTLNA","field_name":"Other loans and advances - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"LOC","field_name":"Line of credit","sr_no":"1.14","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["LOCI","LOCB","LOCO"]},
+                 "fields":[{"tag":"LOCI","field_name":"Line of credit - from ICICI Bank","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LOCB","field_name":"Line of credit - from other banks","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LOCO","field_name":"Line of credit - from others","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"OTBR","field_name":"Other borrowings","sr_no":"1.15","origin":"derived",
+                 "note_aliases":["other borrowings"],
+                 "open_question":"The sheet lists SIX children: three by lender (ICICI / other banks / others) AND three by maturity (current due>1y, current due<1y, non-current). Those are two different CUTS of the same money, so summing all six double-counts. Kept as the sheet states it, flagged rather than silently halved.",
+                 "derivation":{"method":"sum","inputs":["OTBRI","OTBRB","OTBRO","STOTBRO","STLTBRO","LTOTBRO"]},
+                 "fields":[{"tag":"OTBRI","field_name":"Other borrowings - from ICICI Bank","origin":"extracted","data_type":"decimal"},
+                           {"tag":"OTBRB","field_name":"Other borrowings - from other banks","origin":"extracted","data_type":"decimal"},
+                           {"tag":"OTBRO","field_name":"Other borrowings - from others","origin":"extracted","data_type":"decimal"},
+                           {"tag":"STOTBRO","field_name":"Other borrowings - current, due after more than one year","origin":"extracted","data_type":"decimal"},
+                           {"tag":"STLTBRO","field_name":"Other borrowings - current, due within one year","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTOTBRO","field_name":"Other borrowings - non-current","origin":"extracted","data_type":"decimal"}]},
+
+                {"tag":"STMA","field_name":"Mobilisation advance - current portion","sr_no":"1.16","origin":"extracted","data_type":"decimal"},
+                {"tag":"LTMA","field_name":"Mobilisation advance - non-current portion","sr_no":"1.17","origin":"extracted","data_type":"decimal"},
+                {"tag":"STLPS","field_name":"Instalments of liabilities due within one year","sr_no":"1.18","origin":"extracted","data_type":"decimal","note_aliases":["current maturities of long-term debt"]},
+                {"tag":"LTPS","field_name":"Preference shares redeemable after one year","sr_no":"1.19","origin":"extracted","data_type":"decimal",
+                 "definition":"Redeemable preference shares are a LIABILITY under Ind AS, not equity."}
+              ]},
+
+            { "tag": "TOTBOR", "field_name": "Total Borrowings", "sr_no": "1.20",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["total borrowings", "borrowings"],
+              "definition": "The sheet's own subtotal, stated as '1.1 to 1.13' -- narrower than BOR, which spans 1.1 to 1.19. Peers, so a waterfall.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"TL","weight":1},{"tag":"WCL","weight":1},{"tag":"WCL2","weight":1},
+                {"tag":"STBP","weight":1},{"tag":"LROD","weight":1},{"tag":"ICBOR","weight":1},
+                {"tag":"BORFIA","weight":1},{"tag":"BCP","weight":1},{"tag":"DPL","weight":1},
+                {"tag":"BSD","weight":1},{"tag":"BLNARPT","weight":1},{"tag":"BND","weight":1},
+                {"tag":"BOTLNA","weight":1}]}},
+
+            {"tag":"NETDTL","field_name":"Deferred tax liabilities (net)","sr_no":"2","origin":"extracted","data_type":"decimal","note_aliases":["deferred tax liabilities","deferred tax liabilities net"]},
+
+            { "tag": "LL", "field_name": "Lease liabilities", "sr_no": "3", "origin": "derived",
+              "note_aliases": ["lease liabilities"],
+              "derivation": {"method":"sum","inputs":["LTOLR","STOLR","STLL"]},
+              "fields": [
+                {"tag":"LTOLR","field_name":"Lease liabilities - non-current","origin":"extracted","data_type":"decimal"},
+                {"tag":"STOLR","field_name":"Outstanding lease rentals","origin":"extracted","data_type":"decimal"},
+                {"tag":"STLL","field_name":"Lease liabilities - current","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TRP", "field_name": "Trade payables", "sr_no": "4", "origin": "derived", "reported": true,
+              "note_aliases": ["trade payables", "sundry creditors"],
+              "derivation": {"method":"sum","inputs":["STTRP","LTTRP"]},
+              "fields": [
+                {"tag":"STTRP","field_name":"Trade payables - current","origin":"extracted","data_type":"decimal",
+                 "definition":"Includes dues to micro and small enterprises."},
+                {"tag":"LTTRP","field_name":"Trade payables - non-current","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TOTOL", "field_name": "Total Other Liabilities", "sr_no": "5.11",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["other financial liabilities", "other current liabilities"],
+              "definition": "Sheet: 'Total of 5.1 to 5.10'.",
+              "derivation": {"method":"sum","inputs":["SDD","IAD","IRA","UPD","SAM","UMD","EP","RMP","PSA","OTL"]},
+              "fields": [
+                {"tag":"SDD","field_name":"Security deposits and deposits","sr_no":"5.1","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STSDD","LTSDD"]},
+                 "fields":[{"tag":"STSDD","field_name":"Security deposits and deposits - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTSDD","field_name":"Security deposits and deposits - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"IAD","field_name":"Interest accrued","sr_no":"5.2","origin":"derived","note_aliases":["interest accrued"],
+                 "derivation":{"method":"sum","inputs":["STOIA","LTIAD"]},
+                 "fields":[{"tag":"STOIA","field_name":"Interest accrued - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTIAD","field_name":"Interest accrued - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"IRA","field_name":"Income received in advance","sr_no":"5.3","origin":"derived","note_aliases":["income received in advance","contract liabilities"],
+                 "derivation":{"method":"sum","inputs":["STAP","LTIRA"]},
+                 "fields":[{"tag":"STAP","field_name":"Income received in advance - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTIRA","field_name":"Income received in advance - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"UPD","field_name":"Unpaid dividends","sr_no":"5.4","origin":"derived",
+                 "definition":"Does NOT include unclaimed dividend, which sits in other liabilities.",
+                 "derivation":{"method":"sum","inputs":["STDP","LTUPD"]},
+                 "fields":[{"tag":"STDP","field_name":"Unpaid dividends - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTUPD","field_name":"Unpaid dividends - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"SAM","field_name":"Share application money","sr_no":"5.5","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STSAM","LTSAM"]},
+                 "fields":[{"tag":"STSAM","field_name":"Share application money - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTSAM","field_name":"Share application money - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"UMD","field_name":"Unpaid matured deposits","sr_no":"5.6","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STUMD","LTUMD"]},
+                 "fields":[{"tag":"STUMD","field_name":"Unpaid matured deposits - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTUMD","field_name":"Unpaid matured deposits - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"EP","field_name":"Expenses payable","sr_no":"5.7","origin":"derived","note_aliases":["expenses payable","accrued expenses"],
+                 "derivation":{"method":"sum","inputs":["STOEP","STEPOTL","LTEP"]},
+                 "fields":[{"tag":"STOEP","field_name":"Expenses payable - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"STEPOTL","field_name":"All remaining payables","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTEP","field_name":"Expenses payable - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"RMP","field_name":"Retention money payable","sr_no":"5.8","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STRMP","LTRMP"]},
+                 "fields":[{"tag":"STRMP","field_name":"Retention money payable - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTRMP","field_name":"Retention money payable - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"PSA","field_name":"Payable to statutory authorities","sr_no":"5.9","origin":"derived",
+                 "note_aliases":["statutory dues"],
+                 "derivation":{"method":"sum","inputs":["STPSA","LTPSA","STOMTM"]},
+                 "fields":[{"tag":"STPSA","field_name":"Payable to statutory authorities - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTPSA","field_name":"Payable to statutory authorities - non-current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"STOMTM","field_name":"MTM forex loss on derivative contracts - current","origin":"extracted","data_type":"decimal",
+                            "open_question":"A derivative loss is not a statutory due. The sheet rolls it up here; kept as stated but it is very likely a taxonomy misplacement."}]},
+                {"tag":"OTL","field_name":"Other liabilities","sr_no":"5.10","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STOTL","LTOTL"]},
+                 "fields":[{"tag":"STOTL","field_name":"Other liabilities - current","origin":"extracted","data_type":"decimal",
+                            "definition":"Includes unclaimed dividend."},
+                           {"tag":"LTOTL","field_name":"Other liabilities - non-current","origin":"extracted","data_type":"decimal"}]}
+              ]},
+
+            { "tag": "TOTPRV", "field_name": "Total Provisions", "sr_no": "6.5",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["provisions"],
+              "definition": "Sheet: 'Total of 6.1 to 6.4'.",
+              "derivation": {"method":"sum","inputs":["PRVEB","PRVWAR","PRVTAX","OTPRV"]},
+              "fields": [
+                {"tag":"PRVEB","field_name":"Provisions for employee benefits","sr_no":"6.1","origin":"derived",
+                 "note_aliases":["provision for employee benefits","gratuity","leave encashment"],
+                 "derivation":{"method":"sum","inputs":["STOEE","LTPRVEB"]},
+                 "fields":[{"tag":"STOEE","field_name":"Provisions for employee benefits - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTPRVEB","field_name":"Provisions for employee benefits - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"PRVWAR","field_name":"Provisions for warranties","sr_no":"6.2","origin":"derived","note_aliases":["provision for warranty"],
+                 "derivation":{"method":"sum","inputs":["STPRVWAR","LTPRVWAR"]},
+                 "fields":[{"tag":"STPRVWAR","field_name":"Provisions for warranties - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTPRVWAR","field_name":"Provisions for warranties - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"PRVTAX","field_name":"Provisions for taxation","sr_no":"6.3","origin":"derived","note_aliases":["provision for tax"],
+                 "derivation":{"method":"sum","inputs":["STPRVTAX","LTPRVTAX"]},
+                 "fields":[{"tag":"STPRVTAX","field_name":"Provisions for taxation - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTPRVTAX","field_name":"Provisions for taxation - non-current","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"OTPRV","field_name":"Other provisions","sr_no":"6.4","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["STOTPRV","LTOTPRV"]},
+                 "fields":[{"tag":"STOTPRV","field_name":"Other provisions - current","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LTOTPRV","field_name":"Other provisions - non-current","origin":"extracted","data_type":"decimal"}]}
+              ]},
+
+            {"tag":"TAXL","field_name":"Tax liability","sr_no":"7","origin":"extracted","data_type":"decimal","note_aliases":["current tax liabilities","income tax liabilities"]},
+            {"tag":"LAHS","field_name":"Liabilities for assets held for sale","sr_no":"8","origin":"extracted","data_type":"decimal","note_aliases":["liabilities associated with assets held for sale"]},
+
+            { "tag": "TOTL", "field_name": "Total Liabilities", "sr_no": "9",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["total liabilities"],
+              "definition": "Sheet: 'Total of 1 to 8'. Uses TOTBOR -- the issuer's own borrowings subtotal -- so a filer that reports it keeps its own number.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"TOTBOR","weight":1},{"tag":"NETDTL","weight":1},{"tag":"LL","weight":1},
+                {"tag":"TRP","weight":1},{"tag":"TOTOL","weight":1},{"tag":"TOTPRV","weight":1},
+                {"tag":"TAXL","weight":1},{"tag":"LAHS","weight":1}]}},
+
+            {"tag":"TOTNCLR","field_name":"Total Non-Current Liabilities (as reported)","sr_no":"10","origin":"extracted","data_type":"decimal",
+             "note_aliases":["total non-current liabilities"],
+             "definition":"The issuer's printed subtotal. No composition is claimed for it: the taxonomy splits every concept into ST/LT portions but never groups the LT halves into a non-current total, so deriving one would be inventing a formula the sheet does not state."},
+
+            {"tag":"TOTCLR","field_name":"Total Current Liabilities (as reported)","sr_no":"11","origin":"extracted","data_type":"decimal",
+             "note_aliases":["total current liabilities"]}
+          ]
+        }
+      ]
+    }
+  ]
+}

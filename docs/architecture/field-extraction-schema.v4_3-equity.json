@@ -1,0 +1,137 @@
+{
+  "version": "4.3.0-equity",
+  "authored": "by hand from the Q3VENI taxonomy Equity sheet, not generated",
+  "reporting_unit": "as reported",
+  "design_rules": {
+    "see": "field-extraction-schema.v4_3-pl.json carries the full rule text; the same seven rules apply here.",
+    "retained_earnings_is_a_movement_not_a_balance": "Block 4 is a RECONCILIATION of retained earnings across the year -- opening balance, profit, OCI, transfers in, then appropriations out. Its rows are movements; only 4.7 and 5 are balances. Summing the block as if it were a list of components would be meaningless.",
+    "total_equity_must_include_share_capital": "TOTEQNR was measured wrong on two independent issuers with the shortfall equal to share capital EXACTLY (TCS 362, RITES 10,500). The sheet writes it as 'total of 1 ...' and the generated schema left it extracted-only. It is composed here with TOTEQ explicitly first."
+  },
+  "modules": [
+    {
+      "key": "module_equity",
+      "name": "Equity",
+      "statement": "equity",
+      "retrieval_units": [
+        {
+          "unit_id": "EQ",
+          "statement_type": "equity",
+          "basis_preference": "standalone",
+          "fields": [
+
+            { "tag": "TOTEQ", "field_name": "Total Share Capital", "sr_no": "1",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["share capital", "equity share capital", "issued subscribed and paid up"],
+              "definition": "Sheet: 'Total of 1.1 to 1.8'.",
+              "derivation": {"method":"sum","inputs":["EQWVR","EQWOVR","PQCWVR","PQWOVR","CCPS","OCPS","CCDEB","OTEQ"]},
+              "fields": [
+                {"tag":"EQWVR","field_name":"Equity share capital with voting rights","sr_no":"1.1","origin":"extracted","data_type":"decimal","note_aliases":["equity share capital","equity shares"]},
+                {"tag":"EQWOVR","field_name":"Equity share capital without voting rights","sr_no":"1.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"PQCWVR","field_name":"Preference share capital with voting rights","sr_no":"1.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"PQWOVR","field_name":"Preference share capital without voting rights","sr_no":"1.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"CCPS","field_name":"Compulsorily convertible preference shares","sr_no":"1.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"OCPS","field_name":"Optionally convertible preference shares","sr_no":"1.6","origin":"extracted","data_type":"decimal"},
+                {"tag":"CCDEB","field_name":"Compulsorily convertible debentures","sr_no":"1.7","origin":"extracted","data_type":"decimal",
+                 "definition":"Compulsorily convertible instruments sit in EQUITY; optionally convertible and redeemable ones are liabilities."},
+                {"tag":"OTEQ","field_name":"Other share capital","sr_no":"1.8","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TOTOTEQ", "field_name": "Total Other Equity", "sr_no": "2",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["other equity"],
+              "definition": "Sheet: 'Total of 2.1 to 2.9'.",
+              "derivation": {"method":"sum","inputs":["SAMPA","EQCFI","DIOCI","EQIOCI","CFH","EXGDIF","OTOCI","MRSHW","OTMEQ"]},
+              "fields": [
+                {"tag":"SAMPA","field_name":"Share application money pending allotment","sr_no":"2.1","origin":"extracted","data_type":"decimal","note_aliases":["share application money pending allotment"]},
+                {"tag":"EQCFI","field_name":"Equity component of compound financial instruments","sr_no":"2.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"DIOCI","field_name":"Debt instruments through other comprehensive income","sr_no":"2.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"EQIOCI","field_name":"Equity instruments through other comprehensive income","sr_no":"2.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"CFH","field_name":"Effective portion of cash flow hedges","sr_no":"2.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"EXGDIF","field_name":"Exchange differences on translating foreign operations","sr_no":"2.6","origin":"extracted","data_type":"decimal"},
+                {"tag":"OTOCI","field_name":"Other items of other comprehensive income","sr_no":"2.7","origin":"extracted","data_type":"decimal"},
+                {"tag":"MRSHW","field_name":"Money received against share warrants","sr_no":"2.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"OTMEQ","field_name":"Other miscellaneous equity","sr_no":"2.9","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "RESV", "field_name": "Reserves", "sr_no": "3",
+              "origin": "derived",
+              "note_aliases": ["reserves and surplus", "reserves"],
+              "definition": "The whole 3.x block. TOTRESV below is the sheet's own subtotal and covers only 3.1 to 3.8 -- securities premium, debenture redemption, statutory and other reserves sit OUTSIDE it.",
+              "derivation": {"method":"sum","inputs":["GR","CR","CRR","FCTR","CFHR","MINT","EQQ","RR","SPA","DRR","STR","OTR","SHRJV"]},
+              "fields": [
+                {"tag":"GR","field_name":"General reserve","sr_no":"3.1","origin":"extracted","data_type":"decimal","note_aliases":["general reserve"]},
+                {"tag":"CR","field_name":"Capital reserve","sr_no":"3.2","origin":"extracted","data_type":"decimal","note_aliases":["capital reserve"],
+                 "definition":"Includes capital subsidies and capital contributions."},
+                {"tag":"CRR","field_name":"Capital redemption reserve","sr_no":"3.3","origin":"extracted","data_type":"decimal","note_aliases":["capital redemption reserve"]},
+                {"tag":"FCTR","field_name":"Foreign currency translation reserve","sr_no":"3.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"CFHR","field_name":"Cash flow hedge reserve","sr_no":"3.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"MINT","field_name":"Minority interest","sr_no":"3.6","origin":"extracted","data_type":"decimal","note_aliases":["non-controlling interests","minority interest"],
+                 "definition":"Consolidated statements only. A standalone filing has none, and that is a correct null."},
+                {"tag":"EQQ","field_name":"Quasi equity","sr_no":"3.7","origin":"extracted","data_type":"decimal"},
+                {"tag":"RR","field_name":"Revaluation reserve","sr_no":"3.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"SPA","field_name":"Securities premium","sr_no":"3.9","origin":"extracted","data_type":"decimal","note_aliases":["securities premium","share premium"]},
+                {"tag":"DRR","field_name":"Debenture redemption reserve","sr_no":"3.10","origin":"extracted","data_type":"decimal"},
+                {"tag":"STR","field_name":"Statutory reserve","sr_no":"3.11","origin":"extracted","data_type":"decimal"},
+                {"tag":"OTR","field_name":"Other reserves","sr_no":"3.12","origin":"extracted","data_type":"decimal"},
+                {"tag":"SHRJV","field_name":"Share of reserves of joint ventures","sr_no":"3.13","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TOTRESV", "field_name": "Total Reserves", "sr_no": "3.14",
+              "origin": "derived",
+              "definition": "The sheet states this as 'Total of 3.1 to 3.8'. It therefore EXCLUDES securities premium (3.9) and the four reserves after it -- a narrower figure than RESV. Peers, so a waterfall.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"GR","weight":1},{"tag":"CR","weight":1},{"tag":"CRR","weight":1},
+                {"tag":"FCTR","weight":1},{"tag":"CFHR","weight":1},{"tag":"MINT","weight":1},
+                {"tag":"EQQ","weight":1},{"tag":"RR","weight":1}]}},
+
+            { "tag": "AUTOEQ001", "field_name": "Retained earnings before appropriations", "sr_no": "4.7",
+              "origin": "derived",
+              "definition": "Sheet: 'Total of 4.1 to 4.6'. These are MOVEMENTS in retained earnings across the year, not components of a balance.",
+              "derivation": {"method":"sum","inputs":["OPBAL","PNLB","OCI","OTIN","TFR","OTFR"]},
+              "fields": [
+                {"tag":"OPBAL","field_name":"Balance at the beginning of the year","sr_no":"4.1","origin":"extracted","data_type":"decimal","note_aliases":["balance at the beginning of the year","opening balance"]},
+                {"tag":"PNLB","field_name":"Profit or loss for the period","sr_no":"4.2","origin":"extracted","data_type":"decimal","note_aliases":["profit for the year"]},
+                {"tag":"OCI","field_name":"Other comprehensive income","sr_no":"4.3","origin":"extracted","data_type":"decimal","note_aliases":["other comprehensive income"]},
+                {"tag":"OTIN","field_name":"Other income taken to retained earnings","sr_no":"4.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"TFR","field_name":"Transfer from reserves","sr_no":"4.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"OTFR","field_name":"Other transfers","sr_no":"4.6","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TOTAPP", "field_name": "Total appropriations and transfers", "sr_no": "4.8",
+              "origin": "derived",
+              "definition": "Sheet: 'Total of 4.8.1 to 4.8.6'. The generated schema left inputs empty; they are the six appropriation rows. These are DEDUCTIONS from retained earnings, so the closing balance subtracts this total rather than adding it.",
+              "derivation": {"method":"sum","inputs":["APPDIV","APPGR","APPBS","APPDR","APPSTR","OTAPP"]},
+              "fields": [
+                {"tag":"APPDIV","field_name":"Appropriation for dividend and dividend tax","sr_no":"4.8.1","origin":"extracted","data_type":"decimal","note_aliases":["dividend paid","final dividend"]},
+                {"tag":"APPGR","field_name":"Appropriation to general reserve","sr_no":"4.8.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"APPBS","field_name":"Appropriation towards bonus shares","sr_no":"4.8.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"APPDR","field_name":"Transfer to debenture redemption reserve","sr_no":"4.8.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"APPSTR","field_name":"Transfer to statutory reserve","sr_no":"4.8.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"OTAPP","field_name":"Other appropriations","sr_no":"4.8.6","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "TOTRE/SOPL", "field_name": "Closing balance of retained earnings", "sr_no": "5",
+              "origin": "derived",
+              "note_aliases": ["retained earnings", "surplus in the statement of profit and loss"],
+              "definition": "Opening plus the year's movements, less appropriations. The generated schema had inputs of just OTFR, which is one movement row rather than the balance.",
+              "open_question": "The taxonomy code contains a slash ('TOTRE/SOPL'). It is kept verbatim for fidelity with the customer's sheet, but a slash is not safe in an XBRL element name or a URL path and should be normalised before export.",
+              "waterfall": {"method":"sum","inputs":[{"tag":"AUTOEQ001","weight":1},{"tag":"TOTAPP","weight":-1}]}},
+
+            { "tag": "TOTEQNR", "field_name": "Total Equity", "sr_no": "6",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["total equity", "equity", "total equity and liabilities"],
+              "definition": "CORRECTED: measured short by EXACTLY the share capital on two independent issuers (TCS 362, RITES 10,500) because share capital was never added in. TOTEQ leads the sum here.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"TOTEQ","weight":1},{"tag":"TOTOTEQ","weight":1},
+                {"tag":"RESV","weight":1},{"tag":"TOTRE/SOPL","weight":1}]}},
+
+            {"tag":"TOTREREP","field_name":"Closing balance of retained earnings (as reported)","sr_no":"7","origin":"extracted","data_type":"decimal",
+             "note_aliases":["retained earnings"],
+             "reconciliation":{"method":"sum","inputs":[{"tag":"TOTRE/SOPL","weight":1}]},
+             "definition":"The issuer's printed closing retained earnings, checked against the movement roll-forward. A gap is a finding about the reconciliation, not a correction to apply."}
+          ]
+        }
+      ]
+    }
+  ]
+}

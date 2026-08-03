@@ -214,9 +214,12 @@ def find_statement_pages(
         low = _content(para).lower()
         if any(t in low for t in _FACE_TITLES) and page not in faces:
             faces.append(page)
-        elif faces and page > min(faces) and any(t in low for t in _AFTER_STATEMENTS):
-            if stop == 0 or page < stop:
-                stop = page
+        elif (
+            faces and page > min(faces)
+            and any(t in low for t in _AFTER_STATEMENTS)
+            and (stop == 0 or page < stop)
+        ):
+            stop = page
     if not faces:
         return StatementPages([], 0, 0)
     lo = min(faces)

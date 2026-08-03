@@ -337,8 +337,11 @@ async def test_extract_field_blank_query_pool_is_empty_and_well_formed(
         out = await extract_field(ctx=ctx, field=blank, client=FakeExtractorClient([]))
     # extract_field is the pre-enrichment half: bounding_regions is attached
     # by extract_document, which is what reads the two artifacts.
+    # `tag`/`origin` ride on every record since the Fact model (M1): a fact says
+    # where it came from even when it came from nowhere.
     assert out == {
-        "field_name": "Blank query field", "value": None,
+        "field_name": "Blank query field", "value": None, "tag": "",
+        "origin": "extracted",
         "source": {"page": None, "snippet": None, "evidence_ids": []}, "confidence": 0.0,
     }
 

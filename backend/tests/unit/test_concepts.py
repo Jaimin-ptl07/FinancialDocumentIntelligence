@@ -3,7 +3,12 @@
 import json
 import pathlib
 
-from fdi.core.concepts import MAX_CANDIDATES, build_concept_index, normalize
+from fdi.core.concepts import (
+    MAX_CANDIDATES,
+    all_concepts,
+    build_concept_index,
+    normalize,
+)
 
 _V42 = (
     pathlib.Path(__file__).resolve().parents[3]
@@ -180,6 +185,42 @@ def test_definition_disambiguates_a_catch_all_sibling():
     assert "Excludes land and buildings" in plant.describe()
     # a concept with no recorded ambiguity carries no definition, and that is fine
     assert next(c for c in group.candidates if c.tag == "GRSOTTA").definition == ""
+
+
+def test_all_concepts_includes_the_top_level_parents_groups_leave_out():
+    """REGRESSION. A group holds a parent's DESCENDANTS, so a root concept is a
+    group *key* but sits in no group's candidate list. Mapping the face against
+    group candidates alone left 15 of TCS's 28 face rows unmapped -- including
+    'Revenue from operations' and every waterfall total."""
+    schema = _schema([
+        {"tag": "RFOGRS", "field_name": "Gross Revenue from Operations",
+         "origin": "derived", "field_path": "pl.RFOGRS",
+         "fields": [_leaf("RFSP", "Sale of Products"),
+                    _leaf("RFSS", "Sale of Services")]},
+    ])
+
+    tags = {c.tag for c in all_concepts(schema)}
+    assert tags == {"RFOGRS", "RFSP", "RFSS"}
+
+    # the parent is precisely what the group-candidate route omits
+    group_tags = {c.tag for g in build_concept_index(schema).groups for c in g.candidates}
+    assert "RFOGRS" not in group_tags
+
+
+def test_all_concepts_dedupes_and_survives_junk():
+    assert all_concepts({}) == ()
+    assert all_concepts({"modules": "no"}) == ()
+    assert all_concepts({"modules": [None, {"retrieval_units": [None, 3]}]}) == ()
+
+
+def test_real_v43_pl_exposes_every_tagged_concept():
+    path = _V42.parent / "field-extraction-schema.v4_3-pl.json"
+    if not path.exists():
+        return
+    concepts = all_concepts(json.loads(path.read_text("utf-8")))
+    tags = [c.tag for c in concepts]
+    assert len(tags) == len(set(tags))          # deduped
+    assert "RFOGRS" in tags and "PBMI" in tags  # top-level parents present
 
 
 def test_real_v42_carries_definitions_for_ambiguous_concepts():

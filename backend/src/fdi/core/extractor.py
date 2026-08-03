@@ -564,7 +564,16 @@ def assemble_unit_results(
     that echoes the label still resolves). A missing or non-Mapping entry
     degrades through `assemble_result`'s existing fallbacks, so a partial or
     garbled batched response still yields one well-formed record per field.
-    Never raises."""
+    Never raises.
+
+    ANSWERED vs ABSENT. A field the model returned as null ("this document does
+    not report it") and a field it never returned a key for at all ("the batch
+    dropped it") are different facts, and collapsing them hides our own recall
+    loss: a 76-field unit gets the same 60-candidate budget as a 25-field one,
+    so deep leaves fall out of the response silently and read afterwards as
+    though the company simply had nothing to disclose. `answered` records which
+    happened, so coverage can separate "absent" from "missed" instead of
+    reporting both as a correct null."""
     out: list[dict[str, object]] = []
     for field in unit.fields:
         entry: object = None
@@ -573,8 +582,11 @@ def assemble_unit_results(
                 entry = raw.get(field.field_path)
             if entry is None:
                 entry = raw.get(field.field_name)
+        answered = entry is not None
         field_raw = entry if isinstance(entry, Mapping) else {}
-        out.append(assemble_result(field, field_raw, ranked))
+        record = assemble_result(field, field_raw, ranked)
+        record["answered"] = answered
+        out.append(record)
     return out
 
 

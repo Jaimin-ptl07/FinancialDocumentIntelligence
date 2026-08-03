@@ -187,3 +187,124 @@ def _validate_field_node(field: object, where: str, errors: list[str]) -> None:
             value = field.get(key)
             if not isinstance(value, str) or not value:
                 errors.append(f'{where}."{key}" must be a non-empty string')
+
+
+# --- v4.3 composition invariants -------------------------------------------
+#
+# The v4.3 design has one law that makes a schema self-validating: a parent's
+# `derivation.inputs` must be exactly the tags of its own child concepts. If the
+# two can drift, the schema states a formula it does not structurally hold, and
+# nothing catches it -- which is how `AUTOPL001` came to sit as a SIBLING of the
+# three concepts it was supposed to sum.
+#
+# Three formula kinds, and only `derivation` is bound to children:
+#   derivation      composition -- inputs ARE the children
+#   waterfall       inputs are PEERS elsewhere in the statement
+#   reconciliation  a reported value checked against a formula
+_FORMULA_KINDS: Final = ("derivation", "waterfall", "reconciliation")
+
+
+def _child_concepts(node: Mapping[str, object]) -> list[str]:
+    """Direct child CONCEPTS, seeing through untagged presentation groups.
+
+    A grouping node with no tag is layout, not meaning: its tagged children are
+    the parent's children for composition purposes."""
+    out: list[str] = []
+    children = node.get("fields")
+    if not isinstance(children, list):
+        return out
+    for child in children:
+        if not isinstance(child, Mapping):
+            continue
+        tag = child.get("tag")
+        if isinstance(tag, str) and tag:
+            out.append(tag)
+        else:
+            out.extend(_child_concepts(child))
+    return out
+
+
+def _input_tags(formula: object) -> list[str] | None:
+    """`inputs` as plain tags, accepting both the bare and signed-weight forms."""
+    if not isinstance(formula, Mapping):
+        return None
+    raw = formula.get("inputs")
+    if not isinstance(raw, list):
+        return None
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, Mapping) and isinstance(item.get("tag"), str):
+            out.append(str(item["tag"]))
+    return out
+
+
+def validate_composition(doc: object) -> list[str]:
+    """Check the v4.3 composition law across a whole schema document.
+
+    Returns one error per violation; empty means the schema holds. Pure and
+    total. Deliberately silent about `waterfall` and `reconciliation` inputs --
+    those legitimately name peers and are NOT constrained to children."""
+    errors: list[str] = []
+    modules = doc.get("modules") if isinstance(doc, Mapping) else None
+    if not isinstance(modules, list):
+        return errors
+    seen: dict[str, str] = {}
+
+    def walk(node: Mapping[str, object], where: str) -> None:
+        tag = node.get("tag")
+        if isinstance(tag, str) and tag:
+            if tag in seen:
+                errors.append(f"{where}: tag {tag!r} already defined at {seen[tag]}")
+            else:
+                seen[tag] = where
+
+        kinds = [k for k in _FORMULA_KINDS if isinstance(node.get(k), Mapping)]
+        if len(kinds) > 1:
+            errors.append(f"{where}: a concept may carry one formula, found {kinds}")
+
+        derivation = node.get("derivation")
+        if isinstance(derivation, Mapping):
+            inputs = _input_tags(derivation)
+            children = _child_concepts(node)
+            if inputs is None:
+                errors.append(f'{where}."derivation.inputs" must be a list')
+            elif not children:
+                errors.append(
+                    f"{where}: derivation declared but the concept has no child "
+                    f"concepts to compose ({len(inputs)} input(s) named)"
+                )
+            elif sorted(inputs) != sorted(children):
+                missing = sorted(set(children) - set(inputs))
+                extra = sorted(set(inputs) - set(children))
+                detail = []
+                if missing:
+                    detail.append(f"children not summed: {missing}")
+                if extra:
+                    detail.append(f"inputs that are not children: {extra}")
+                errors.append(f"{where}: derivation.inputs != child concepts -- "
+                              + "; ".join(detail))
+
+        nested = node.get("fields")
+        if isinstance(nested, list):
+            for i, child in enumerate(nested):
+                if isinstance(child, Mapping):
+                    walk(child, f"{where}.fields[{i}]")
+
+    for mi, module in enumerate(modules):
+        if not isinstance(module, Mapping):
+            continue
+        units = module.get("retrieval_units")
+        if not isinstance(units, list):
+            continue
+        for ui, unit in enumerate(units):
+            if not isinstance(unit, Mapping):
+                continue
+            fields = unit.get("fields")
+            if not isinstance(fields, list):
+                continue
+            for fi, field in enumerate(fields):
+                if isinstance(field, Mapping):
+                    walk(field, f"$.modules[{mi}].retrieval_units[{ui}].fields[{fi}]")
+    return errors

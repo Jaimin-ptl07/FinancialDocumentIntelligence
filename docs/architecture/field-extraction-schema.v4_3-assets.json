@@ -1,0 +1,328 @@
+{
+  "version": "4.3.0-assets",
+  "authored": "by hand from the Q3VENI taxonomy Assets sheet, not generated",
+  "reporting_unit": "as reported",
+  "design_rules": {
+    "see": "field-extraction-schema.v4_3-pl.json carries the full rule text; the same seven rules apply here.",
+    "gross_net_accumulated": "A block reported three ways (gross / net / accumulated depreciation) is NOT a composition. Gross and net each compose from their OWN class lines; accumulated depreciation is a WATERFALL step gross minus net. v4.2 modelled 'Total Intangible Assets net block' as the sum of the GRS* tags, which would have reported gross figures as net.",
+    "carrying_value_only_in_totals": "A total of non-current assets sums CARRYING values. v4.2's TOTNCAO summed ACAMTR + RGHTUA + GRSRGHTUA + DEPRGHTUAR + CWIP, i.e. a net block, its gross, and its depreciation all at once -- triple counting one asset."
+  },
+  "modules": [
+    {
+      "key": "module_assets",
+      "name": "Assets",
+      "statement": "assets",
+      "retrieval_units": [
+        {
+          "unit_id": "AS",
+          "statement_type": "assets",
+          "basis_preference": "standalone",
+          "fields": [
+
+            { "tag": "GRSTOTTA", "field_name": "Total Tangible Assets Gross Block", "sr_no": "1.1",
+              "origin": "derived",
+              "note_aliases": ["property plant and equipment", "tangible assets", "gross block", "gross carrying amount"],
+              "definition": "Cost of property, plant and equipment before accumulated depreciation.",
+              "derivation": {"method": "sum", "inputs": ["GRSLAND","GRSBLDG","GRSPNE","GRSFNF","GRSVEH","GRSLHIMV","GRSOTTA"]},
+              "fields": [
+                {"tag":"GRSLAND","field_name":"Land","sr_no":"1.1.1","origin":"extracted","data_type":"decimal","note_aliases":["freehold land","land"]},
+                {"tag":"GRSBLDG","field_name":"Buildings","sr_no":"1.1.2","origin":"extracted","data_type":"decimal","note_aliases":["buildings","factory building"]},
+                {"tag":"GRSPNE","field_name":"Plant and equipment","sr_no":"1.1.3","origin":"extracted","data_type":"decimal","note_aliases":["plant and equipment","plant and machinery"],"definition":"Excludes land and buildings; includes machinery and production equipment."},
+                {"tag":"GRSFNF","field_name":"Furniture and fixtures","sr_no":"1.1.4","origin":"extracted","data_type":"decimal","note_aliases":["furniture and fixtures","office equipment"]},
+                {"tag":"GRSVEH","field_name":"Vehicles","sr_no":"1.1.5","origin":"extracted","data_type":"decimal","note_aliases":["vehicles","motor vehicles"]},
+                {"tag":"GRSLHIMV","field_name":"Leasehold improvements","sr_no":"1.1.6","origin":"extracted","data_type":"decimal","note_aliases":["leasehold improvements"]},
+                {"tag":"GRSOTTA","field_name":"Other tangible assets","sr_no":"1.1.7","origin":"extracted","data_type":"decimal","note_aliases":["other tangible assets"]}
+              ]},
+
+            { "tag": "NETTOTTA", "field_name": "Total Tangible Assets Net Block", "sr_no": "1.2",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["property plant and equipment", "net block", "net carrying amount"],
+              "definition": "Property, plant and equipment after accumulated depreciation. This is the balance-sheet carrying value.",
+              "derivation": {"method": "sum", "inputs": ["NETLAND","NETBLDG","NETPNE","NETFNF","NETVEH","NETLHIMV","NETOTTA"]},
+              "fields": [
+                {"tag":"NETLAND","field_name":"Land","sr_no":"1.2.1","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETBLDG","field_name":"Buildings","sr_no":"1.2.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETPNE","field_name":"Plant and equipment","sr_no":"1.2.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETFNF","field_name":"Furniture and fixtures","sr_no":"1.2.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETVEH","field_name":"Vehicles","sr_no":"1.2.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETLHIMV","field_name":"Leasehold improvements","sr_no":"1.2.6","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETOTTA","field_name":"Other tangible assets","sr_no":"1.2.7","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "ACDEPR", "field_name": "Accumulated depreciation on tangible assets", "sr_no": "1.3",
+              "origin": "derived",
+              "note_aliases": ["accumulated depreciation", "depreciation and impairment"],
+              "definition": "Gross block less net block. The sheet writes this as 'GRSTOTTA - NETTOTTA'.",
+              "waterfall": {"method":"sum","inputs":[{"tag":"GRSTOTTA","weight":1},{"tag":"NETTOTTA","weight":-1}]}},
+
+            { "tag": "GRSTOTIA", "field_name": "Total Intangible Assets Gross Block", "sr_no": "1.4",
+              "origin": "derived",
+              "note_aliases": ["intangible assets", "other intangible assets"],
+              "derivation": {"method":"sum","inputs":["GRSGW","GRSBRNT","GRSCOMS","GRSMHNPT","GRSMIRT","GRSCPNOR","GRSRFMDP","GRSLCNFR","GRSOTIA"]},
+              "fields": [
+                {"tag":"GRSGW","field_name":"Goodwill","sr_no":"1.4.1","origin":"extracted","data_type":"decimal","note_aliases":["goodwill"]},
+                {"tag":"GRSBRNT","field_name":"Brands and trade marks","sr_no":"1.4.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"GRSCOMS","field_name":"Computer software","sr_no":"1.4.3","origin":"extracted","data_type":"decimal","note_aliases":["computer software","software"]},
+                {"tag":"GRSMHNPT","field_name":"Mastheads and publishing titles","sr_no":"1.4.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"GRSMIRT","field_name":"Mining rights","sr_no":"1.4.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"GRSCPNOR","field_name":"Copyrights, patents and operating rights","sr_no":"1.4.6","origin":"extracted","data_type":"decimal"},
+                {"tag":"GRSRFMDP","field_name":"Recipes, formulae, designs etc","sr_no":"1.4.7","origin":"extracted","data_type":"decimal"},
+                {"tag":"GRSLCNFR","field_name":"Licenses and franchise","sr_no":"1.4.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"GRSOTIA","field_name":"Other intangible assets","sr_no":"1.4.9","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "NETTOTIA", "field_name": "Total Intangible Assets Net Block", "sr_no": "1.5",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["intangible assets", "other intangible assets"],
+              "definition": "Intangibles after accumulated amortisation. CORRECTED: v4.2 summed the GRS* tags here, which would report the gross block as the net one.",
+              "derivation": {"method":"sum","inputs":["NETGW","NETBRNT","NETCOMS","NETMHNPT","NETMIRT","NETCPNOR","NETRFMDP","NETLCNFR","NETOTIA"]},
+              "fields": [
+                {"tag":"NETGW","field_name":"Goodwill","sr_no":"1.5.1","origin":"extracted","data_type":"decimal","note_aliases":["goodwill"]},
+                {"tag":"NETBRNT","field_name":"Brands and trade marks","sr_no":"1.5.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETCOMS","field_name":"Computer software","sr_no":"1.5.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETMHNPT","field_name":"Mastheads and publishing titles","sr_no":"1.5.4","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETMIRT","field_name":"Mining rights","sr_no":"1.5.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETCPNOR","field_name":"Copyrights, patents and operating rights","sr_no":"1.5.6","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETRFMDP","field_name":"Recipes, formulae, designs etc","sr_no":"1.5.7","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETLCNFR","field_name":"Licenses and franchise","sr_no":"1.5.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"NETOTIA","field_name":"Other intangible assets","sr_no":"1.5.9","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "ACAMTR", "field_name": "Accumulated amortisation on intangible assets", "sr_no": "1.6",
+              "origin": "derived",
+              "note_aliases": ["accumulated amortisation"],
+              "definition": "Intangible gross block less net block ('GRSTOTIA-NETTOTIA' in the sheet).",
+              "waterfall": {"method":"sum","inputs":[{"tag":"GRSTOTIA","weight":1},{"tag":"NETTOTIA","weight":-1}]}},
+
+            { "tag": "RGHTUA", "field_name": "Right of use assets (Net)", "sr_no": "1.7",
+              "origin": "extracted", "data_type": "decimal", "reported": true,
+              "note_aliases": ["right of use assets", "right-of-use assets", "rou assets"],
+              "definition": "Carrying value of leased assets recognised under Ind AS 116. This is what the balance sheet shows.",
+              "reconciliation": {"method":"sum","inputs":[{"tag":"GRSRGHTUA","weight":1},{"tag":"DEPRGHTUAR","weight":-1}]},
+              "fields": [
+                {"tag":"GRSRGHTUA","field_name":"Right of use assets (Gross)","sr_no":"1.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"DEPRGHTUAR","field_name":"Right of use assets (Depreciation)","sr_no":"1.9","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            {"tag":"DEPGW","field_name":"Goodwill impairment / amortisation","sr_no":"1.10","origin":"extracted","data_type":"decimal",
+             "note_aliases":["impairment of goodwill"],
+             "open_question":"The sheet marks this derived but names no roll-up. Kept EXTRACTED: an empty derivation claims a formula the schema does not hold, and origin:derived with no children is permanently null."},
+
+            {"tag":"CWIP","field_name":"Capital Work In Progress","sr_no":"1.11","origin":"extracted","data_type":"decimal","note_aliases":["capital work in progress","capital work-in-progress"]},
+            {"tag":"INTAUD","field_name":"Intangible Assets under development","sr_no":"1.12","origin":"extracted","data_type":"decimal","note_aliases":["intangible assets under development"]},
+
+            { "tag": "NETINVPRP", "field_name": "Investment Property - Net", "sr_no": "1.14",
+              "origin": "extracted", "data_type": "decimal", "reported": true,
+              "note_aliases": ["investment property"],
+              "reconciliation": {"method":"sum","inputs":[{"tag":"GRSINVPRP","weight":1},{"tag":"DEPINVPRPR","weight":-1}]},
+              "fields": [
+                {"tag":"GRSINVPRP","field_name":"Investment Property - Gross","sr_no":"1.15","origin":"extracted","data_type":"decimal"},
+                {"tag":"DEPINVPRPR","field_name":"Investment Property - Depreciation","sr_no":"1.16","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            {"tag":"INVPRP","field_name":"Investment Property (as reported)","sr_no":"1.13","origin":"extracted","data_type":"decimal",
+             "classified_as":"NETINVPRP",
+             "definition":"The sheet's note says to use this tag when the report gives a single undifferentiated investment-property figure. It is the SAME money as NETINVPRP reported once, so it is classified_as, never summed alongside it."},
+
+            { "tag": "TOTNCINV", "field_name": "Total Non Current Investments", "sr_no": "1.17",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["non-current investments", "investments"],
+              "definition": "Sheet: 'Total Non Current Investment (1.8.1 + 1.8.4)' -- the gross subs/associates/JV holding plus other non-current investments. NCINVSN and NCINVSI are NOT added again here: they compose NCINVSG.",
+              "derivation": {"method":"sum","inputs":["NCINVSG","NCINVOT"]},
+              "fields": [
+                { "tag":"NCINVSG","field_name":"In subsidiaries, associates, JV etc. (Gross)","sr_no":"1.17.3","origin":"derived",
+                  "definition":"Sheet: '(1.8.1 + 1.8.2)' -- the unimpaired holding plus the impaired one.",
+                  "derivation":{"method":"sum","inputs":["NCINVSN","NCINVSI"]},
+                  "fields":[
+                    {"tag":"NCINVSN","field_name":"Investments in subsidiaries, associates, JV (net of impairment)","sr_no":"1.17.1","origin":"extracted","data_type":"decimal"},
+                    {"tag":"NCINVSI","field_name":"In subsidiaries, associates, JV etc. (Impaired)","sr_no":"1.17.2","origin":"extracted","data_type":"decimal"}
+                  ]},
+                {"tag":"NCINVOT","field_name":"Other Non-Current Investments","sr_no":"1.17.4","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            {"tag":"NCINVSNOT","field_name":"Investments in non-current assets other than subsidiaries/associates/JV","origin":"extracted","data_type":"decimal",
+             "classified_as":"NCINVOT",
+             "open_question":"Carries no sr_no and no roll-up pointer in the sheet. Placed as classified_as NCINVOT rather than as a summed child, so it cannot double-count if it is in fact the same money."},
+
+            {"tag":"NETDTA","field_name":"Deferred Tax Assets (Net)","sr_no":"1.18","origin":"extracted","data_type":"decimal","note_aliases":["deferred tax assets","deferred tax assets net"]},
+            {"tag":"NCTR","field_name":"Non Current Trade Receivables (Net)","sr_no":"1.19","origin":"extracted","data_type":"decimal","note_aliases":["trade receivables"]},
+            {"tag":"NCINVT","field_name":"Non Current Inventories","sr_no":"1.20","origin":"extracted","data_type":"decimal"},
+            {"tag":"NCABA","field_name":"Investment in biological assets","sr_no":"1.21","origin":"extracted","data_type":"decimal","note_aliases":["biological assets"]},
+
+            { "tag": "TOTNCAO", "field_name": "Total Non-Current Assets other than financial assets", "sr_no": "1",
+              "origin": "derived",
+              "definition": "CORRECTED: v4.2 summed ACAMTR + RGHTUA + GRSRGHTUA + DEPRGHTUAR + DEPGW + CWIP -- a net block, its gross, and its accumulated depreciation together, counting one asset three times. A total of assets sums CARRYING values only.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"NETTOTTA","weight":1},{"tag":"NETTOTIA","weight":1},{"tag":"RGHTUA","weight":1},
+                {"tag":"CWIP","weight":1},{"tag":"INTAUD","weight":1},{"tag":"NETINVPRP","weight":1},
+                {"tag":"TOTNCINV","weight":1},{"tag":"NETDTA","weight":1},{"tag":"NCTR","weight":1},
+                {"tag":"NCINVT","weight":1},{"tag":"NCABA","weight":1}]}},
+
+            { "tag": "FINA", "field_name": "Non-Current Financial Assets", "sr_no": "2",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["financial assets", "other financial assets"],
+              "derivation": {"method":"sum","inputs":["NCFINACA","NCAOSD","NCAOD","NCALND","NCACNK","NCAOFD","NCOADV","NCAODD","NCAOR","NCAORM","NCTAX","NCAOTAX","NCAOMAT","NCFINAOT"]},
+              "fields": [
+                {"tag":"NCFINACA","field_name":"Capital advances and advances to suppliers of capital goods","sr_no":"2.1","origin":"extracted","data_type":"decimal","note_aliases":["capital advances"]},
+                {"tag":"NCAOSD","field_name":"Security deposits","sr_no":"2.2","origin":"extracted","data_type":"decimal","note_aliases":["security deposits"]},
+                {"tag":"NCAOD","field_name":"Deposits and balances with statutory / government authorities","sr_no":"2.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCALND","field_name":"Loans and receivables from related parties","sr_no":"2.4","origin":"extracted","data_type":"decimal","note_aliases":["loans to related parties"]},
+                {"tag":"NCACNK","field_name":"Advances recoverable in cash or kind","sr_no":"2.5","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCAOFD","field_name":"Fixed deposits under lien","sr_no":"2.6","origin":"extracted","data_type":"decimal","definition":"Includes earmarked balances; these are NOT cash and cash equivalents."},
+                {"tag":"NCOADV","field_name":"Other non-current advances, loans to employees","sr_no":"2.7","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCAODD","field_name":"Dues from directors / promoters / partners","sr_no":"2.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCAOR","field_name":"Trade receivables over six months","sr_no":"2.9","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCAORM","field_name":"Retention money - non-current portion","sr_no":"2.10","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCTAX","field_name":"Non-Current Tax Assets","sr_no":"2.11","origin":"extracted","data_type":"decimal","note_aliases":["non-current tax assets"]},
+                {"tag":"NCAOTAX","field_name":"Advance payment of taxes","sr_no":"2.12","origin":"extracted","data_type":"decimal"},
+                {"tag":"NCAOMAT","field_name":"MAT credit entitlement carried forward","sr_no":"2.13","origin":"extracted","data_type":"decimal"},
+                { "tag":"NCFINAOT","field_name":"Other financial assets - Non-Current","sr_no":"2.14","origin":"extracted","data_type":"decimal",
+                  "fields":[{"tag":"NCAOOT","field_name":"Others not fitting elsewhere","origin":"extracted","data_type":"decimal","classified_as":"NCFINAOT"}]}
+              ]},
+
+            { "tag": "TOTNCA", "field_name": "Total Non-Current Assets", "sr_no": "3",
+              "origin": "derived",
+              "note_aliases": ["total non-current assets"],
+              "waterfall": {"method":"sum","inputs":[{"tag":"TOTNCAO","weight":1},{"tag":"FINA","weight":1}]}},
+
+            { "tag": "CNA", "field_name": "Current Assets", "sr_no": "4",
+              "origin": "derived",
+              "note_aliases": ["current assets"],
+              "definition": "The 4.x block. TOTCAO below is the sheet's own sr-6 subtotal, which spans only 4.1 to 4.4 and therefore excludes CTRDF -- the two are deliberately not the same number.",
+              "derivation": {"method":"sum","inputs":["TOTINVT","CINV","NETCTR","CNBK","CTRDF"]},
+              "fields": [
+
+            { "tag": "TOTINVT", "field_name": "Total Inventories", "sr_no": "4.1",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["inventories"],
+              "derivation": {"method":"sum","inputs":["RM","WIP","FG","SIT","STNSP","LOTO","TDR","CER","OTINVT"]},
+              "fields": [
+                {"tag":"RM","field_name":"Raw materials","sr_no":"4.1.1","origin":"derived","note_aliases":["raw materials"],
+                 "derivation":{"method":"sum","inputs":["INVTRMI","INVTRMD"]},
+                 "fields":[{"tag":"INVTRMI","field_name":"Raw materials - imported","sr_no":"4.1.1.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"INVTRMD","field_name":"Raw materials - indigenous","sr_no":"4.1.1.2","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"WIP","field_name":"Work-in-progress (or) Stock in process","sr_no":"4.1.2","origin":"extracted","data_type":"decimal","note_aliases":["work in progress","work-in-progress"],
+                 "definition":"The sheet gives WIP no imported/indigenous breakup, unlike raw materials and stock-in-trade. Left as a leaf rather than inventing one."},
+                {"tag":"FG","field_name":"Finished goods","sr_no":"4.1.3","origin":"extracted","data_type":"decimal","note_aliases":["finished goods"],
+                 "definition":"No imported/indigenous breakup in the sheet."},
+                {"tag":"SIT","field_name":"Stock in trade","sr_no":"4.1.4","origin":"derived","note_aliases":["stock-in-trade","stock in trade"],
+                 "derivation":{"method":"sum","inputs":["SITIM","SITID"]},
+                 "fields":[{"tag":"SITIM","field_name":"Stock in trade - imported","sr_no":"4.1.4.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"SITID","field_name":"Stock in trade - indigenous","sr_no":"4.1.4.2","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"STNSP","field_name":"Stores and spares","sr_no":"4.1.5","origin":"derived","note_aliases":["stores and spares"],
+                 "derivation":{"method":"sum","inputs":["STNSPIM","STNSPID"]},
+                 "fields":[{"tag":"STNSPIM","field_name":"Stores and spares - imported","sr_no":"4.1.5.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"STNSPID","field_name":"Stores and spares - indigenous","sr_no":"4.1.5.2","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"LOTO","field_name":"Loose tools","sr_no":"4.1.6","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["LOTOIM","LOTOID"]},
+                 "fields":[{"tag":"LOTOIM","field_name":"Loose tools - imported","sr_no":"4.1.6.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"LOTOID","field_name":"Loose tools - indigenous","sr_no":"4.1.6.2","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"TDR","field_name":"Transferable development rights","sr_no":"4.1.7","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["TDRIM","TDRID"]},
+                 "fields":[{"tag":"TDRIM","field_name":"Transferable development rights - imported","sr_no":"4.1.7.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"TDRID","field_name":"Transferable development rights - indigenous","sr_no":"4.1.7.2","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"CER","field_name":"Certified emission rights","sr_no":"4.1.8","origin":"derived",
+                 "derivation":{"method":"sum","inputs":["CERIM","CERID"]},
+                 "fields":[{"tag":"CERIM","field_name":"Certified emission rights - imported","sr_no":"4.1.8.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"CERID","field_name":"Certified emission rights - indigenous","sr_no":"4.1.8.2","origin":"extracted","data_type":"decimal"}]},
+                {"tag":"OTINVT","field_name":"Other inventories","sr_no":"4.1.9","origin":"derived",
+                 "definition":"Includes captive coal, fuel and packing material.",
+                 "derivation":{"method":"sum","inputs":["OTINVTIM","OTINVTID"]},
+                 "fields":[{"tag":"OTINVTIM","field_name":"Other inventories - imported","sr_no":"4.1.9.1","origin":"extracted","data_type":"decimal"},
+                           {"tag":"OTINVTID","field_name":"Other inventories - indigenous","sr_no":"4.1.9.2","origin":"extracted","data_type":"decimal"}]}
+              ]},
+
+            { "tag": "CINV", "field_name": "Current Investments (Net)", "sr_no": "4.2",
+              "origin": "extracted", "data_type": "decimal", "reported": true,
+              "note_aliases": ["current investments", "investments"],
+              "fields": [
+                {"tag":"CIG","field_name":"Government and other trustee securities, debentures and bonds","sr_no":"4.2.1","origin":"extracted","data_type":"decimal","classified_as":"CINV"},
+                {"tag":"CIFD","field_name":"Fixed deposits with banks","sr_no":"4.2.2","origin":"extracted","data_type":"decimal","classified_as":"CINV"}
+              ]},
+
+            { "tag": "NETCTR", "field_name": "Current Trade Receivables (Net)", "sr_no": "4.3",
+              "origin": "extracted", "data_type": "decimal", "reported": true,
+              "note_aliases": ["trade receivables", "sundry debtors"],
+              "fields": [
+                {"tag":"CTRD","field_name":"Trade receivables - domestic portion","sr_no":"4.3.1","origin":"extracted","data_type":"decimal","classified_as":"NETCTR"},
+                {"tag":"CTRE","field_name":"Export receivables","sr_no":"4.3.2","origin":"extracted","data_type":"decimal","classified_as":"NETCTR"},
+                {"tag":"CTRF","field_name":"Receivables assigned or factored","sr_no":"4.3.3","origin":"extracted","data_type":"decimal","classified_as":"NETCTR",
+                 "definition":"A disclosure 'of which' line -- a subset of NETCTR already counted in it, never an addition."}
+              ]},
+
+            { "tag": "CNBK", "field_name": "Cash and bank balances", "sr_no": "4.4",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["cash and cash equivalents", "cash and bank balances"],
+              "derivation": {"method":"sum","inputs":["CB","BB"]},
+              "fields": [
+                {"tag":"CB","field_name":"Cash balance","sr_no":"4.4.1","origin":"extracted","data_type":"decimal","note_aliases":["cash on hand"]},
+                {"tag":"BB","field_name":"Bank balance","sr_no":"4.4.2","origin":"extracted","data_type":"decimal","note_aliases":["balances with banks"],
+                 "definition":"Includes fixed deposits held as bank balances. Deposits under lien belong to NCAOFD, not here."}
+              ]},
+
+            {"tag":"CTRDF","field_name":"Instalments of deferred receivables due within one year","sr_no":"4.5","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            {"tag":"INVT","field_name":"Inventories (as reported on the face)","origin":"extracted","data_type":"decimal",
+             "classified_as":"TOTINVT",
+             "note_aliases":["inventories"],
+             "definition":"The single face line, held OUTSIDE CNA on purpose: it is the same money as TOTINVT reported once, so making it a sibling of TOTINVT inside the container would double-count it. Reported wins -- when both are present TOTINVT is a CHECK on this, not a replacement."},
+
+            { "tag": "TOTCAO", "field_name": "Total current assets other than loans, advances and financial assets", "sr_no": "6",
+              "origin": "derived",
+              "definition": "The sheet's subtotal of 4.1 to 4.4 -- CTRDF (4.5) is outside it. Inputs are PEERS under CNA, so this is a waterfall, not a composition.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"TOTINVT","weight":1},{"tag":"CINV","weight":1},
+                {"tag":"NETCTR","weight":1},{"tag":"CNBK","weight":1}]}},
+
+            { "tag": "TOTOCA", "field_name": "Total other current assets, loans and advances", "sr_no": "5",
+              "origin": "derived",
+              "definition": "The 5.x block has no total row in the sheet; it is introduced here so TOTA can compose from two subtotals instead of naming eighteen peers.",
+              "derivation": {"method":"sum","inputs":["ADVS","ATAX","OCAIR","OCAPE","OCAMTM","OCARM","OCAMAT","CFINACA","CAOSD","CALND","CACNK","CFINAOT","OCAUR"]},
+              "fields": [
+                {"tag":"ADVS","field_name":"Advances to suppliers","sr_no":"5.1","origin":"extracted","data_type":"decimal","definition":"Includes advances for goods and services."},
+                {"tag":"ATAX","field_name":"Advance payment of taxes","sr_no":"5.2","origin":"extracted","data_type":"decimal"},
+                {"tag":"OCAIR","field_name":"Interest receivable","sr_no":"5.3","origin":"extracted","data_type":"decimal"},
+                {"tag":"OCAPE","field_name":"Prepaid expenses","sr_no":"5.4","origin":"extracted","data_type":"decimal","note_aliases":["prepaid expenses"]},
+                {"tag":"OCAMTM","field_name":"MTM forex gain on derivative contracts","sr_no":"5.5","origin":"extracted","data_type":"decimal","note_aliases":["derivative financial assets"]},
+                {"tag":"OCARM","field_name":"Retention money - current portion","sr_no":"5.6","origin":"extracted","data_type":"decimal"},
+                {"tag":"OCAMAT","field_name":"MAT credit entitlement carried forward","sr_no":"5.7","origin":"extracted","data_type":"decimal"},
+                {"tag":"CFINACA","field_name":"Capital advances and advances to suppliers of capital goods","sr_no":"5.8","origin":"extracted","data_type":"decimal"},
+                {"tag":"CAOSD","field_name":"Security deposits","sr_no":"5.9","origin":"extracted","data_type":"decimal"},
+                {"tag":"CALND","field_name":"Loans and advances to related parties","sr_no":"5.10","origin":"extracted","data_type":"decimal"},
+                {"tag":"CACNK","field_name":"Advances recoverable in cash or kind","sr_no":"5.11","origin":"extracted","data_type":"decimal"},
+                {"tag":"CFINAOT","field_name":"Other current financial assets","sr_no":"5.12","origin":"extracted","data_type":"decimal","definition":"Includes government grant receivables and forex receivables."},
+                {"tag":"OCAUR","field_name":"Unbilled revenue","sr_no":"5.13","origin":"extracted","data_type":"decimal","note_aliases":["unbilled revenue","contract assets"]}
+              ]},
+
+            { "tag": "TOTA", "field_name": "Total Current Assets", "sr_no": "8",
+              "origin": "derived",
+              "definition": "CORRECTED: v4.2 summed INVT + CINV + NETCTR + CNBK + TOTCAO, adding the four components AND the subtotal that already contains them -- double counting every one.",
+              "waterfall": {"method":"sum","inputs":[{"tag":"TOTCAO","weight":1},{"tag":"TOTOCA","weight":1}]}},
+
+            {"tag":"ASALE","field_name":"Assets held for sale","sr_no":"7","origin":"extracted","data_type":"decimal","note_aliases":["assets held for sale","non-current assets held for sale"]},
+
+            { "tag": "TOTNCNCA", "field_name": "Total Assets", "sr_no": "9",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["total assets"],
+              "definition": "CORRECTED: v4.2 summed TOTNCA + ASALE and omitted current assets entirely.",
+              "waterfall": {"method":"sum","inputs":[{"tag":"TOTNCA","weight":1},{"tag":"TOTA","weight":1},{"tag":"ASALE","weight":1}]}},
+
+            {"tag":"TOTNCR","field_name":"Total Non-Current Assets (as reported)","sr_no":"10","origin":"extracted","data_type":"decimal",
+             "note_aliases":["total non-current assets"],
+             "reconciliation":{"method":"sum","inputs":[{"tag":"TOTNCA","weight":1}]},
+             "definition":"The issuer's own printed subtotal, checked against our composition. A gap is a finding, not a correction."},
+
+            {"tag":"TOTCAR","field_name":"Total Current Assets (as reported)","sr_no":"11","origin":"extracted","data_type":"decimal",
+             "note_aliases":["total current assets"],
+             "reconciliation":{"method":"sum","inputs":[{"tag":"TOTA","weight":1}]}},
+
+            { "tag": "TOTFINA", "field_name": "Total financial assets (non-current and current)", "origin": "derived",
+              "definition": "Spans both halves of the balance sheet, so its inputs are PEERS, not children.",
+              "waterfall": {"method":"sum","inputs":[{"tag":"FINA","weight":1},{"tag":"CFINAOT","weight":1}]}}
+          ]
+        }
+      ]
+    }
+  ]
+}

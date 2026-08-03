@@ -61,7 +61,7 @@ from typing import Protocol, cast, runtime_checkable
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fdi.core.basis import page_basis
+from fdi.core.basis import page_basis, resolve_effective_basis
 from fdi.core.extractor import (
     EXTRACTION_RECORD_VERSION,
     Candidate,
@@ -87,6 +87,7 @@ from fdi.core.notes import (
 )
 from fdi.core.pricing import LlmCallUsage
 from fdi.core.provenance import resolve_evidence_regions, resolve_field_regions
+from fdi.core.statements import STATEMENT_ANCHORS, find_statement_tables
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
@@ -301,7 +302,16 @@ def _filter_by_basis(
         c for c in candidates
         if _basis_keep(page_basis(basis_artifact, c.page), preference)
     ]
-    return kept if kept else list(candidates)
+    if kept:
+        return kept
+    # MEASURED: refusing the fallback on a two-basis document (returning [] so a
+    # unit could never read the wrong statement set) starves it instead. On TCS
+    # it dropped correct fields 19/24 -> 9/24 and filled 125 -> 71, taking every
+    # headline total to null -- strictly worse than the mixing it prevented.
+    # Retrieval, not this filter, is the place to enforce basis: the pool has to
+    # arrive basis-correct. Until it does, extracting from the only candidates a
+    # unit has beats returning nothing.
+    return list(candidates)
 
 
 _TABLE_CARD_RE = re.compile(r"^t(\d+)$")
@@ -365,6 +375,7 @@ async def extract_unit(
     structure: Mapping[str, object] | None = None,
     note_map: NoteMap | None = None,
     chunks: Sequence[Mapping[str, object]] | None = None,
+    effective_basis: str = "",
 ) -> list[dict[str, object]]:
     """ONE retrieval + ONE LLM call for every field in `unit` -- schema v3.1's
     "Retrieve-once, extract-many". Returns one output_contract record per
@@ -377,8 +388,11 @@ async def extract_unit(
     scoped = filter_candidates(
         pool, consolidated_start_page=None, needs_tables=unit_needs_tables(unit),
     )
+    # Basis is a DOCUMENT-level decision resolved once by extract_document, not
+    # a per-unit one: units that each fall back independently mix statement sets.
     scoped = _filter_by_basis(
-        scoped, basis_artifact=basis_artifact or {}, preference=unit.basis_preference,
+        scoped, basis_artifact=basis_artifact or {},
+        preference=effective_basis or unit.basis_preference,
     )
     # Note-follow is injected AFTER the filters: these pages were resolved from a
     # printed reference, so no similarity/basis heuristic may discard them.
@@ -405,13 +419,26 @@ async def extract_unit(
     ]
     system, user = build_unit_messages(unit, prompt_candidates)
     raw: Mapping[str, object] = {}
+    usage: LlmCallUsage | None = None
     with contextlib.suppress(Exception):  # never raise (decision 10)
         result = client.extract(system=system, user=user)
         raw = result.data
-        if result.usage is not None:
-            await _record_llm_usage(
-                ctx=ctx, source="extract_document", usage=result.usage,
-            )
+        usage = result.usage
+    # Usage bookkeeping gets its own guard AND its own rollback, deliberately.
+    # A failed write here does not lose `raw` (the assignment above already
+    # happened) -- it poisons ctx.SESSION, and hybrid_search shares that
+    # session. So one failed telemetry insert silently killed retrieval for
+    # every LATER unit in the document. Measured with llm_usage_event absent:
+    # TCS fell 125 -> 71 fields filled and 19 -> 9 correct, deterministically,
+    # with the early units fine and the rest empty. Costing is bookkeeping; it
+    # must never be able to take extraction down with it.
+    if usage is not None:
+        try:
+            await _record_llm_usage(ctx=ctx, source="extract_document", usage=usage)
+        except Exception:  # noqa: BLE001 - decision 10
+            log.info("extractor.usage_record_failed", doc_id=getattr(ctx, "doc_id", ""))
+            with contextlib.suppress(Exception):
+                await ctx.session.rollback()
     return assemble_unit_results(unit, raw, ranked)
 
 
@@ -429,13 +456,26 @@ async def extract_field(
 
     system, user = build_extraction_messages(field, ranked)
     raw: Mapping[str, object] = {}
+    usage: LlmCallUsage | None = None
     with contextlib.suppress(Exception):  # never raise (decision 10)
         result = client.extract(system=system, user=user)
         raw = result.data
-        if result.usage is not None:
-            await _record_llm_usage(
-                ctx=ctx, source="extract_document", usage=result.usage,
-            )
+        usage = result.usage
+    # Usage bookkeeping gets its own guard AND its own rollback, deliberately.
+    # A failed write here does not lose `raw` (the assignment above already
+    # happened) -- it poisons ctx.SESSION, and hybrid_search shares that
+    # session. So one failed telemetry insert silently killed retrieval for
+    # every LATER unit in the document. Measured with llm_usage_event absent:
+    # TCS fell 125 -> 71 fields filled and 19 -> 9 correct, deterministically,
+    # with the early units fine and the rest empty. Costing is bookkeeping; it
+    # must never be able to take extraction down with it.
+    if usage is not None:
+        try:
+            await _record_llm_usage(ctx=ctx, source="extract_document", usage=usage)
+        except Exception:  # noqa: BLE001 - decision 10
+            log.info("extractor.usage_record_failed", doc_id=getattr(ctx, "doc_id", ""))
+            with contextlib.suppress(Exception):
+                await ctx.session.rollback()
     return assemble_result(field, raw, ranked)
 
 
@@ -493,6 +533,18 @@ async def _read_chunks_for(ctx: ExtractContext) -> list[Mapping[str, object]]:
         return []
 
 
+def _face_pages(tables: object, page_lo: int, page_hi: int) -> list[int]:
+    """Pages holding a statement face, found by scoring table CONTENT."""
+    if not isinstance(tables, list):
+        return []
+    pages: list[int] = []
+    for statement in STATEMENT_ANCHORS:
+        for found in find_statement_tables(tables, statement, page_lo, page_hi):
+            if found.page not in pages:
+                pages.append(found.page)
+    return sorted(pages)
+
+
 async def _note_map_for(
     ctx: ExtractContext,
     *,
@@ -519,7 +571,15 @@ async def _note_map_for(
         hi = min(hi, pages.page_hi)
     if lo <= 0 or hi < lo:
         return None
-    face_pages = [p for p in pages.face_pages if lo <= p <= hi]
+    # Which pages carry a FACE is decided by what the tables say, not by what a
+    # heading claims. Heading matching returned five pages for TCS -- three of
+    # them contents/segment pages that carry no face -- and could not say which
+    # statement it had found; scoring a table against the line names Schedule III
+    # mandates returns exactly the consolidated and standalone faces, typed.
+    # Headings remain the fallback when no table scores (scanned or odd layouts).
+    face_pages = _face_pages(tables, lo, hi) or [
+        p for p in pages.face_pages if lo <= p <= hi
+    ]
     note_map = build_note_map(
         paragraphs,
         tables if isinstance(tables, list) else [],
@@ -612,6 +672,14 @@ async def extract_document(
     basis_artifact = await _basis_artifact_for(ctx)
 
     units = group_fields_by_unit(fields)
+    preferred = units[0].basis_preference if units else "standalone"
+    effective_basis = resolve_effective_basis(basis_artifact, preferred)
+    if units and effective_basis != preferred:
+        log.info(
+            "extractor.basis_resolved", doc_id=ctx.doc_id,
+            preferred=preferred, effective=effective_basis,
+            reason="document does not carry the preferred basis",
+        )
     note_maps: dict[str, NoteMap | None] = {}
     chunks: list[Mapping[str, object]] = []
     if units:
@@ -619,7 +687,7 @@ async def extract_document(
 
     flat: list[dict[str, object]] = []
     for unit in units:
-        preference = unit.basis_preference
+        preference = effective_basis or unit.basis_preference
         if preference not in note_maps:
             note_maps[preference] = await _note_map_for(
                 ctx, basis_artifact=basis_artifact, preference=preference
@@ -629,6 +697,7 @@ async def extract_document(
                 ctx=ctx, unit=unit, client=client,
                 basis_artifact=basis_artifact, structure=structure,
                 note_map=note_maps[preference], chunks=chunks,
+                effective_basis=effective_basis,
             )
         )
 

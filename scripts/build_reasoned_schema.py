@@ -397,12 +397,31 @@ def _alias_table(statement):
     }
 
 
-def enrich(nodes, statement, seen, counter, table=None, inherited=(), defs=None):
+def _uniq_tag(tag, seen_tags):
+    """A tag used once. The taxonomy reuses `WCL` for working-capital loans and
+    again for Buyers Credit; leaving both as `WCL` makes the second unreachable
+    in by_tag / all_concepts / for_tag / the XBRL export. The customer's code is
+    kept on the node as `taxonomy_tag`."""
+    if tag not in seen_tags:
+        seen_tags.add(tag)
+        return tag
+    n = 2
+    while f"{tag}{n}" in seen_tags:
+        n += 1
+    out = f"{tag}{n}"
+    seen_tags.add(out)
+    return out
+
+
+def enrich(nodes, statement, seen, counter, table=None, inherited=(), defs=None,
+           seen_tags=None):
     """Add field_path (unique) to tagged nodes and data_type/extraction_prompt
     to extracted LEAVES, so parse_field_specs + validate_extraction_schema
     accept the tree. A tagless VALUED leaf (a subtotal the customer never tagged)
     gets a synthetic deterministic tag so it stays an addressable Fact. Group and
     derived nodes need no extraction_prompt."""
+    if seen_tags is None:
+        seen_tags = set()
     if table is None:
         table = _alias_table(statement)
     if defs is None:
@@ -422,12 +441,17 @@ def enrich(nodes, statement, seen, counter, table=None, inherited=(), defs=None)
         children = n.get("fields")
         if children:
             if n.get("tag"):
+                original = n["tag"]
+                n["tag"] = _uniq_tag(original, seen_tags)
+                if n["tag"] != original:
+                    n["taxonomy_tag"] = original
                 n["field_path"] = _uniq(f"{statement}.{n['tag']}", seen)
             # the PARENT carries the aliases too: it is the concept a report
             # line is mapped against (fdi.core.concepts groups by parent).
             if aliases:
                 n["note_aliases"] = list(dict.fromkeys(aliases))
-            enrich(children, statement, seen, counter, table, aliases, defs)
+            enrich(children, statement, seen, counter, table, aliases, defs,
+                   seen_tags)
             continue
         # childless leaf
         tag = n.get("tag")
@@ -437,6 +461,10 @@ def enrich(nodes, statement, seen, counter, table=None, inherited=(), defs=None)
             n["tag"] = tag
             n["synthetic_tag"] = True
         if tag:
+            unique = _uniq_tag(tag, seen_tags)
+            if unique != tag:
+                n["taxonomy_tag"] = tag
+                n["tag"] = tag = unique
             n["field_path"] = _uniq(f"{statement}.{tag}", seen)
         if aliases:
             n["note_aliases"] = list(dict.fromkeys(aliases))

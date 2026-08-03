@@ -199,6 +199,81 @@ def _walk_groups(
         _walk_groups(children, statement, out, min_children)
 
 
+def parent_map(schema: Mapping[str, object]) -> dict[str, str]:
+    """child tag -> nearest tagged ancestor.
+
+    Needed to catch a note's TOTAL row being mapped onto one of its own
+    components: note 15's grand total 13,710 was placed on `OTTAX` ("Other tax
+    items"), whose ancestor `TOTTAXEXP` was already known to be 13,710 -- so the
+    reconstructed total came out at exactly twice the truth. Recognising that a
+    value equals an ANCESTOR's is what makes that detectable."""
+    out: dict[str, str] = {}
+    modules = schema.get("modules") if isinstance(schema, Mapping) else None
+    if not isinstance(modules, list):
+        return out
+
+    def walk(fields: object, ancestor: str) -> None:
+        if not isinstance(fields, list):
+            return
+        for node in fields:
+            if not isinstance(node, Mapping):
+                continue
+            tag = node.get("tag")
+            own = tag if isinstance(tag, str) and tag else ancestor
+            if isinstance(tag, str) and tag and ancestor:
+                out[tag] = ancestor
+            walk(node.get("fields"), own)
+
+    for module in modules:
+        if not isinstance(module, Mapping):
+            continue
+        units = module.get("retrieval_units")
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if isinstance(unit, Mapping):
+                walk(unit.get("fields"), "")
+    return out
+
+
+def all_concepts(schema: Mapping[str, object]) -> tuple[ConceptCandidate, ...]:
+    """EVERY tagged concept in the schema, top-level parents included.
+
+    Not the same set as the union of `ConceptIndex` group candidates, and the
+    difference is the whole point: a group holds a parent's DESCENDANTS, so a
+    root concept is a group *key* but appears in no group's candidate list.
+    Mapping the face against group candidates alone therefore cannot place
+    "Revenue from operations" or "Profit before tax" -- measured on TCS, 15 of
+    28 face rows went unmapped, including every waterfall total.
+
+    Face rows are summaries and match parents; note rows are detail and match
+    descendants. The two need different candidate sets."""
+    modules = schema.get("modules") if isinstance(schema, Mapping) else None
+    if not isinstance(modules, list):
+        return ()
+    seen: set[str] = set()
+    out: list[ConceptCandidate] = []
+    for module in modules:
+        if not isinstance(module, Mapping):
+            continue
+        units = module.get("retrieval_units")
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if not isinstance(unit, Mapping):
+                continue
+            fields = unit.get("fields")
+            if not isinstance(fields, list):
+                continue
+            # A synthetic root makes the unit's own top-level fields children,
+            # so they are emitted like any other tagged node.
+            for cand in _tagged_descendants({"fields": fields}):
+                if cand.tag not in seen:
+                    seen.add(cand.tag)
+                    out.append(cand)
+    return tuple(out)
+
+
 def build_concept_index(
     schema: Mapping[str, object], *, min_children: int = 2
 ) -> ConceptIndex:

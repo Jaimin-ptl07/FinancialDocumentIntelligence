@@ -298,11 +298,133 @@ design, and it silently disables fallback retrieval.
 |---|---|---|
 | **A** | Verify mapper **accuracy** (not coverage) on RITES + RIL by hand | newly mapped concepts are correct, not merely present |
 | **B** | ~~Partial-input suppression~~ → completeness-marking (see 5.1) | DONE: 9 partial facts flagged with coverage; footing gate rejects partial inputs |
-| **C** | Port to `fdi.core` + `fdi.pipeline`: `note_index`, `face_index`, note-unit extractor, mapper wiring | TCS P&L reproduces the pilot: ~8 calls, ≥62% recall, ≥91% precision |
-| **D** | Author Assets / Liabilities / Equity in v4.3 shape | 0 invariant violations per module |
+| **C** | Port to `fdi.core` + `fdi.pipeline`: `note_index`, `face_index`, note-unit extractor, mapper wiring | **DONE** — 9 calls, 66.0% recall, 93.9% precision on TCS P&L (see 7.1–7.2) |
+| **D** | Author Assets / Liabilities / Equity in v4.3 shape | 0 composition violations per module (see 7.3 — the gate is now machine-checked) |
 | **E** | Add a **cash-flow module** | the taxonomy has none, and CF anchors miss RITES and RIL — two independent gaps pointing at the same hole |
 | **F** | Stage removals + `FDI_MILVUS_URI` | ingestion runs clean, no permanent failures |
 | **G** | Mapping memory | second run of a document is deterministic and cheaper |
+
+### 7.1 Phase C outcome — and what porting exposed
+
+Ported into `fdi.core` (pure, 43 unit tests):
+
+- **`fdi/core/numbers.py`** — `parse_amount` / `looks_numeric` / `row_amounts`.
+  The model never interprets separators again.
+- **`fdi/core/statements.py`** — `find_statement_tables` (content-anchored),
+  `parse_face_table`, `note_windows` (offset-based), `tables_in_window`,
+  `verify_footing`.
+
+Wired: `fdi/pipeline/extractor.py` now derives face pages from table **content**
+and falls back to heading matching only when nothing scores.
+
+**Running all three issuers through the ported code found a bug the pilot never
+could.** The pilot only ran TCS end to end, and TCS's notes are numbered flatly
+(`10.`, `13(a)`). `note_windows` took its heading grammar as a *caller argument*,
+so the face parser accepted RITES's dotted refs (`2.17`) while the heading
+matcher — a different regex, in the caller — did not. All 10 of RITES's
+references resolved to nothing, silently, and every note-driven fact for that
+issuer was lost.
+
+Fix: the grammar moved **into** `statements.py` next to `parse_note_ref`. What
+the face cites and what the notes are headed are one numbering system, so they
+get one definition. RITES went **0/10 → 8/10** notes resolved; TCS unchanged at
+9/11.
+
+The generalizable lesson: *a single-issuer pilot cannot validate a
+multi-issuer contract.* Two representations of the same concept in two places
+will drift, and the drift is invisible until a second issuer exercises it.
+
+Measured after the port (real OCR, deterministic stage only):
+
+| Issuer | Face found | Refs on face | Notes resolved |
+|---|---|---|---|
+| TCS | p253, score 6 | 11 | 9 |
+| RITES | p61, score 5 | 10 | 8 |
+| RIL | p145, score 6 | **0** | n/a |
+
+**RIL has no note column on its P&L face at all** (header is
+`{'', '2025-26', '(₹ in crore) 2024-25'}`). Note-following cannot degrade
+gracefully here because there is nothing to follow — RIL must fall back to
+face-only extraction plus section search. This is *absent ≠ missed*, and it is
+the strongest argument yet that note-following must be an accelerator, never a
+prerequisite.
+
+### 7.2 Phase C, LLM half — planning, and a second candidate-set bug
+
+Added `fdi/core/note_plan.py`: `plan_from_face` → `build_note_prompt` →
+`read_note_reply`. Planning decides which notes to open (by **reference** when a
+face row cites one, by **title** when it does not) and what each is asked about.
+`read_note_reply` drops any tag the unit never offered — the model occasionally
+answers with a plausible concept from elsewhere in the taxonomy, and a fact
+attributed to a note that does not mention it is unauditable.
+
+**A second bug of exactly the same shape as the note-grammar one.** A
+`ConceptGroup` holds a parent's *descendants*, so a root concept is a group
+**key** but appears in no group's candidate list. Mapping the face against group
+candidates alone left **15 of TCS's 28 face rows unmapped** — including "Revenue
+from operations" and every waterfall total. Fixed with `concepts.all_concepts()`.
+Face rows are summaries and match parents; note rows are detail and match
+descendants — the two need *different* candidate sets, and conflating them is
+what hid this.
+
+Both bugs were one thing: a set that looked complete from one caller's vantage
+point and was silently partial from another's.
+
+**TCS P&L through the ported core, scored against the hand-read ground truth:**
+
+| | Gate (pilot) | Ported core |
+|---|---|---|
+| LLM calls | ~8 | **9** |
+| Recall | ≥62% | **66.0%** (31/47) |
+| Precision | ≥91% | **93.9%** (31/33) |
+
+Phase C gate **met**. 22 facts came from the face with no model call at all.
+
+One scored "miss" was the *ground truth* being stale, not the extractor: it
+recorded `PBMI = 49,096` (profit after tax), but PBMI is "11 plus/minus 12 & 13"
+— profit for the period **plus OCI**, i.e. 49,096 − 600 = **48,496**, which is
+what the schema encodes and what extraction returned. Corrected in the GT.
+
+Known remaining defects (not gate-blocking, carried to Phase D):
+
+- `NGINV` 263 vs 196 and `OTEEBEXP` 8,065 vs 3,349 — wrong row chosen within
+  the right note.
+- 4 spurious facts (`OTPRVE`, `FWS`, `OTTAXCT`, `OTTAXDT`) — values placed on
+  concepts TCS does not report.
+- 6 face labels still unmapped, of which 3 are the exceptional items and 2 are
+  OCI lines that collide on one tag (`map_lines` claims a concept once, so the
+  second legitimately-distinct line is dropped). That collision is a schema
+  gap, not a mapper bug.
+
+### 7.3 Phase D — the gate is now machine-checked, and the work is measured
+
+"0 invariant violations" was previously something I asserted by hand. It is now
+`fdi.core.schema.validate_composition`, with 10 tests including regressions for
+both defects that actually shipped.
+
+**It found one in the P&L schema I had already declared clean.** `EXCHEXP` was
+`origin: "derived"` with `derivation.inputs: []` — its roll-up target was never
+confirmed, so I left the formula empty. That is not a composition, and worse, a
+derived concept with nothing to derive from is *permanently null*. Now
+`extracted`, with the open question retained.
+
+Applied to v4.2, it sizes Phase D exactly:
+
+| Module | Violations | Shape |
+|---|---|---|
+| profit_and_loss | 27 | 24 derivation-with-no-children, 3 inputs≠children |
+| assets | 14 | all derivation-with-no-children |
+| liabilities | 5 | 4 derivation-with-no-children, **1 duplicate tag** |
+| equity | 5 | all derivation-with-no-children |
+
+Nearly all of it is one shape: v4.2 declares a total's formula on a *flat* node
+whose inputs are peers elsewhere in the tree. v4.3 restructuring is precisely
+the act of moving those children underneath the parent that sums them.
+
+The duplicate is a genuine data bug, not a restructuring artifact: `WCL` is used
+twice in liabilities — once at sr 1.2 for working-capital loans, again at sr 1.3
+for **Buyers Credit**. Two different concepts share one tag, so whichever loads
+second is unreachable. This needs a taxonomy decision, not a schema edit.
 
 ---
 

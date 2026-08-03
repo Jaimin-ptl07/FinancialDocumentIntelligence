@@ -218,12 +218,19 @@
                 { "tag":"EEBEXP","field_name":"Employee benefit expense","sr_no":"6.6","origin":"derived","legacy_tag":true,
                   "note_aliases":["employee benefit expenses","employee benefits"],
                   "definition":"All staff costs: salaries, wages, incentives, contributions to funds, share-based payments and staff welfare.",
-                  "derivation":{"method":"sum","inputs":["FWS","OTEEBEXP"]},
+                  "measured":"Schedule III employee-benefit notes disclose THREE lines, not two. TCS: salaries 1,00,728 + contributions to funds 8,065 + staff welfare 3,349 = 1,12,142, which is the reported total EXACTLY. With only two children, OTEEBEXP carried aliases for both 'staff welfare' and 'contributions to provident and other funds', so the two lines were indistinguishable, one had nowhere to go, and the composition came up short by whichever lost.",
+                  "derivation":{"method":"sum","inputs":["FWS","EEBPF","OTEEBEXP"]},
                   "fields":[
                     {"tag":"FWS","field_name":"Direct Labour (Factory wages & salaries)","origin":"extracted","data_type":"decimal",
-                     "note_aliases":["salaries incentives and allowances"]},
-                    {"tag":"OTEEBEXP","field_name":"Other Employee Benefits","origin":"extracted","data_type":"decimal",
-                     "note_aliases":["staff welfare expenses","contributions to provident and other funds"]}
+                     "note_aliases":["salaries incentives and allowances","salaries and wages","salaries, wages and bonus"]},
+                    {"tag":"EEBPF","field_name":"Contributions to provident and other funds","origin":"extracted","data_type":"decimal",
+                     "new_tag":true,
+                     "note_aliases":["contributions to provident and other funds","contribution to provident and other funds","contribution to provident fund","staff benefit schemes"],
+                     "definition":"Employer contributions to defined-contribution and defined-benefit plans. NEW TAG: the Q3VENI sheet defines no code for this line, so this one is ours and needs sign-off before it is treated as canonical.",
+                     "open_question":"Confirm the customer has no existing code for employer fund contributions before this is adopted."},
+                    {"tag":"OTEEBEXP","field_name":"Staff welfare and other employee benefits","origin":"extracted","data_type":"decimal",
+                     "note_aliases":["staff welfare expenses","staff welfare","employee welfare expenses"],
+                     "definition":"Welfare spend only. Fund contributions belong to EEBPF -- keeping both here made the two lines undecidable."}
                   ]},
 
                 { "tag":"TOTFC","field_name":"Finance costs","sr_no":"6.7","origin":"derived",
@@ -316,9 +323,8 @@
                       ]},
                     {"tag":"SLNDEXP","field_name":"Selling and distribution expenses","sr_no":"6.11.16","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
                     {"tag":"RNB","field_name":"Royalty and Brands","sr_no":"6.11.17","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
-                    { "tag":"EXCHEXP","field_name":"Exchange difference","sr_no":"6.11.18","origin":"derived","legacy_tag":true,
-                      "open_question":"CFL/EXCL/NONLMTM/NONLRSA/NONLRSL have no roll-up pointer in the sheet. They are forex items and EXCHEXP is the legacy forex bucket, but this is INFERRED and must be confirmed before it is treated as a calculation edge.",
-                      "derivation":{"method":"sum","inputs":[]} },
+                    { "tag":"EXCHEXP","field_name":"Exchange difference","sr_no":"6.11.18","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP","legacy_tag":true,
+                      "open_question":"CFL/EXCL/NONLMTM/NONLRSA/NONLRSL have no roll-up pointer in the sheet. They are forex items and EXCHEXP is the legacy forex bucket, but this is INFERRED and must be confirmed before it is treated as a calculation edge. Until it IS confirmed EXCHEXP stays EXTRACTED: an empty derivation claims a formula the schema does not hold, and origin:derived on a concept with no children would make it permanently underivable and permanently null." },
                     {"tag":"CED","field_name":"Cost effluent and Environment expense","sr_no":"6.11.19","origin":"extracted","data_type":"decimal","classified_as":"TOTOTSGAEXP"},
                     { "tag":"WOANL","field_name":"W/off & loss on sale - assets/Investments","sr_no":"6.11.20","origin":"derived","legacy_tag":true,
                       "comment":"Children are the six write-off/loss rows whose Q3Redirection points here.",
@@ -495,16 +501,22 @@
               "derivation":{"method":"sum","inputs":["CT","DT","OTTAX"]},
               "fields":[
                 {"tag":"CT","field_name":"Current tax","sr_no":"10.1","origin":"extracted","data_type":"decimal",
-                 "note_aliases":["current tax"]},
+                 "note_aliases":["current tax"],
+                 "definition":"The current-tax SUBTOTAL as the filer reports it. Most filers already fold prior-year adjustments into this figure -- TCS prints 16,124 less a 1,946 prior-year benefit and reports 14,178 -- so take the subtotal, not its parts."},
                 {"tag":"DT","field_name":"Deferred tax","sr_no":"10.2","origin":"extracted","data_type":"decimal",
                  "note_aliases":["deferred tax"],
                  "definition":"Tax effect of temporary differences. Often a credit (negative) when reversing."},
                 { "tag":"OTTAX","field_name":"Other tax","sr_no":"10.3","origin":"derived","legacy_tag":true,
+                  "definition":"ONLY a tax charge the filer presents SEPARATELY FROM and IN ADDITION TO its current- and deferred-tax lines, such that current + deferred + this equals the reported total tax expense. If the reported total already equals current + deferred, there is no other tax and this is a correct null.",
+                  "measured":"On TCS this was filled with -1,566 taken from the EFFECTIVE-TAX-RATE RECONCILIATION ('Income exempt from tax'), a table that explains why expected tax differs from reported tax rather than composing it. Total tax expense then came out at 12,144 against a reported 13,710. TCS's total is exactly current 14,178 + deferred (468); nothing else belongs in it.",
                   "derivation":{"method":"sum","inputs":["MAT","OTTAXCT","OTTAXDT"]},
                   "fields":[
-                    {"tag":"MAT","field_name":"MAT Credit Entitlement","origin":"extracted","data_type":"decimal"},
-                    {"tag":"OTTAXCT","field_name":"Other tax items related to Current Tax","origin":"extracted","data_type":"decimal","classified_as":"CTTAX"},
-                    {"tag":"OTTAXDT","field_name":"Other tax items related to Deferred Tax","origin":"extracted","data_type":"decimal","classified_as":"DTTAX"}
+                    {"tag":"MAT","field_name":"MAT Credit Entitlement","origin":"extracted","data_type":"decimal",
+                     "definition":"Minimum Alternate Tax credit recognised in the charge. Ind-AS filers under the new regime rarely have one."},
+                    {"tag":"OTTAXCT","field_name":"Other tax items related to Current Tax","origin":"extracted","data_type":"decimal","classified_as":"CTTAX",
+                     "definition":"An ADDITIONAL current-tax charge sitting OUTSIDE the reported current-tax subtotal. A prior-year adjustment shown as a line WITHIN that subtotal is already counted in CT and must not be mapped here."},
+                    {"tag":"OTTAXDT","field_name":"Other tax items related to Deferred Tax","origin":"extracted","data_type":"decimal","classified_as":"DTTAX",
+                     "definition":"An ADDITIONAL deferred-tax charge outside the reported deferred-tax subtotal. Rows of a deferred-tax MOVEMENT schedule (opening / recognised / closing) are not this."}
                   ]}
               ]},
 

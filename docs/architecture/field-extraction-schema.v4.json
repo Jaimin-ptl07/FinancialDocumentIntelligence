@@ -7023,14 +7023,15 @@
       },
       {
        "field_name": "Buyers Credit",
-       "tag": "WCL",
+       "tag": "WCL2",
        "origin": "derived",
        "data_type": "decimal",
        "sr_no": null,
-       "field_path": "liabilities.BS04.WCL#2",
+       "field_path": "liabilities.BS04.WCL2",
        "aliases": [
         "Buyers Credit"
        ],
+       "taxonomy_tag": "WCL",
        "is_new": false,
        "is_ratio": false,
        "redirect": {

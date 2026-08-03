@@ -102,16 +102,57 @@ def _all_leaves(schema):
             yield from _walk_leaves(u["fields"])
 
 
-def test_duplicate_tag_gets_unique_field_path():
+def test_a_reused_taxonomy_code_yields_two_addressable_concepts():
     schema = build_schema(_norm_doc())
-    # WCL appears twice in Liabilities (both derived); walk the tree, not the
-    # extracted specs, since derived nodes are absent from parse_field_specs.
-    wcl = [lf for lf in _all_leaves(schema) if lf.get("tag") == "WCL"]
+    # WCL appears twice in the sheet's Liabilities. This used to assert that
+    # BOTH nodes kept the tag `WCL` and were told apart by field_path alone --
+    # which was the bug: nothing downstream is keyed by field_path, so the
+    # second concept was unreachable. Both must now be addressable BY TAG.
+    leaves = _all_leaves(schema)
+    wcl = [lf for lf in leaves if str(lf.get("tag", "")).startswith("WCL")
+           and lf.get("field_name", "").startswith(("Working capital", "Buyers"))]
     assert len(wcl) >= 2
+    assert len({lf["tag"] for lf in wcl}) == len(wcl)
     assert len({lf["field_path"] for lf in wcl}) == len(wcl)
+
+
+def test_no_tag_is_defined_twice_anywhere_in_the_schema():
+    tags = [lf["tag"] for lf in _all_leaves(build_schema(_norm_doc())) if lf.get("tag")]
+    assert len(tags) == len(set(tags))
 
 
 def test_all_field_paths_globally_unique():
     schema = build_schema(_norm_doc())
     paths = [lf["field_path"] for lf in _all_leaves(schema)]
     assert len(paths) == len(set(paths))
+
+
+def test_a_tag_the_taxonomy_reuses_is_made_unique():
+    """REGRESSION. The sheet uses `WCL` twice -- working-capital loans (children
+    WCLI/WCLB/WCLO) and Buyers Credit (children STBYCRD/LTBYCRD). Only
+    `field_path` was disambiguated, so both concepts shared one tag and every
+    tag-keyed structure downstream (by_tag, all_concepts, for_tag, XBRL) kept
+    the first and silently discarded the second: it could never be extracted."""
+    schema = build_schema({"statements": [{"statement": "liabilities", "rows": [
+        {"block_id": "B-3", "tag": "WCL", "particulars": "Working capital loans",
+         "sr_no": "1.2", "origin": "extracted"},
+        {"block_id": "B-3", "tag": "WCL", "particulars": "Buyers Credit",
+         "sr_no": "1.3", "origin": "extracted"},
+    ]}]})
+    fields = schema["modules"][0]["retrieval_units"][0]["fields"]
+    tags = [f["tag"] for f in fields]
+
+    assert tags == ["WCL", "WCL2"]
+    assert len(tags) == len(set(tags))
+    # the customer's own code is never lost
+    assert "taxonomy_tag" not in fields[0]
+    assert fields[1]["taxonomy_tag"] == "WCL"
+
+
+def test_a_tag_used_once_is_left_exactly_as_the_customer_wrote_it():
+    schema = build_schema({"statements": [{"statement": "assets", "rows": [
+        {"block_id": "B-1", "tag": "INVT", "particulars": "Inventories",
+         "sr_no": "4.1", "origin": "extracted"},
+    ]}]})
+    node = schema["modules"][0]["retrieval_units"][0]["fields"][0]
+    assert node["tag"] == "INVT" and "taxonomy_tag" not in node
