@@ -107,7 +107,10 @@ def test_provenance_is_carried_on_every_item():
     revenue = next(i for i in items if i.label == "Revenue from operations")
     assert revenue.page == 150
     assert revenue.table_index == 0
-    assert revenue.row_index == 2
+    # `parse_face_table` yields only VALUED rows, so this counts position within
+    # that filtered sequence -- not the raw table row. The header and the
+    # "INCOME" caption row carry no amount, so revenue is the first item.
+    assert revenue.row_index == 0
     assert revenue.origin == "face"
 
 
