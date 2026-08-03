@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from fdi.core.basis import basis_regions
-from fdi.core.fog import Edge, LineItem, line_item_id
+from fdi.core.fog import Edge, LineItem, build_fog_artifact, line_item_id
 from fdi.core.numbers import parse_amount
 from fdi.core.statements import (
     STATEMENT_ANCHORS,
@@ -302,3 +302,65 @@ def _page_of_table(table: Mapping[str, object]) -> int:
         return 0
     page = first.get("page_number")
     return page if isinstance(page, int) and not isinstance(page, bool) else 0
+
+
+def build_fog(
+    ocr: Mapping[str, object],
+    statement_index: Mapping[str, object],
+    note_index: Mapping[str, object],
+    *,
+    doc_id: str,
+) -> dict[str, object]:
+    """The complete deterministic FOG for one document -- every basis.
+
+    Zero LLM calls. Diagnostics are per basis and deliberately name the
+    quantities that distinguish ABSENT from MISSED: an issuer that prints no
+    note column (`face_refs == 0`, RIL) looks nothing like one whose reference
+    grammar failed to parse (`face_refs > 0, refs_resolved == 0`, the RITES
+    bug). Both were previously invisible. Total: never raises."""
+    raw_bases = note_index.get("bases") if isinstance(note_index, Mapping) else None
+    bases = sorted(raw_bases) if isinstance(raw_bases, Mapping) else []
+
+    regions: dict[
+        str,
+        tuple[
+            list[Mapping[str, object]], list[Mapping[str, object]],
+            list[LineItem], list[Edge],
+        ],
+    ] = {}
+    diagnostics: dict[str, object] = {}
+
+    raw_statements = (
+        statement_index.get("statements") if isinstance(statement_index, Mapping) else None
+    )
+    all_statements = raw_statements if isinstance(raw_statements, list) else []
+
+    for basis in bases:
+        face_items, face_edges = face_line_items(
+            ocr, statement_index, note_index, basis=basis
+        )
+        note_items, note_edges = note_line_items(ocr, note_index, basis=basis)
+
+        statements = [
+            s for s in all_statements
+            if isinstance(s, Mapping) and s.get("basis") == basis
+        ]
+        raw_notes = _region_of(note_index, basis).get("notes")
+        notes = [n for n in (raw_notes if isinstance(raw_notes, list) else [])
+                 if isinstance(n, Mapping)]
+
+        regions[basis] = (
+            statements, notes, [*face_items, *note_items], [*face_edges, *note_edges],
+        )
+        face_refs = sum(1 for i in face_items if i.ref)
+        diagnostics[basis] = {
+            "statements": len(statements),
+            "notes_indexed": len(notes),
+            "face_refs": face_refs,
+            "refs_resolved": sum(1 for e in face_edges if e.type == "REFERENCES"),
+            "line_items": len(face_items) + len(note_items),
+            "face_items": len(face_items),
+            "note_items": len(note_items),
+        }
+
+    return build_fog_artifact(regions, doc_id=doc_id, diagnostics=diagnostics)
