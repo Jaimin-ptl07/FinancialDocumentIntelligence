@@ -60,6 +60,25 @@ def test_looks_numeric_distinguishes_a_value_row_from_a_caption():
     assert looks_numeric("-") is False
 
 
+def test_is_nil_marker_separates_an_explicit_nil_from_an_empty_cell():
+    """`parse_amount` returns None for both, deliberately -- neither is a
+    number. But a caption row has no amount cells (empty) while a nil row has
+    amount cells the issuer filled in with an explicit nil, and a nil row misread
+    as a caption re-labels every row beneath it."""
+    from fdi.core.numbers import is_nil_marker
+
+    assert is_nil_marker("-") is True
+    assert is_nil_marker(" – ") is True
+    assert is_nil_marker("NIL") is True
+    assert is_nil_marker("N/A") is True
+    assert is_nil_marker("") is False
+    assert is_nil_marker("   ") is False
+    assert is_nil_marker("1,833") is False
+    assert is_nil_marker("Gross block") is False
+    assert is_nil_marker(None) is False
+    assert is_nil_marker(0) is False
+
+
 def test_row_amounts_preserves_period_order():
     row = {0: "Revenue from operations", 1: "10", 2: "2,20,938", 3: "2,14,853"}
     # note: col 1 is the Note column and DOES parse as a number -- callers that

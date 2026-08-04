@@ -138,9 +138,14 @@ def build_fog_artifact(
             ],
         }
     return {
-        # v2 adds `source_row` to every LineItem body -- see LineItem's
+        # v3: a note row printing an explicit nil (`Communication | - | -`) is
+        # now a LineItem with `current=None` instead of the block's caption, so
+        # note `row_index` ordinals -- and therefore LineItem ids -- move.
+        # `diagnostics` gains `refs_beyond_bound` and
+        # `regions_without_statements`.
+        # v2 added `source_row` to every LineItem body -- see LineItem's
         # docstring for why the valued-row ordinal could not address a cell.
-        "schema_version": 2,
+        "schema_version": 3,
         "doc_id": doc_id,
         "bases": bases,
         "diagnostics": dict(diagnostics),

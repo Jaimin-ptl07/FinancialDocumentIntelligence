@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from fdi.core.basis import basis_regions
 from fdi.core.fog import Edge, LineItem, build_fog_artifact, line_item_id
 from fdi.core.notes import find_statement_pages
-from fdi.core.numbers import parse_amount
+from fdi.core.numbers import is_nil_marker, parse_amount
 from fdi.core.statements import (
     STATEMENT_ANCHORS,
     FaceRow,
@@ -374,14 +374,33 @@ def _is_note_header_label(text: object) -> bool:
 
 
 def _note_rows(table: Mapping[str, object]) -> list[FaceRow]:
-    """A note table's valued rows, with the header skipped and captions kept.
+    """A note table's rows, with the header skipped and captions kept.
 
     A note table has no note column to dodge, so every non-label cell is a
-    candidate amount -- but a row with NO amount anywhere is a caption or a
-    section break, and it is carried onto the rows beneath it exactly as
-    `parse_face_table` does. That is not cosmetic: a PPE note prints
-    `Additions` once under "Gross block" and once under "Accumulated
-    depreciation", and without the caption the two are indistinguishable nodes.
+    candidate amount -- but a row with no amount CELLS is a caption or a section
+    break, and it is carried onto the rows beneath it. That is not cosmetic: a
+    PPE note prints `Additions` once under "Gross block" and once under
+    "Accumulated depreciation", and without the caption the two are
+    indistinguishable nodes.
+
+    A NIL ROW IS NOT A CAPTION. `Communication | - | -` has no PARSEABLE amount,
+    so mirroring `parse_face_table`'s "no amount => caption" rule made it the
+    running caption, and every row under it -- `Deletions`, `Disposals` -- was
+    then recorded under "Communication" instead of "Gross block". Movement
+    schedules print `-` constantly, so that is not a corner case, and a wrong
+    caption is worse than an empty one: it is an affirmatively false claim about
+    which block a figure belongs to, on the one field Phase 3's mapper
+    arbitrates with. The test is STRUCTURAL, which is what the two shapes
+    actually differ by: a caption has no amount cells at all, a nil row has
+    amount cells the issuer filled in with an explicit nil marker.
+
+    A nil row becomes a LineItem with `current=None`, NOT a skip. The issuer
+    disclosed the line and asserted it is nil; dropping it would make a
+    disclosed nil indistinguishable from a line that was never printed, which is
+    the `absent != missed` violation this whole artifact exists to prevent.
+    `line_item_body` already keeps `None` rather than collapsing it to 0.0, and
+    `scripts/score_pipeline.py::facts_from_fog` already ignores a value-less
+    item, so no consumer reads the nil as a figure.
 
     Only the FIRST row can be the header -- scanning the whole table lets a late
     row that happens to say "Particulars" swallow real disclosures."""
@@ -400,13 +419,20 @@ def _note_rows(table: Mapping[str, object]) -> list[FaceRow]:
         label = cols.get(0, "").strip()
         if not label:
             continue
+        values = [cols.get(c, "") for c in sorted(cols) if c != 0]
         amounts = [
-            parsed
-            for c in sorted(cols)
-            if c != 0 and (parsed := parse_amount(cols.get(c))) is not None
+            parsed for v in values if (parsed := parse_amount(v)) is not None
         ]
         if not amounts:
-            caption = label          # a row with no amount anywhere is a CAPTION
+            if not any(is_nil_marker(v) for v in values):
+                caption = label      # no amount CELLS at all -- a CAPTION
+                continue
+            # Amount cells present, filled in with an explicit nil: a disclosed
+            # line worth nothing, not a heading. Keep the running caption.
+            out.append(FaceRow(
+                label=label, caption=caption, ref="",
+                current=None, prior=None, source_row=r,
+            ))
             continue
         out.append(FaceRow(
             label=label, caption=caption, ref="",

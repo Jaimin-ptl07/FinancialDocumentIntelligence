@@ -84,6 +84,27 @@ def parse_amount(text: object) -> float | None:
     return value
 
 
+def is_nil_marker(text: object) -> bool:
+    """True when a cell EXPLICITLY prints nil -- `-`, `–`, `NIL`, `N/A`, `*`.
+
+    An EMPTY cell is NOT a nil marker: it carries no assertion at all. That
+    distinction is what separates a CAPTION from a nil row, and getting it wrong
+    is not a small loss. A caption is structurally a heading -- it has no amount
+    cells, so the label is the whole row -- and the caption is carried onto every
+    row beneath it. A nil row (`Communication | - | -`) HAS amount cells; the
+    issuer filled them in with an explicit nil. Classifying it as a caption
+    re-labels the block for every following row, so `Deletions` gets recorded
+    under "Communication" instead of "Gross block": an affirmatively false
+    provenance claim, which is worse than the unknown it replaces.
+
+    `parse_amount` cannot answer this: it returns None for a nil marker and for
+    an empty cell alike, deliberately, because neither is a number."""
+    if not isinstance(text, str):
+        return False
+    raw = text.strip().lower()
+    return bool(raw) and raw in _NIL
+
+
 def looks_numeric(text: object) -> bool:
     """True when a cell holds an amount. Used to tell a VALUE ROW from a CAPTION:
     a row with no amount in any column is a section header, not a concept, and

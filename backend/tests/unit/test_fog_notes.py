@@ -59,9 +59,21 @@ def test_brackets_are_negative():
     assert travel.current == -468.0
 
 
-def test_a_dash_row_is_skipped_it_carries_no_figure():
+def test_a_nil_row_is_a_line_item_with_no_figure_not_a_skip():
+    """SUPERSEDES `test_a_dash_row_is_skipped_it_carries_no_figure`.
+
+    The issuer PRINTED `Communication | - | -`: it disclosed the line and
+    asserted it is worth nothing. Dropping the row makes a disclosed nil
+    indistinguishable from a line that was never printed -- the `absent !=
+    missed` violation this artifact exists to prevent -- so it becomes a
+    LineItem carrying `current=None`. `line_item_body` keeps the `None` rather
+    than collapsing it to 0.0, and `facts_from_fog` ignores a value-less item,
+    so nothing downstream reads the nil as a figure."""
     items, _ = _build()
-    assert all(i.label != "Communication" for i in items)
+    nil = next(i for i in items if i.label == "Communication")
+    assert nil.current is None
+    assert nil.prior is None
+    assert nil.source_row == 3
 
 
 def test_the_note_total_is_kept_it_is_the_arbiter():
@@ -134,6 +146,62 @@ def test_a_repeated_label_under_two_blocks_keeps_its_caption():
     additions = [i for i in items if i.label == "Additions"]
     assert [i.caption for i in additions] == ["Gross block", "Accumulated depreciation"]
     assert len({i.id for i in additions}) == 2
+
+
+def test_a_nil_row_does_not_become_the_caption_for_the_rows_beneath_it():
+    """Probe B of the fix-wave re-review, and the worse half of the nil-row bug.
+
+    Mirroring `parse_face_table`'s "no parseable amount => caption" rule made
+    `Communication | - | -` the running caption, so `Deletions` was recorded
+    under "Communication" instead of "Gross block". Movement schedules print `-`
+    constantly, so this is not a corner case, and a wrong caption is worse than
+    an empty one: it is an affirmatively false claim about which block a figure
+    belongs to, on the field Phase 3's mapper arbitrates with.
+
+    A caption is STRUCTURALLY a heading -- no amount cells at all. A nil row has
+    amount cells the issuer filled in with an explicit nil marker."""
+    ppe = {
+        "bounding_regions": [{"page_number": 305}],
+        "spans": [{"offset": 2150, "length": 300}],
+        "cells": [
+            _cell(0, 0, "Particulars"), _cell(0, 1, "2025-26"), _cell(0, 2, "2024-25"),
+            _cell(1, 0, "Gross block"),
+            _cell(2, 0, "Additions"), _cell(2, 1, "120"),
+            _cell(3, 0, "Communication"), _cell(3, 1, "-"), _cell(3, 2, "-"),
+            _cell(4, 0, "Deletions"), _cell(4, 1, "30"),
+            _cell(5, 0, "Accumulated depreciation"),
+            _cell(6, 0, "Additions"), _cell(6, 1, "45"),
+        ],
+    }
+    ocr = {"paragraphs": [_HEAD], "tables": [ppe]}
+    items, _ = note_line_items(ocr, build_note_index(ocr, _BASIS), basis="consolidated")
+    captions = {i.label: i.caption for i in items}
+    assert captions["Deletions"] == "Gross block"
+    assert captions["Communication"] == "Gross block"
+    # A row that really IS structurally a heading must still caption its block.
+    assert [i.caption for i in items if i.label == "Additions"] == [
+        "Gross block", "Accumulated depreciation",
+    ]
+
+
+def test_a_caption_row_with_blank_amount_cells_is_still_a_caption():
+    """An OCR grid usually emits a caption row's amount cells as EMPTY strings.
+    Empty is not a nil marker: it carries no assertion, so the row is a heading.
+    Getting this backwards would turn every block heading into a value-less
+    LineItem and lose the caption entirely."""
+    table = {
+        "bounding_regions": [{"page_number": 305}],
+        "spans": [{"offset": 2150, "length": 200}],
+        "cells": [
+            _cell(0, 0, "Particulars"), _cell(0, 1, "2025-26"),
+            _cell(1, 0, "Gross block"), _cell(1, 1, "   "),
+            _cell(2, 0, "Additions"), _cell(2, 1, "120"),
+        ],
+    }
+    ocr = {"paragraphs": [_HEAD], "tables": [table]}
+    items, _ = note_line_items(ocr, build_note_index(ocr, _BASIS), basis="consolidated")
+    assert [i.label for i in items] == ["Additions"]
+    assert items[0].caption == "Gross block"
 
 
 def test_ids_are_unique_across_notes_sharing_a_page():
