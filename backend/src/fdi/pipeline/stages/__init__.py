@@ -13,6 +13,9 @@ from fdi.pipeline.stages import (
     embedding as embedding,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    fog_mapping as fog_mapping,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     fog_objects as fog_objects,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
