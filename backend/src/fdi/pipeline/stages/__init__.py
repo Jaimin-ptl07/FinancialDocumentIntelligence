@@ -19,6 +19,9 @@ from fdi.pipeline.stages import (
     fog_objects as fog_objects,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    fog_reason as fog_reason,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     graph as graph,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
