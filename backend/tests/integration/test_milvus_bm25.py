@@ -9,6 +9,7 @@ import os
 import uuid
 
 import pytest
+from pymilvus.exceptions import MilvusException
 
 from fdi.platform.vectorstore import MilvusVectorStore
 
@@ -28,9 +29,19 @@ _MILVUS_URI = os.environ.get("FDI_MILVUS_URI")
 def store() -> MilvusVectorStore:
     if not _MILVUS_URI:
         pytest.skip("FDI_MILVUS_URI not set")
-    return MilvusVectorStore(
-        uri=_MILVUS_URI, collection=f"test_bm25_{uuid.uuid4().hex[:8]}", dim=4
-    )
+    # SET but UNREACHABLE is a third state, and it is the normal one on a
+    # developer host: the configured URI is `milvus:19530`, the compose-network
+    # name that api/worker resolve and the host cannot. Constructing the store
+    # connects, so without this guard the fixture raises and pytest reports an
+    # ERROR on a test that never ran -- even when `-m "not integration"`
+    # deselects it. Skipping keeps "the backend is not available here" distinct
+    # from "the code under test is broken".
+    try:
+        return MilvusVectorStore(
+            uri=_MILVUS_URI, collection=f"test_bm25_{uuid.uuid4().hex[:8]}", dim=4
+        )
+    except MilvusException as exc:  # pragma: no cover - environment-dependent
+        pytest.skip(f"Milvus unreachable at {_MILVUS_URI}: {exc}")
 
 
 def test_bm25_ranks_by_term_overlap_against_real_milvus(

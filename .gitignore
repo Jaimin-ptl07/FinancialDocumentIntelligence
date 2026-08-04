@@ -35,3 +35,6 @@ Thumbs.db
 
 # Isolated git worktrees for feature work
 .worktrees/
+
+# Local host-port overrides (Windows reserved-port workaround)
+docker/compose.override.yml

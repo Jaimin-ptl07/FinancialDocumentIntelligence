@@ -353,13 +353,41 @@ def tables_in_window(
     return out
 
 
-# The arithmetic each face must satisfy, as (plus, minus, target) fragments
-# matched against row labels. Cash flow has NO rule: its anchors already miss
-# RITES and RIL entirely (see the design's Phase 5 hole), so asserting one would
-# manufacture failures on documents whose face is perfectly correct.
-FOOTING_RULES: Mapping[str, tuple[tuple[str, ...], tuple[str, ...], str]] = {
-    "profit_and_loss": (("total income",), ("total expenses",), "profit before tax"),
-    "balance_sheet": (("total equity", "total liabilities"), (), "total assets"),
+# The arithmetic each face must satisfy, as (plus, minus, targets) label
+# fragments. `targets` is ORDERED and tried most-specific first: the first one
+# present on the face is the rule that applies.
+#
+# WHY THE P&L NEEDS TWO TARGETS -- MEASURED ON TCS FY2025-26
+# ----------------------------------------------------------
+# `income - expenses = profit before tax` is only true for a filer with NO
+# exceptional items. TCS FY26 reports three (restructuring 1,388, Labour Codes
+# 2,128, legal claim 1,010), so its face runs::
+#
+#     TOTAL INCOME                             2,71,423
+#     TOTAL EXPENSES                           2,01,410
+#     PROFIT BEFORE EXCEPTIONAL ITEMS AND TAX     70,013   <- income - expenses
+#     ... exceptional items                        4,526
+#     PROFIT BEFORE TAX                           65,487   <- 4,526 lower
+#
+# Both bases scored `passed: False` against the single-target rule. The face is
+# internally perfect (every subtotal ties); the RULE named the wrong row. Note
+# that "profit before exceptional items and tax" does NOT contain the substring
+# "profit before tax", so the two never shadow each other.
+#
+# Cash flow has NO rule: its anchors already miss REMC and RIL entirely (see the
+# design's Phase 5 hole), so asserting one would manufacture failures on
+# documents whose face is perfectly correct.
+FOOTING_RULES: Mapping[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
+    "profit_and_loss": (
+        ("total income",),
+        ("total expenses",),
+        ("profit before exceptional items and tax", "profit before tax"),
+    ),
+    "balance_sheet": (
+        ("total equity", "total liabilities"),
+        (),
+        ("total equity and liabilities", "total assets"),
+    ),
 }
 
 _FOOTING_TOLERANCE = 1.0
@@ -368,20 +396,25 @@ _FOOTING_TOLERANCE = 1.0
 def describe_footing(rows: Sequence[FaceRow], statement: str) -> dict[str, object]:
     """Whether this face's arithmetic ties, as a recordable verdict.
 
-    `passed is None` means COULD NOT CHECK -- a needed line is absent, or the
+    `passed is None` means COULD NOT CHECK -- no target line is present, or the
     statement has no rule. That is deliberately distinct from False: discarding
     a correct table because it labels one line unusually is worse than not
-    checking it. `checked` makes the distinction explicit on the artifact."""
+    checking it. `checked` makes the distinction explicit on the artifact.
+
+    Targets are tried in order and the FIRST one the face actually carries wins,
+    so an issuer reporting exceptional items is checked against the subtotal the
+    arithmetic really produces -- not against a lower line that legitimately
+    differs by the exceptional items. `rule` records which target was used, so a
+    verdict is always traceable to the equation behind it."""
     rule = FOOTING_RULES.get(statement)
     if rule is None:
         return {"rule": "", "passed": None, "checked": False}
-    plus, minus, target = rule
-    passed = verify_footing(
-        rows, plus, minus, target, tolerance=_FOOTING_TOLERANCE
-    )
+    plus, minus, targets = rule
     parts = " + ".join(plus) + ("".join(f" - {m}" for m in minus))
-    return {
-        "rule": f"{parts} = {target}",
-        "passed": passed,
-        "checked": passed is not None,
-    }
+    for target in targets:
+        passed = verify_footing(
+            rows, plus, minus, target, tolerance=_FOOTING_TOLERANCE
+        )
+        if passed is not None:
+            return {"rule": f"{parts} = {target}", "passed": passed, "checked": True}
+    return {"rule": f"{parts} = {targets[0]}", "passed": None, "checked": False}
