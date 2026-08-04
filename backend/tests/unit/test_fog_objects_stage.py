@@ -152,7 +152,7 @@ def test_no_governed_by_edges_are_emitted_policy_is_domain_2():
 def test_malformed_input_yields_a_well_formed_empty_fog():
     fog = build_fog({}, {}, {}, doc_id="d")
     assert fog["doc_id"] == "d"
-    assert fog["schema_version"] == 3
+    assert fog["schema_version"] == 4
 
 
 def test_the_stage_is_registered_with_the_right_deps():
@@ -163,7 +163,7 @@ def test_the_stage_is_registered_with_the_right_deps():
     # `ocr` is DECLARED because the stage reads it: `run.py` builds input_hash
     # from declared deps only, so an undeclared read sits outside the cache key.
     assert stage.deps == ("ocr", "statement_index", "note_index", "structure")
-    assert stage.version == 3
+    assert stage.version == 4
 
 
 def test_the_dag_resolves_and_orders_fog_objects_after_its_indices():

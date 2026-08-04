@@ -20,7 +20,7 @@ class StatementIndexStage:
     # (basis, statement) across every region. `stage.version` is part of the
     # artifact key, so a shape change must bump it or a stale-shaped body is
     # served from cache.
-    version = 3
+    version = 4
     deps: tuple[str, ...] = ("ocr", "structure", "basis")
 
     async def run(self, ctx: StageContext) -> object:

@@ -25,7 +25,7 @@ class FogObjectsStage:
     # diagnostics gain `refs_beyond_bound` / `regions_without_statements`.
     # v2: LineItem bodies carry `source_row`, and a basis with several regions
     # no longer mints duplicate ids. The body shape is part of the cache key.
-    version = 3
+    version = 4
     deps: tuple[str, ...] = ("ocr", "statement_index", "note_index", "structure")
 
     async def run(self, ctx: StageContext) -> object:

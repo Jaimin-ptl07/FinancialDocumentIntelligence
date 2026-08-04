@@ -264,7 +264,7 @@ def build_statement_index(
     # v2 added `discarded`, and chose a face once per (basis, statement) across
     # every region rather than once per region.
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "statements": statements,
         "discarded": discarded,
         "regions": region_bodies,

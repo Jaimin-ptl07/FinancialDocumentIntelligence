@@ -134,7 +134,7 @@ def test_output_is_deterministic_for_content_addressing():
 
 def test_malformed_input_never_raises():
     assert build_statement_index({}, {}) == {
-        "schema_version": 3, "statements": [], "discarded": [],
+        "schema_version": 4, "statements": [], "discarded": [],
         "regions": [{
             "basis": "unknown", "page_lo": 1, "page_hi": 100_000,
             "raw_page_lo": 1, "raw_page_hi": 100_000,
@@ -150,7 +150,7 @@ def test_the_stage_is_registered_with_the_right_deps():
 
     stage = REGISTRY.get("statement_index")
     assert stage.deps == ("ocr", "structure", "basis")
-    assert stage.version == 3
+    assert stage.version == 4
 
 
 def test_the_dag_still_resolves_with_the_new_stage():
