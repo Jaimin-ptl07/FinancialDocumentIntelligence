@@ -194,8 +194,20 @@ first.
 
 Basis scoping is mandatory — a report with both bases has two "note 8", and an
 unscoped index resolves a reference to whichever came first. `find_statement_
-pages` trims the tail so the AGM notice (which restarts its own `1)`, `4)`, `7)`
-numbering) cannot collide.
+pages` trims the front matter and the tail so the Board's Report and the AGM
+notice (which restart their own `1)`, `4)`, `7)` numbering) cannot collide.
+
+**The trim is derived PER REGION**, from the paragraphs inside that region —
+never once per document. One document-wide span intersected with every region
+lets the standalone face decide where the *consolidated* region ends, and on a
+filing whose AGM notice precedes the statements that empties the primary basis
+entirely, with every diagnostic reading as it would for an issuer who files no
+consolidated accounts.
+
+Each region records the span it was narrowed to, the raw span the basis anchors
+delimited (`raw_page_lo` / `raw_page_hi`), what closed it (`bound`) and the refs
+the bound excluded (`refs_beyond_bound`). Without the last one a truncated span
+and a failed reference grammar both read `face_refs > 0, refs_resolved == 0`.
 
 The reference grammar lives in **one place** next to `parse_note_ref`. It was
 previously a caller argument, so the face parser accepted RITES's dotted refs
@@ -212,9 +224,17 @@ parsing is fully decidable (`'2,20,938' → 220938`, `'(468)' → -468`,
 `'14,372.80' → 14372.80`, `'-' → None`) and delegating it to the model was
 measurably wrong.
 
-A row with no amount anywhere is a **caption**, not a concept. RIL prints
-"a) Owners of the Company" under three different captions; the label alone is
-undecidable without it.
+A row with no amount **cells** is a **caption**, not a concept, and it is
+carried onto every row beneath it. RIL prints "a) Owners of the Company" under
+three different captions; the label alone is undecidable without it.
+
+The test is STRUCTURAL, not "did anything parse". A nil row
+(`Communication | - | -`) has amount cells that the issuer filled in with an
+explicit nil marker, so it is a `LineItem` with `current=None` — not a caption.
+Treating it as one re-captions every following row of the block (`Deletions`
+filed under "Communication" instead of "Gross block"), and movement schedules
+print `-` constantly. A wrong caption is worse than an absent one: it is an
+affirmatively false claim on the field §4.4's mapper arbitrates with.
 
 On TCS P&L, 22 of 31 facts already came from the face with **no LLM call at
 all**. Extending the same deterministic parse to note rows shrinks the model's

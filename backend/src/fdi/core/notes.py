@@ -188,21 +188,47 @@ _AFTER_STATEMENTS = ("notice", "e-voting", "agm", "annual general meeting")
 
 @dataclass(frozen=True)
 class StatementPages:
-    """Where the primary statements sit, and how far the notes run."""
+    """Where the primary statements sit, and how far the notes run.
+
+    `terminator_page` is the page of the heading that ENDED the span -- the AGM
+    notice -- or 0 when none was found and `page_hi` is the `default_span`
+    heuristic instead. A caller needs that difference: a span closed by a real
+    terminator drops nothing but the notice, whereas a span closed by the
+    heuristic may have truncated real notes, and a truncated note index produces
+    `face_refs > 0, refs_resolved == 0` -- the exact signature of a FAILED
+    REFERENCE GRAMMAR. Two different causes must not read the same."""
 
     face_pages: list[int]
     page_lo: int
     page_hi: int
+    terminator_page: int = 0
 
 
 def find_statement_pages(
-    paragraphs: Sequence[object], *, default_span: int = 90
+    paragraphs: Sequence[object],
+    *,
+    default_span: int = 90,
+    window: tuple[int, int] | None = None,
 ) -> StatementPages:
     """Locate the statement face pages and bound the notes section.
 
     Bounding is not cosmetic: the AGM notice after the statements restarts its
     own ``1)``/``4)`` numbering, so an unbounded index collides. Degrades to an
-    empty result rather than raising."""
+    empty result rather than raising.
+
+    `window` is an INCLUSIVE page range that restricts the scan, and on a
+    multi-basis filing it is mandatory. This function returns ONE span for the
+    whole document; intersecting that one span with every basis region lets the
+    STANDALONE face decide where the CONSOLIDATED region ends. On an ordinary
+    Indian layout whose AGM notice is printed BEFORE the statements no
+    terminator is ever found (`stop` requires a page after the first face), so
+    `page_hi` pins at `page_lo + default_span` -- 90 pages past the standalone
+    face -- and a consolidated region that begins after that collapses to
+    `hi < lo`: no statements, no notes, no line items, and every diagnostic
+    reading zero exactly as it would for an issuer that files no consolidated
+    accounts. Consolidated is the PRIMARY basis. Pass the region's own page
+    range and the span is derived from the paragraphs inside it."""
+    lo_w, hi_w = window if window is not None else (0, 0)
     faces: list[int] = []
     stop = 0
     for para in paragraphs:
@@ -210,6 +236,8 @@ def find_statement_pages(
             continue
         page = _page_of(para)
         if page is None:
+            continue
+        if window is not None and not (lo_w <= page <= hi_w):
             continue
         low = _content(para).lower()
         if any(t in low for t in _FACE_TITLES) and page not in faces:
@@ -223,8 +251,9 @@ def find_statement_pages(
     if not faces:
         return StatementPages([], 0, 0)
     lo = min(faces)
-    hi = (stop - 1) if stop > lo else lo + default_span
-    return StatementPages(sorted(faces), lo, hi)
+    terminated = stop > lo
+    hi = (stop - 1) if terminated else lo + default_span
+    return StatementPages(sorted(faces), lo, hi, stop if terminated else 0)
 
 
 def basis_bounds(

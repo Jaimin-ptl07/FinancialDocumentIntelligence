@@ -14,11 +14,13 @@ from fdi.pipeline.stage import StageContext
 
 class NoteIndexStage:
     name = "note_index"
+    # v3: every region carries its RAW span, what closed it (`bound`) and the
+    # refs the bound excluded, and the span is now derived PER REGION.
     # v2: bodies carry `regions` / `duplicate_refs`, and a basis owning several
     # regions is merged rather than overwritten. `stage.version` is part of the
     # artifact key, so a shape change that did not bump it would serve a
-    # v1-shaped body from cache.
-    version = 2
+    # stale-shaped body from cache.
+    version = 3
     deps: tuple[str, ...] = ("ocr", "structure", "basis")
 
     async def run(self, ctx: StageContext) -> object:

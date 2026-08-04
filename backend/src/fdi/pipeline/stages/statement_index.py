@@ -14,11 +14,13 @@ from fdi.pipeline.stage import StageContext
 
 class StatementIndexStage:
     name = "statement_index"
+    # v3: bodies carry `regions` -- every scanned span, the raw basis span it
+    # was narrowed from, and how many faces it yielded.
     # v2: bodies carry `discarded`, and a face is chosen once per
     # (basis, statement) across every region. `stage.version` is part of the
-    # artifact key, so a shape change must bump it or a v1-shaped body is
+    # artifact key, so a shape change must bump it or a stale-shaped body is
     # served from cache.
-    version = 2
+    version = 3
     deps: tuple[str, ...] = ("ocr", "structure", "basis")
 
     async def run(self, ctx: StageContext) -> object:

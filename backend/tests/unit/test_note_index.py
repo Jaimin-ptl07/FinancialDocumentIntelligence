@@ -194,7 +194,14 @@ def test_output_is_deterministic():
 def test_malformed_input_never_raises():
     assert build_note_index({}, {})["bases"] == {"unknown": {
         "notes": [], "page_lo": 1, "page_hi": 100_000,
-        "regions": [{"page_lo": 1, "page_hi": 100_000}], "duplicate_refs": []}}
+        "regions": [{
+            "page_lo": 1, "page_hi": 100_000,
+            # No face title anywhere, so NO bound is applied and the raw span
+            # survives intact -- `bound: "none"` says so out loud.
+            "raw_page_lo": 1, "raw_page_hi": 100_000,
+            "bound": "none", "refs_beyond_bound": [],
+        }],
+        "duplicate_refs": []}}
 
 
 def test_the_stage_is_registered_with_the_right_deps():
@@ -203,4 +210,4 @@ def test_the_stage_is_registered_with_the_right_deps():
 
     stage = REGISTRY.get("note_index")
     assert stage.deps == ("ocr", "structure", "basis")
-    assert stage.version == 2
+    assert stage.version == 3

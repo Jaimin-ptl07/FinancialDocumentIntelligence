@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from fdi.core.basis import basis_regions
 from fdi.core.fog import Edge, LineItem, build_fog_artifact, line_item_id
@@ -40,10 +41,31 @@ def _regions_of(basis_artifact: Mapping[str, object]) -> list[tuple[str, int, in
     return regions or [_UNKNOWN_REGION]
 
 
+@dataclass(frozen=True)
+class _Bounded:
+    """One basis region, and the statement span it was narrowed to.
+
+    Both spans are kept. The BOUNDED one is what gets scanned; the RAW one is
+    what the basis anchors actually delimited, and without it a region that the
+    bound truncated is indistinguishable from one that was genuinely that
+    size."""
+
+    basis: str
+    page_lo: int
+    page_hi: int
+    raw_page_lo: int
+    raw_page_hi: int
+    # "none" (no face inside this region, so no bound applied) | "region_end"
+    # (the basis anchors closed it) | "terminator" (an AGM/notice heading closed
+    # it) | "default_span" (the 90-page heuristic closed it -- the only branch
+    # that can truncate real notes).
+    bound: str
+
+
 def _bounded_regions(
     basis_artifact: Mapping[str, object], paragraphs: Sequence[object]
-) -> list[tuple[str, int, int]]:
-    """Basis regions INTERSECTED with the span the primary statements occupy.
+) -> list[_Bounded]:
+    """Each basis region, narrowed by the statement span found INSIDE IT.
 
     The basis region alone is not a bound. `core/basis.py` gives a document that
     anchors only ONE basis (RIL, consolidated-only) the whole filing as its
@@ -54,19 +76,50 @@ def _bounded_regions(
     by offset and front matter precedes the statements, so the front-matter
     heading wins the ref and the face's printed `10` binds to a dividend table.
 
-    `find_statement_pages` returns 0 for "no opinion", which applies no bound --
-    an unbounded region is strictly better than a wrong one. A region left with
-    `hi < lo` carries no statements at all; it is kept (not dropped) so the
-    artifact still records that the region existed."""
-    pages = find_statement_pages(paragraphs)
-    out: list[tuple[str, int, int]] = []
+    PER REGION, NEVER PER DOCUMENT. `find_statement_pages` scanned over the whole
+    filing returns ONE span, and intersecting that with every region lets one
+    basis's face bound another basis's region. On a two-basis filing whose AGM
+    notice precedes the statements there is no terminator after the first face,
+    so `page_hi` pinned 90 pages past the STANDALONE face and the CONSOLIDATED
+    region -- the primary basis -- reduced to `hi < lo`: zero statements, zero
+    notes, zero line items, and every diagnostic reading exactly as it would for
+    an issuer that files no consolidated accounts. Deriving the span from the
+    paragraphs inside the region makes that structurally impossible: the faces
+    come from within `[lo, hi]`, so the narrowed span is always non-empty.
+
+    A region with no face title inside it is left UNBOUNDED and marked "none" --
+    an unbounded region is strictly better than a wrong one, and the mark is
+    what stops "this region carries no statements" from being read as a bug."""
+    out: list[_Bounded] = []
     for basis, lo, hi in _regions_of(basis_artifact):
-        if pages.page_lo:
-            lo = max(lo, pages.page_lo)
-        if pages.page_hi:
-            hi = min(hi, pages.page_hi)
-        out.append((basis, lo, hi))
+        pages = find_statement_pages(paragraphs, window=(lo, hi))
+        if not pages.face_pages:
+            out.append(_Bounded(basis, lo, hi, lo, hi, "none"))
+            continue
+        new_lo = max(lo, pages.page_lo)
+        new_hi = min(hi, pages.page_hi)
+        if new_hi >= hi:
+            bound = "region_end"
+        elif pages.terminator_page:
+            bound = "terminator"
+        else:
+            bound = "default_span"
+        if new_hi < new_lo:  # pragma: no cover - the faces come from inside [lo, hi]
+            new_lo, new_hi, bound = lo, hi, "none"
+        out.append(_Bounded(basis, new_lo, new_hi, lo, hi, bound))
     return out
+
+
+def _region_body(bounded: _Bounded) -> dict[str, object]:
+    """A `_Bounded` as an artifact-safe mapping. Reaches a body, so every value
+    is a plain JSON scalar and the key order is fixed by construction."""
+    return {
+        "page_lo": bounded.page_lo,
+        "page_hi": bounded.page_hi,
+        "raw_page_lo": bounded.raw_page_lo,
+        "raw_page_hi": bounded.raw_page_hi,
+        "bound": bounded.bound,
+    }
 
 
 def _tables_of(ocr: Mapping[str, object]) -> list[object]:
@@ -146,14 +199,22 @@ def build_statement_index(
     ids, duplicate `li:...:r0` LineItem ids and duplicate CONTAINS edges, all
     silent. The loser is recorded in `discarded`, never dropped without trace.
 
+    `regions` records EVERY region that was scanned, the span it was narrowed
+    to, and how many faces it yielded. A region that yields none is then an
+    explicit statement -- "this span carries no statements" -- rather than a
+    silence a reader has to interpret.
+
     Total: never raises on any input shape."""
     tables = _tables_of(ocr)
     paragraphs = _paragraphs_of(ocr)
 
     chosen: dict[tuple[str, str], dict[str, object]] = {}
     discarded: list[dict[str, object]] = []
+    region_bodies: list[dict[str, object]] = []
 
-    for basis, lo, hi in _bounded_regions(basis_artifact, paragraphs):
+    for bounded in _bounded_regions(basis_artifact, paragraphs):
+        basis, lo, hi = bounded.basis, bounded.page_lo, bounded.page_hi
+        found_here = 0
         for statement in STATEMENT_ANCHORS:
             found = find_statement_tables(tables, statement, lo, hi)
             if not found:
@@ -168,6 +229,7 @@ def build_statement_index(
             )
             if table_index < 0:  # pragma: no cover - find_ returns our own tables
                 continue
+            found_here += 1
             rows = parse_face_table(best.table)
             entry: dict[str, object] = {
                 "id": f"st:{basis}:{statement}",
@@ -188,13 +250,25 @@ def build_statement_index(
             else:
                 discarded.append(entry)
 
+        region_bodies.append(
+            {"basis": basis, **_region_body(bounded), "statements": found_here}
+        )
+
     statements = sorted(
         chosen.values(), key=lambda s: (str(s["basis"]), str(s["statement"]))
     )
     discarded.sort(key=_discard_key)
-    # v2: `discarded` is new, and a face is now chosen once per (basis,
-    # statement) across every region rather than once per region.
-    return {"schema_version": 2, "statements": statements, "discarded": discarded}
+    # v3: `regions` is new -- the scanned spans, the raw basis spans they were
+    # narrowed from, and the face count each yielded. `region_bodies` follows the
+    # basis artifact's own document order, which is deterministic.
+    # v2 added `discarded`, and chose a face once per (basis, statement) across
+    # every region rather than once per region.
+    return {
+        "schema_version": 3,
+        "statements": statements,
+        "discarded": discarded,
+        "regions": region_bodies,
+    }
 
 
 def build_note_index(
@@ -218,17 +292,27 @@ def build_note_index(
     uses to report a RITES-style ref-grammar failure. Regions are therefore
     MERGED, and the merge is visible: `regions` lists every span that
     contributed, and `duplicate_refs` names every ref a later region re-used and
-    could not add. Total: never raises."""
+    could not add.
+
+    A REGION'S SPAN IS A CAUSE OF LOSS TOO, and it must not read like a grammar
+    failure. When no terminator heading closes a region the span falls back to a
+    90-page heuristic, and a note printed past it is dropped -- producing
+    `face_refs > 0, refs_resolved == 0`, verbatim the signature this artifact
+    uses for a RITES-style ref-grammar failure. Each region therefore carries
+    `raw_page_lo` / `raw_page_hi` (what the basis anchors delimited), `bound`
+    (what closed the span), and `refs_beyond_bound` -- the refs that were printed
+    inside the raw region but past the bound. A grammar failure has
+    `refs_beyond_bound == []`; a truncation does not. Total: never raises."""
     paragraphs = _paragraphs_of(ocr)
     tables = _tables_of(ocr)
 
     notes_by_basis: dict[str, dict[str, dict[str, object]]] = {}
-    spans: dict[str, list[tuple[int, int]]] = {}
+    spans: dict[str, list[tuple[_Bounded, list[str]]]] = {}
     duplicates: dict[str, set[str]] = {}
 
-    for basis, lo, hi in _bounded_regions(basis_artifact, paragraphs):
+    for bounded in _bounded_regions(basis_artifact, paragraphs):
+        basis, lo, hi = bounded.basis, bounded.page_lo, bounded.page_hi
         seen = notes_by_basis.setdefault(basis, {})
-        spans.setdefault(basis, []).append((lo, hi))
         collided = duplicates.setdefault(basis, set())
         windows = note_windows(paragraphs, lo, hi)
         for ref in sorted(windows):
@@ -256,21 +340,37 @@ def build_note_index(
                 "table_indices": sorted(indices),
             }
 
+        # Only the 90-page heuristic can truncate real notes. A span closed by a
+        # terminator ends at the AGM notice, whose own `1)`/`4)` numbering is
+        # exactly what the bound exists to exclude -- counting that as loss would
+        # make every well-formed filing look truncated.
+        beyond: list[str] = []
+        if bounded.bound == "default_span":
+            tail = note_windows(paragraphs, hi + 1, bounded.raw_page_hi)
+            beyond = [ref for ref in sorted(tail) if ref not in seen]
+        spans.setdefault(basis, []).append((bounded, beyond))
+
     bases: dict[str, object] = {}
     for basis in sorted(notes_by_basis):
         seen = notes_by_basis[basis]
         regions = spans[basis]
         bases[basis] = {
             "notes": [seen[ref] for ref in sorted(seen)],
-            "page_lo": min(lo for lo, _ in regions),
-            "page_hi": max(hi for _, hi in regions),
-            "regions": [{"page_lo": lo, "page_hi": hi} for lo, hi in regions],
+            "page_lo": min(b.page_lo for b, _ in regions),
+            "page_hi": max(b.page_hi for b, _ in regions),
+            "regions": [
+                {**_region_body(b), "refs_beyond_bound": beyond}
+                for b, beyond in regions
+            ],
             "duplicate_refs": sorted(duplicates[basis]),
         }
 
-    # v2: `regions` / `duplicate_refs` are new, and a basis that owns several
-    # regions now merges them instead of keeping only the last.
-    return {"schema_version": 2, "bases": bases}
+    # v3: each region carries its RAW span, what closed it (`bound`) and the
+    # refs the bound excluded (`refs_beyond_bound`) -- a truncated region used to
+    # be indistinguishable from one that was genuinely that size.
+    # v2 added `regions` / `duplicate_refs` and merged a basis's several regions
+    # instead of keeping only the last.
+    return {"schema_version": 3, "bases": bases}
 
 
 def _region_of(index: Mapping[str, object], basis: str) -> Mapping[str, object]:
@@ -527,15 +627,19 @@ def build_fog(
     """The complete deterministic FOG for one document -- every basis.
 
     Zero LLM calls. Diagnostics are per basis and deliberately name the
-    quantities that distinguish ABSENT from MISSED: an issuer that prints no
-    note column (`face_refs == 0`, RIL) looks nothing like one whose reference
-    grammar failed to parse (`face_refs > 0, refs_resolved == 0`, the RITES
-    bug). Both were previously invisible.
+    quantities that separate the ways a basis can come up empty. All four read
+    as "0 notes" without them::
 
-    `regions`, `duplicate_refs` and `statements_discarded` are part of that
-    split, not bookkeeping: a basis assembled from more than one region is a
-    THIRD cause of an unresolved ref, and without them a merged document is
-    indistinguishable from a broken one. Total: never raises."""
+        issuer printed no note column   face_refs == 0                    (RIL)
+        reference grammar failed        face_refs > 0, refs_resolved == 0,
+                                        refs_beyond_bound == 0          (RITES)
+        the page bound truncated it     refs_beyond_bound > 0
+        the region carries no face      regions_without_statements == regions
+
+    `regions`, `duplicate_refs` and `statements_discarded` belong to the same
+    split: a basis assembled from more than one region is another cause of an
+    unresolved ref, and without them a merged document is indistinguishable from
+    a broken one. Total: never raises."""
     raw_bases = note_index.get("bases") if isinstance(note_index, Mapping) else None
     bases = sorted(raw_bases, key=str) if isinstance(raw_bases, Mapping) else []
 
@@ -558,6 +662,14 @@ def build_fog(
     )
     all_discarded = raw_discarded if isinstance(raw_discarded, list) else []
 
+    raw_st_regions = (
+        statement_index.get("regions") if isinstance(statement_index, Mapping) else None
+    )
+    all_st_regions = [
+        r for r in (raw_st_regions if isinstance(raw_st_regions, list) else [])
+        if isinstance(r, Mapping)
+    ]
+
     for basis in bases:
         face_items, face_edges = face_line_items(
             ocr, statement_index, note_index, basis=basis
@@ -574,6 +686,20 @@ def build_fog(
                  if isinstance(n, Mapping)]
         raw_regions = region.get("regions")
         raw_duplicates = region.get("duplicate_refs")
+
+        note_regions = [
+            r for r in (raw_regions if isinstance(raw_regions, list) else [])
+            if isinstance(r, Mapping)
+        ]
+        # Refs printed inside this basis's regions but past the page bound. This
+        # is the ONLY thing that tells a truncated note index from a failed
+        # reference grammar -- both otherwise read `refs_resolved == 0`.
+        refs_beyond_bound = sum(
+            len(r["refs_beyond_bound"])
+            for r in note_regions
+            if isinstance(r.get("refs_beyond_bound"), list)
+        )
+        st_regions = [r for r in all_st_regions if r.get("basis") == basis]
 
         regions[basis] = (
             statements, notes, [*face_items, *note_items], [*face_edges, *note_edges],
@@ -596,6 +722,13 @@ def build_fog(
             "statements_discarded": sum(
                 1 for s in all_discarded
                 if isinstance(s, Mapping) and s.get("basis") == basis
+            ),
+            # > 0 means the page bound, not the grammar, lost the refs.
+            "refs_beyond_bound": refs_beyond_bound,
+            # == `regions` means this basis genuinely carries no statement face
+            # anywhere -- an ABSENCE the issuer chose, not one this code caused.
+            "regions_without_statements": sum(
+                1 for r in st_regions if r.get("statements") == 0
             ),
         }
 
