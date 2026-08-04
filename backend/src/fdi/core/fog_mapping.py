@@ -25,6 +25,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from fdi.core.concepts import ConceptCandidate
+from fdi.core.fog import Edge
+from fdi.core.mapping import lexical_match
+from fdi.core.memory import MemoryKey, MemoryStore, recall
 
 _UNMAPPED = {"unmapped", "none", "null", "n/a", "-", ""}
 
@@ -127,3 +130,140 @@ def candidates_for_kind(
 ) -> tuple[ConceptCandidate, ...]:
     """Face rows match PARENTS, note rows match DESCENDANTS."""
     return tuple(face_candidates) if kind == "face" else tuple(note_candidates)
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """One label resolved to one concept, and HOW.
+
+    `method` is "memory" | "lexical" | "llm". It is not decoration: a wrong
+    value must trace to the tier that produced it, and the three tiers have
+    very different trust profiles."""
+
+    label: str
+    tag: str
+    method: str
+    score: float
+
+
+def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
+    """Labels an alias or normalised form settles, with no model call.
+
+    Free and deterministic, so it runs before the LLM. It is NOT sufficient on
+    its own -- measured across three issuers it answered 69% / 58% / 30% -- but
+    every label it settles is one the expensive tier never sees.
+
+    `lexical_match(label, candidates)` returns `(candidate | None, method,
+    score)` and REFUSES a tie rather than guessing, so a None here means the
+    label is genuinely ambiguous and belongs to the semantic tier."""
+    out: dict[str, Resolution] = {}
+    for label in unit.labels:
+        candidate, method, score = lexical_match(label, unit.candidates)
+        if candidate is not None:
+            out[label] = Resolution(label, candidate.tag, f"lexical:{method}", score)
+    return out
+
+
+def resolve_from_memory(
+    unit: MapUnit, store: MemoryStore
+) -> dict[str, Resolution]:
+    """Labels a PREVIOUS document already resolved.
+
+    Keyed on (label, section, basis) rather than label alone: "Computer
+    equipment" under PPE is a fixed asset, "Computer software" under
+    intangibles is not. `MemoryKey.of` normalises all three parts, so callers
+    never have to match its casing rules by hand.
+
+    `recall` returns only TRUSTED entries, and a remembered tag this unit does
+    not offer is DROPPED -- memory from another statement must not leak in."""
+    offered = {c.tag for c in unit.candidates}
+    out: dict[str, Resolution] = {}
+    for label in unit.labels:
+        entry = recall(store, MemoryKey.of(label, unit.title))
+        if entry is not None and entry.tag in offered:
+            out[label] = Resolution(label, entry.tag, "memory", entry.confidence)
+    return out
+
+
+def _items_by_parent(region: Mapping[str, object]) -> dict[str, list[Mapping[str, object]]]:
+    out: dict[str, list[Mapping[str, object]]] = {}
+    raw = region.get("line_items") if isinstance(region, Mapping) else None
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        parent = item.get("parent")
+        if isinstance(parent, str) and parent:
+            out.setdefault(parent, []).append(item)
+    return out
+
+
+def units_from_fog(
+    region: Mapping[str, object],
+    *,
+    face_candidates: Sequence[ConceptCandidate],
+    note_candidates: Sequence[ConceptCandidate],
+) -> list[MapUnit]:
+    """One MapUnit per statement face and per note that HAS line items.
+
+    A unit with no items is not emitted: it would cost an LLM call and answer
+    nothing. Units are id-sorted so the artifact hashes stably. Total."""
+    by_parent = _items_by_parent(region)
+    units: list[MapUnit] = []
+
+    for key, kind in (("statements", "face"), ("notes", "note")):
+        raw = region.get(key) if isinstance(region, Mapping) else None
+        for node in raw if isinstance(raw, list) else []:
+            if not isinstance(node, Mapping):
+                continue
+            node_id = node.get("id")
+            if not isinstance(node_id, str) or not node_id:
+                continue
+            items = by_parent.get(node_id, [])
+            labels = tuple(
+                str(i.get("label", "")) for i in items if str(i.get("label", ""))
+            )
+            if not labels:
+                continue
+            title = str(node.get("title") or node.get("statement") or "")
+            units.append(MapUnit(
+                unit_id=node_id, kind=kind, title=title, labels=labels,
+                candidates=candidates_for_kind(kind, face_candidates, note_candidates),
+            ))
+    units.sort(key=lambda u: u.unit_id)
+    return units
+
+
+def mapping_edges(
+    resolutions: Mapping[str, Mapping[str, Resolution]],
+    region: Mapping[str, object],
+) -> tuple[list[Edge], list[dict[str, object]]]:
+    """`MAPS_TO` edges plus the proof record behind each.
+
+    A resolution naming a line item this region does not hold is dropped: an
+    edge to a node that is not in the graph looks like navigation and leads
+    nowhere. Both outputs are sorted -- they reach an artifact body. Total."""
+    by_parent = _items_by_parent(region)
+    edges: list[Edge] = []
+    proof: list[dict[str, object]] = []
+
+    for unit_id in sorted(resolutions):
+        per_label = resolutions[unit_id]
+        for item in by_parent.get(unit_id, []):
+            label = str(item.get("label", ""))
+            item_id = item.get("id")
+            resolution = per_label.get(label)
+            if resolution is None or not isinstance(item_id, str):
+                continue
+            edges.append(Edge("MAPS_TO", item_id, resolution.tag))
+            proof.append({
+                "line_item": item_id,
+                "unit": unit_id,
+                "label": label,
+                "tag": resolution.tag,
+                "method": resolution.method,
+                "score": round(float(resolution.score), 4),
+            })
+
+    edges.sort(key=lambda e: (e.source, e.target))
+    proof.sort(key=lambda p: (str(p["line_item"]), str(p["tag"])))
+    return edges, proof
