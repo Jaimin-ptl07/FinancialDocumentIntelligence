@@ -44,9 +44,11 @@ from fdi.pipeline import stages as _stages  # noqa: F401 - registers built-in st
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
+from fdi.pipeline.schema_store import load_schema
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.embeddings import BgeEmbeddingClient
+from fdi.platform.extractor import AzureOpenAIExtractorClient
 from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import (
     bind_correlation_id,
@@ -100,6 +102,7 @@ async def _run_stage_async(
         # the guard stays for uniform shape with oc/sc/gsc/vsc, not special-cased away.
         gsc = Neo4jGraphStore.from_settings(get_settings())
         vsc = MilvusVectorStore.from_settings(get_settings())
+        xc = AzureOpenAIExtractorClient.from_settings(get_settings())
         services: dict[str, object] = {}
         if oc is not None:
             services["ocr"] = oc
@@ -111,6 +114,24 @@ async def _run_stage_async(
             services["graph_store"] = gsc
         if vsc is not None:
             services["vector_store"] = vsc
+        if xc is not None:
+            services["extractor"] = xc
+        # Unlike the five clients above, this is I/O (a store read, maybe a file
+        # read) rather than inert construction, and it runs on EVERY stage for
+        # EVERY document -- including OCR, which has nothing to do with FOG
+        # mapping. A bad seed file or an unreachable bucket must degrade to "no
+        # schema key" (fog_mapping/fog_reason then map nothing and record that
+        # honestly in their own diagnostics), never take the whole DAG down.
+        try:
+            schema, _schema_source = await load_schema(
+                store=store, seed_path=get_settings().extraction_schema_path
+            )
+            services["schema"] = schema
+        except Exception as exc:  # noqa: BLE001 -- degrade, don't fail the DAG
+            log.warning(
+                "fog.schema_load_failed",
+                doc_id=doc_id, stage=stage_name, error=repr(exc),
+            )
         return await run_stage(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,
