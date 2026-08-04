@@ -377,16 +377,64 @@ def tables_in_window(
 # Cash flow has NO rule: its anchors already miss REMC and RIL entirely (see the
 # design's Phase 5 hole), so asserting one would manufacture failures on
 # documents whose face is perfectly correct.
-FOOTING_RULES: Mapping[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
-    "profit_and_loss": (
-        ("total income",),
-        ("total expenses",),
-        ("profit before exceptional items and tax", "profit before tax"),
+# WHY THE BALANCE SHEET NEEDS ALTERNATIVE EQUATIONS, NOT JUST ALTERNATIVE TARGETS
+# ------------------------------------------------------------------------------
+# MEASURED ON TCS FY2025-26: a Schedule III balance sheet commonly prints NO
+# single "Total liabilities" line at all -- only "Total non-current liabilities"
+# and "Total current liabilities" -- so an equation naming "total liabilities"
+# can never resolve and every such balance sheet went permanently unchecked
+# (TCS both bases: passed=None). The assets-side identity is a third route for
+# a face that totals its two asset halves but not its liability ones.
+#
+# Substring matching is safe here: "total non-current liabilities" does NOT
+# contain "total current liabilities" (the word "non-" intervenes), so the
+# specific and general labels cannot shadow one another.
+# The subtotal `total income - total expenses` actually produces, under the three
+# names Ind AS filers give it. MOST SPECIFIC FIRST -- each is a real presentation
+# variant measured on a real filing, not an issuer patch:
+#   exceptional items      TCS FY2025-26  2,71,423 - 2,01,410 = 70,013
+#   equity-method investees RIL FY2025-26  3,28,513 - 3,09,990 = 18,523
+#   the plain form         everyone else
+# None of the three contains another as a substring, so ordering cannot shadow.
+_PL_TARGETS = (
+    "profit before exceptional items and tax",
+    "profit before share of profit",
+    "profit before tax",
+)
+
+# REMC FY2024-25 heads its expense block "Total Expenditure", not "Total
+# Expenses" -- 14,046.91 - 3,884.41 = 10,162.50. STATEMENT_ANCHORS already
+# accepts both spellings; the footing rule did not, so that face went unchecked.
+_PL_EXPENSES = ("total expenses", "total expenditure")
+
+FOOTING_RULES: Mapping[
+    str, tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...]
+] = {
+    # Expense wording outer, target inner: a face using the other spelling makes
+    # every equation in the first group unresolvable (None), so the second group
+    # is reached without either ever matching the wrong row.
+    "profit_and_loss": tuple(
+        (("total income",), (expense,), target)
+        for expense in _PL_EXPENSES
+        for target in _PL_TARGETS
     ),
     "balance_sheet": (
-        ("total equity", "total liabilities"),
-        (),
-        ("total equity and liabilities", "total assets"),
+        (
+            (
+                "total equity",
+                "total non-current liabilities",
+                "total current liabilities",
+            ),
+            (),
+            "total equity and liabilities",
+        ),
+        (("total equity", "total liabilities"), (), "total equity and liabilities"),
+        (("total equity", "total liabilities"), (), "total assets"),
+        (
+            ("total non-current assets", "total current assets"),
+            (),
+            "total assets",
+        ),
     ),
 }
 
@@ -401,20 +449,28 @@ def describe_footing(rows: Sequence[FaceRow], statement: str) -> dict[str, objec
     a correct table because it labels one line unusually is worse than not
     checking it. `checked` makes the distinction explicit on the artifact.
 
-    Targets are tried in order and the FIRST one the face actually carries wins,
-    so an issuer reporting exceptional items is checked against the subtotal the
-    arithmetic really produces -- not against a lower line that legitimately
+    EQUATIONS are tried in order and the first one the face can actually resolve
+    wins, so an issuer reporting exceptional items is checked against the subtotal
+    the arithmetic really produces -- not against a lower line that legitimately
     differs by the exceptional items. `rule` records which target was used, so a
     verdict is always traceable to the equation behind it."""
-    rule = FOOTING_RULES.get(statement)
-    if rule is None:
+    equations = FOOTING_RULES.get(statement)
+    if not equations:
         return {"rule": "", "passed": None, "checked": False}
-    plus, minus, targets = rule
-    parts = " + ".join(plus) + ("".join(f" - {m}" for m in minus))
-    for target in targets:
+
+    def render(plus: Sequence[str], minus: Sequence[str], target: str) -> str:
+        return (
+            " + ".join(plus) + "".join(f" - {m}" for m in minus) + f" = {target}"
+        )
+
+    for plus, minus, target in equations:
         passed = verify_footing(
             rows, plus, minus, target, tolerance=_FOOTING_TOLERANCE
         )
         if passed is not None:
-            return {"rule": f"{parts} = {target}", "passed": passed, "checked": True}
-    return {"rule": f"{parts} = {targets[0]}", "passed": None, "checked": False}
+            return {
+                "rule": render(plus, minus, target),
+                "passed": passed,
+                "checked": True,
+            }
+    return {"rule": render(*equations[0]), "passed": None, "checked": False}

@@ -108,3 +108,92 @@ def test_balance_sheet_accepts_the_equity_and_liabilities_caption():
         _row("TOTAL EQUITY AND LIABILITIES", 100.0),
     ]
     assert describe_footing(rows, "balance_sheet")["passed"] is True
+
+
+def test_a_schedule_iii_sheet_with_no_total_liabilities_line_still_checks():
+    """MEASURED ON TCS FY2025-26 (Rs crore). An Indian balance sheet commonly
+    prints only "Total non-current liabilities" and "Total current liabilities",
+    never their sum -- so an equation naming "total liabilities" can never
+    resolve and EVERY such sheet went permanently unchecked."""
+    rows = [
+        _row("Total non-current assets", 46667.0),
+        _row("Total current assets", 135705.0),
+        _row("TOTAL ASSETS", 182372.0),
+        _row("Total equity", 108478.0),
+        _row("Total non-current liabilities", 12980.0),
+        _row("Total current liabilities", 60914.0),
+        _row("TOTAL EQUITY AND LIABILITIES", 182372.0),
+    ]
+    result = describe_footing(rows, "balance_sheet")
+    assert result["passed"] is True
+    assert "total non-current liabilities" in result["rule"]
+
+
+def test_the_assets_side_identity_is_a_last_resort_equation():
+    """A face that totals its two asset halves but neither liability half."""
+    rows = [
+        _row("Total non-current assets", 46667.0),
+        _row("Total current assets", 135705.0),
+        _row("TOTAL ASSETS", 182372.0),
+    ]
+    result = describe_footing(rows, "balance_sheet")
+    assert result["passed"] is True
+    assert result["rule"] == (
+        "total non-current assets + total current assets = total assets"
+    )
+
+
+def test_non_current_does_not_shadow_current_in_substring_matching():
+    """This is what makes the multi-term equation safe."""
+    assert "total current liabilities" not in "total non-current liabilities"
+    assert "total current assets" not in "total non-current assets"
+
+
+def test_a_balance_sheet_that_does_not_balance_still_fails():
+    rows = [
+        _row("Total equity", 108478.0),
+        _row("Total non-current liabilities", 12980.0),
+        _row("Total current liabilities", 60914.0),
+        _row("TOTAL EQUITY AND LIABILITIES", 999999.0),
+    ]
+    assert describe_footing(rows, "balance_sheet")["passed"] is False
+
+
+def test_the_equity_method_variant_is_recognised():
+    """MEASURED ON RIL FY2025-26 (Rs crore). RIL heads the subtotal "Profit
+    Before Share of Profit / (Loss) of Associates / Joint Ventures and Tax",
+    which contains neither of the other two target labels."""
+    rows = [
+        _row("Total Income", 328513.0),
+        _row("Total Expenses", 309990.0),
+        _row(
+            "Profit Before Share of Profit / (Loss) of Associates / "
+            "Joint Ventures and Tax",
+            18523.0,
+        ),
+    ]
+    result = describe_footing(rows, "profit_and_loss")
+    assert result["passed"] is True
+    assert "profit before share of profit" in result["rule"]
+
+
+def test_the_total_expenditure_spelling_is_recognised():
+    """MEASURED ON REMC FY2024-25 (Rs lakh). "Total Expenditure", not
+    "Total Expenses" -- STATEMENT_ANCHORS accepted it, the footing rule did not."""
+    rows = [
+        _row("Total Income", 14046.91),
+        _row("Total Expenditure", 3884.41),
+        _row("Profit Before Tax", 10162.50),
+    ]
+    result = describe_footing(rows, "profit_and_loss")
+    assert result["passed"] is True
+    assert "total expenditure" in result["rule"]
+
+
+def test_no_pl_target_label_contains_another():
+    """What makes the ordering safe -- asserted, not assumed."""
+    from fdi.core.statements import _PL_TARGETS
+
+    for outer in _PL_TARGETS:
+        others = [t for t in _PL_TARGETS if t != outer]
+        assert all(t not in outer for t in others), outer
