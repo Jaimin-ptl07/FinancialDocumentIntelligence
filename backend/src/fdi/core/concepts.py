@@ -132,6 +132,24 @@ class ConceptIndex:
         return best
 
 
+def _alias_list(node: Mapping[str, object]) -> tuple[str, ...]:
+    """A concept's report-side label variants, under either schema generation.
+
+    v4.3 names this `note_aliases`; the v3.2 seed that `load_schema` still
+    serves by default names it `aliases` -- 190 of them, none of which this
+    module could see. Reading only one key meant the FREE lexical tier never
+    fired against whichever generation was live, sending every label to the
+    paid tier or leaving it unmapped. Aliases are aliases; accept both, with
+    the v4.3 name winning when a document carries both."""
+    for key in ("note_aliases", "aliases"):
+        raw = node.get(key)
+        if isinstance(raw, list):
+            found = tuple(a for a in raw if isinstance(a, str) and a)
+            if found:
+                return found
+    return ()
+
+
 def _tagged_descendants(
     node: Mapping[str, object], depth: int = 1
 ) -> list[ConceptCandidate]:
@@ -150,7 +168,7 @@ def _tagged_descendants(
             name = child.get("field_name")
             path = child.get("field_path")
             sr_no = child.get("sr_no")
-            aliases = child.get("note_aliases")
+            aliases = _alias_list(child)
             definition = child.get("definition")
             out.append(
                 ConceptCandidate(
@@ -160,9 +178,7 @@ def _tagged_descendants(
                     depth=depth,
                     origin=str(child.get("origin") or "extracted"),
                     sr_no=sr_no if isinstance(sr_no, str) else None,
-                    aliases=tuple(a for a in aliases if isinstance(a, str))
-                    if isinstance(aliases, list)
-                    else (),
+                    aliases=aliases,
                     definition=definition if isinstance(definition, str) else "",
                 )
             )
@@ -182,16 +198,14 @@ def _walk_groups(
         candidates = _tagged_descendants(node)
         if len(candidates) >= min_children:
             name = node.get("field_name")
-            aliases = node.get("note_aliases")
+            aliases = _alias_list(node)
             kept = candidates[:MAX_CANDIDATES]
             out.append(
                 ConceptGroup(
                     key=normalize(name),
                     name=name if isinstance(name, str) else "",
                     statement=statement,
-                    note_aliases=tuple(a for a in aliases if isinstance(a, str))
-                    if isinstance(aliases, list)
-                    else (),
+                    note_aliases=aliases,
                     candidates=tuple(kept),
                     truncated=max(0, len(candidates) - len(kept)),
                 )

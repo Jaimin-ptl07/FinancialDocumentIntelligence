@@ -229,3 +229,43 @@ def test_real_v42_carries_definitions_for_ambiguous_concepts():
     index = build_concept_index(json.loads(_V42.read_text("utf-8")))
     defined = [c for g in index.groups for c in g.candidates if c.definition]
     assert defined, "expected curated definitions in the generated schema"
+
+
+def test_aliases_are_read_under_either_schema_generation():
+    """v4.3 names this `note_aliases`; the v3.2 seed `load_schema` still serves
+    by default names it `aliases` -- 190 of them. Reading only one key left the
+    FREE lexical tier permanently silent against the other generation, sending
+    every label to the paid tier."""
+    from fdi.core.concepts import all_concepts
+
+    v43 = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "note_aliases": ["travel expenses"]}]}]}]}
+    v32 = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "aliases": ["travel expenses"]}]}]}]}
+
+    assert all_concepts(v43)[0].aliases == ("travel expenses",)
+    assert all_concepts(v32)[0].aliases == ("travel expenses",)
+
+
+def test_the_v4_3_alias_key_wins_when_a_node_carries_both():
+    from fdi.core.concepts import all_concepts
+
+    both = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "note_aliases": ["new"], "aliases": ["old"]}]}]}]}
+    assert all_concepts(both)[0].aliases == ("new",)
+
+
+def test_a_malformed_alias_list_degrades_to_empty_never_raises():
+    from fdi.core.concepts import all_concepts
+
+    bad = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "note_aliases": "not a list", "aliases": [1, 2, None]}]}]}]}
+    assert all_concepts(bad)[0].aliases == ()
