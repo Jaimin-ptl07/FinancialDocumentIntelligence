@@ -1,0 +1,25 @@
+{
+  "issuer": "TCS",
+  "fiscal_year": "FY2025-26",
+  "basis": "consolidated",
+  "statement": "profit_and_loss",
+  "_source": "Consolidated Statement of Profit and Loss, PDF page 167 of annual-report-2025-2026.pdf (Tata Consultancy Services Integrated Annual Report 2025-26).",
+  "_unit": "INR crore, exactly as printed. No rescaling. Brackets are negative.",
+  "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure Document Intelligence OCR. Every subtotal was re-derived by hand and ties: 271423-201410=70013; 70013-4526=65487; 65487-16033=49454; 49454+2750=52204.",
+  "_coverage": "FACE-LEVEL ONLY, and deliberately partial. A tag appears in `values` only where its mapping to a printed line is unambiguous. Tags in NEITHER list are out of scope and are ignored by score_document -- that is the correct treatment for a line this file makes no claim about, because putting an unmappable-but-disclosed tag in `not_reported` would score a CORRECT extraction as a false positive.",
+  "_not_reported_is_empty": "Deliberate. Asserting a tag is genuinely undisclosed requires reading the notes as well as the face, which this file does not yet do. An empty list makes no false claim; it only means precision here is measured against committed values, with no absent-vs-missed credit.",
+  "values": {
+    "TOTRNOTINR": 271423.0,
+    "TOTEXPR": 201410.0,
+    "PB3NTAX": 70013.0,
+    "PBTR": 65487.0,
+    "CT": 16388.0,
+    "DT": -355.0,
+    "PATR": 49454.0,
+    "OTCI": 2750.0,
+    "PBMI": 52204.0,
+    "EPSB": 136.01,
+    "EPSD": 136.01
+  },
+  "not_reported": []
+}
