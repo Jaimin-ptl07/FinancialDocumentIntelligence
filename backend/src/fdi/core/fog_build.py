@@ -627,14 +627,28 @@ def build_fog(
     """The complete deterministic FOG for one document -- every basis.
 
     Zero LLM calls. Diagnostics are per basis and deliberately name the
-    quantities that separate the ways a basis can come up empty. All four read
-    as "0 notes" without them::
+    quantities that separate the ways a basis can come up empty. All of these
+    read as "0 notes" without them::
 
         issuer printed no note column   face_refs == 0                    (RIL)
-        reference grammar failed        face_refs > 0, refs_resolved == 0,
-                                        refs_beyond_bound == 0          (RITES)
         the page bound truncated it     refs_beyond_bound > 0
         the region carries no face      regions_without_statements == regions
+        reference grammar failed        face_refs > 0, refs_resolved == 0,
+                                        refs_beyond_bound == 0          (RITES)
+
+    THE LAST ROW IS NOT YET CONCLUSIVE, and saying so is the point of writing
+    the table down. `refs_beyond_bound` counts only the `default_span` branch.
+    When a note's own heading trips the terminator vocabulary -- "15. Notice
+    period and other employee benefits" matches on "notice", and "agm" is a
+    substring of ordinary words like "fragmentation" -- the span closes as
+    `bound == "terminator"` and the refs it cut go uncounted, reproducing the
+    grammar-failure reading exactly. The same hole exists on the `region_end`
+    branch. Until a `refs_beyond_terminator` counter closes it, read the last
+    row together with the region's `bound` and `raw_page_hi`: a `terminator`
+    bound landing far short of `raw_page_hi` is a truncation, not a grammar
+    failure. Diagnostics that overstate what they can tell apart are worse than
+    diagnostics that admit the gap -- `absent != missed` is the property this
+    whole artifact exists to preserve.
 
     `regions`, `duplicate_refs` and `statements_discarded` belong to the same
     split: a basis assembled from more than one region is another cause of an
