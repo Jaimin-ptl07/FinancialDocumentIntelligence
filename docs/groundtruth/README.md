@@ -5,10 +5,37 @@ the denominator of every recall and precision number this project quotes.
 Nothing in it is generated from pipeline output; a value that came out of the
 pipeline would score the pipeline against itself.
 
-**Status: partially keyed — TCS profit and loss only, face level, both bases.**
-Everything else (TCS balance sheet / cash flow, all of RIL, all of REMC, and the
-note-level detail for all three) is still outstanding, so **no full baseline
-exists and no accuracy claim should be made from these two files.**
+**Status: partially keyed — every issuer's profit and loss, plus TCS's
+consolidated balance sheet. Face level only.**
+
+| File | Tags |
+|---|---|
+| `TCS-FY2025-26-consolidated-profit_and_loss.json` | 11 |
+| `TCS-FY2025-26-standalone-profit_and_loss.json` | 11 |
+| `TCS-FY2025-26-consolidated-{assets,liabilities,equity}.json` | 7 / 6 / 1 |
+| `RIL-FY2025-26-consolidated-profit_and_loss.json` | 12 |
+| `REMC-FY2024-25-unknown-profit_and_loss.json` | 9 |
+
+Still outstanding: TCS standalone balance sheet, all cash flows, RIL's and
+REMC's balance sheets, and the **note-level detail for everything**. Until those
+land there is **no full baseline** and no accuracy claim should be made.
+
+## Sign conventions are issuer-dependent, and stay that way
+
+REMC prints Current Tax **in brackets** (a deduction from PBT); TCS prints the
+same concept **positive** and subtracts the total separately. Keyed as printed,
+`CT` therefore carries opposite signs across two issuers.
+
+That is correct for scoring an *extractor* — it must read what is on the page.
+Normalising it is the reasoning layer's job, not the truth set's. Do not
+"fix" one issuer to match the other.
+
+## A disclosed nil is not the same as an absent line
+
+REMC discloses Other Comprehensive Income as an explicit `-`. Whether that
+should score as `0.0` or as absent is an open design question, so `OTCI` is in
+neither list for REMC. Prejudging it here would bake the answer into the truth
+set, where nothing downstream could detect it.
 
 ## How these were read
 

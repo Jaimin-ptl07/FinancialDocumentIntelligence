@@ -1,0 +1,27 @@
+{
+  "issuer": "RIL",
+  "fiscal_year": "FY2025-26",
+  "basis": "consolidated",
+  "statement": "profit_and_loss",
+  "_source": "Consolidated Statement of Profit and Loss, PDF page 145 of RIL-Integrated-Annual-Report-2025-26.pdf.",
+  "_unit": "INR crore, exactly as printed. No rescaling. Brackets are negative.",
+  "_ties": "348504+21522=370026; -42883=327143; +1370=328513; expenses sum 309990; 328513-309990=18523; -4681 tax=13842; +(-4) associates=13838; +144 OCI=13982.",
+  "_notes": "RIL prints GST Recovered as an explicit deduction, so GST has a real printed counterpart here (TCS does not). PATR is OUT OF SCOPE for RIL: it prints BOTH 'Profit After Tax' (13,842, before share of associates) and 'Profit for the year' (13,838, after) -- TCS's PATR maps to the latter concept, so keying either would be a guess. RIL has NO standalone basis.",
+  "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure DI OCR. Every subtotal re-derived by hand and ties.",
+  "_coverage": "FACE LEVEL, deliberately partial. A tag is listed only where its mapping to a printed line is unambiguous. Tags in NEITHER list are out of scope and ignored by score_document -- putting a disclosed-but-unmappable tag in not_reported would score a CORRECT extraction as a false positive.",
+  "values": {
+    "RFSP": 348504.0,
+    "RFSS": 21522.0,
+    "GST": 42883.0,
+    "TOTRNOTINR": 328513.0,
+    "TOTEXPR": 309990.0,
+    "CT": 609.0,
+    "DT": 4072.0,
+    "SOP": -4.0,
+    "OTCI": 144.0,
+    "PBMI": 13982.0,
+    "EPSB": 19.59,
+    "EPSD": 19.59
+  },
+  "not_reported": []
+}

@@ -1,0 +1,15 @@
+{
+  "issuer": "TCS",
+  "fiscal_year": "FY2025-26",
+  "basis": "consolidated",
+  "statement": "equity",
+  "_source": "Consolidated Balance Sheet, PDF page 166 of annual-report-2025-2026.pdf (TCS Integrated Annual Report 2025-26).",
+  "_unit": "INR crore, exactly as printed. No rescaling. Brackets are negative.",
+  "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure DI OCR. Every subtotal re-derived by hand and ties.",
+  "_coverage": "FACE LEVEL, deliberately partial. A tag is listed only where its mapping to a printed line is unambiguous. Tags in NEITHER list are out of scope and ignored by score_document -- putting a disclosed-but-unmappable tag in not_reported would score a CORRECT extraction as a false positive.",
+  "_notes": "Only share capital is unambiguous. Other equity (1,06,878), equity attributable to shareholders (1,07,240), non-controlling interests (1,238) and Total equity (1,08,478) all map to DERIVED tags in v4.3 (TOTOTEQ/TOTEQNR), so the reported values have no extractable home.",
+  "values": {
+    "EQWVR": 362.0
+  },
+  "not_reported": []
+}
