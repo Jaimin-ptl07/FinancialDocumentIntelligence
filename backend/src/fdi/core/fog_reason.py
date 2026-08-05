@@ -12,7 +12,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from fdi.core.compose import compose, read_formulas, summarise
+from fdi.core.compose import (
+    Composed,
+    certify,
+    compose,
+    read_formulas,
+    reconcile,
+    summarise,
+)
+from fdi.core.confidence import calibrate
+from fdi.core.coverage import coverage_report
+from fdi.core.factsheet import rows_from_schema
+from fdi.core.validation import validate
 
 
 def _region(doc: Mapping[str, object], basis: str) -> Mapping[str, object]:
@@ -201,6 +212,33 @@ def contested_tags(
     return out
 
 
+def _nested_facts(
+    facts: Mapping[str, float], composed: Mapping[str, Composed]
+) -> dict[str, dict[str, object]]:
+    """Lift the FLAT `{tag: value}` fact map into the NESTED `{tag: {"value":
+    ...}}` shape `validation`, `confidence` and `coverage` all read.
+
+    `facts_from_mapping` returns a flat map; `validation._num` and
+    `coverage._has_value` both read an inner "value" key specifically, so
+    handing an engine the flat map directly would make it see zero usable
+    facts and silently report nothing to check or cover -- exactly the
+    failure class this wiring exists to eliminate.
+
+    A composed (schema-derived) value is folded in ONLY when it is fully
+    supported (`coverage >= 1.0`): a PARTIAL sum must never stand in for a
+    fact a reported total's reconciliation gets checked against, or an
+    incomplete number could silently satisfy validation and claim the books
+    tie -- the same measured rule `compose.py` enforces for `composed`
+    itself, re-applied here at the point a derived value re-enters a check."""
+    out: dict[str, dict[str, object]] = {
+        tag: {"value": value, "origin": "extracted"} for tag, value in facts.items()
+    }
+    for tag, c in composed.items():
+        if tag not in out and c.coverage >= 1.0:
+            out[tag] = {"value": c.value, "origin": "derived"}
+    return out
+
+
 def reason(
     fog: Mapping[str, object],
     mapping: Mapping[str, object],
@@ -222,15 +260,29 @@ def reason(
         }
         for tag, c in sorted(composed.items())
     }
-    checks: list[dict[str, object]] = []
-    declared = set(formulas)
-    covered = sorted(set(facts) | set(composed))
-    coverage_body = {
-        "reported": len(facts),
-        "composed": len(composed),
-        "declared_formulas": len(declared),
-        "tags": covered,
-    }
+
+    # Both engines read the NESTED shape (`_nested_facts`'s docstring says
+    # why), merging in only fully-supported composed values so a partial sum
+    # can never masquerade as a fact a check or a coverage count relies on.
+    merged = _nested_facts(facts, composed)
+    checks = sorted(validate(merged), key=lambda c: str(c.get("rule_id", "")))
+    calibration = calibrate(merged, checks)
+    confidence_body = {tag: calibration[tag] for tag in sorted(calibration)}
+
+    statements: list[dict[str, object]] = (
+        rows_from_schema(schema) if isinstance(schema, Mapping) else []
+    )
+    coverage_body = coverage_report(statements, merged)
+
+    # `summary` grades each REPORTED total against its own formula -- a
+    # separate question from the rule-based `checks` above. `certify` lets a
+    # total that already ties prove its own missing children absent WITHOUT
+    # ever upgrading a composed record's own coverage figure (that stays
+    # honest in `composed_body`); `reconcile` reads that proof and `summarise`
+    # counts it.
+    certified_composed, certified_tags = certify(facts, formulas, composed)
+    composed_checks = reconcile(facts, formulas, certified_composed, certified=certified_tags)
+
     return {
         "facts": dict(sorted(facts.items())),
         # Recorded, not discarded: a face row and its note are CORROBORATION,
@@ -240,5 +292,6 @@ def reason(
         "composed": composed_body,
         "checks": checks,
         "coverage": coverage_body,
-        "summary": summarise([]),
+        "confidence": confidence_body,
+        "summary": summarise(composed_checks),
     }

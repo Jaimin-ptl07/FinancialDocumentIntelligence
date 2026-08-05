@@ -70,7 +70,7 @@ def test_a_basis_that_does_not_exist_yields_no_facts():
 def test_reason_returns_every_section():
     out = reason(_FOG, _MAPPING, _SCHEMA, basis="consolidated")
     assert set(out) == {"facts", "contested", "composed", "checks",
-                        "coverage", "summary"}
+                        "coverage", "confidence", "summary"}
 
 
 def test_reason_carries_the_facts_through():
@@ -287,3 +287,97 @@ def test_a_contested_tag_with_three_claimants_does_not_raise_on_sorting():
     got = contested_tags(fog, mapping, basis="consolidated")
     assert got[0]["claimants"] == 3
     assert len(got[0]["losers"]) == 2
+
+
+# --- validation, confidence and coverage wiring (Task 5) -----------------------
+
+def test_validation_runs_and_reports_its_checks():
+    out = reason(_FOG, _MAPPING, _SCHEMA, basis="consolidated")
+    assert isinstance(out["checks"], list)
+    assert out["summary"] != {} or out["checks"] == []
+
+
+def test_a_partial_composition_never_satisfies_a_reported_total():
+    """The measured rule: an incomplete sum may not vouch for a total. Showing
+    the number with its coverage is honest; letting it claim the books tie is
+    not."""
+    out = reason(_FOG, _MAPPING, _SCHEMA, basis="consolidated")
+    for record in out["composed"].values():
+        if not record["complete"]:
+            assert record["coverage"] < 1.0
+
+
+def _balance_sheet_fog(assets, liabilities, equity):
+    return _fog_with([
+        {"id": "li:a", "parent": "st", "origin": "face",
+         "label": "Total assets", "current": assets},
+        {"id": "li:l", "parent": "st", "origin": "face",
+         "label": "Total liabilities", "current": liabilities},
+        {"id": "li:e", "parent": "st", "origin": "face",
+         "label": "Total equity", "current": equity},
+    ])
+
+
+def _balance_sheet_mapping():
+    return _mapping_with([
+        ("li:a", "TOTNCNCA", "lexical:name", 1.0),
+        ("li:l", "TOTL", "lexical:name", 1.0),
+        ("li:e", "TOTEQNR", "lexical:name", 1.0),
+    ])
+
+
+def test_a_balanced_sheet_passes_the_identity_check():
+    """A = L + E: `validation.py`'s seeded identity should PASS, and
+    calibration should record it as corroborating evidence -- not merely
+    exist as an empty section."""
+    fog = _balance_sheet_fog(100.0, 60.0, 40.0)
+    out = reason(fog, _balance_sheet_mapping(), _SCHEMA, basis="consolidated")
+    identity = next(c for c in out["checks"] if c["rule_id"] == "identity_balance_sheet")
+    assert identity["passed"] is True
+    assert identity["expected"] == 100.0
+    assert identity["actual"] == 100.0
+
+    conf = out["confidence"]
+    assert any(
+        "identity_balance_sheet holds" in s
+        for tag in ("TOTNCNCA", "TOTL", "TOTEQNR")
+        for s in conf[tag]["signals"]
+    )
+
+
+def test_an_unbalanced_sheet_fails_the_identity_check_and_is_flagged():
+    """A != L + E: the identity must FAIL, and calibration must record the
+    failure as a signal against every tag it names -- not stay silent."""
+    fog = _balance_sheet_fog(100.0, 60.0, 30.0)
+    out = reason(fog, _balance_sheet_mapping(), _SCHEMA, basis="consolidated")
+    identity = next(c for c in out["checks"] if c["rule_id"] == "identity_balance_sheet")
+    assert identity["passed"] is False
+    assert identity["delta"] == 10.0
+
+    conf = out["confidence"]
+    assert any(
+        "failed check: identity_balance_sheet" in s
+        for tag in ("TOTNCNCA", "TOTL", "TOTEQNR")
+        for s in conf[tag]["signals"]
+    )
+
+
+def test_coverage_is_genuinely_populated_from_the_schema():
+    """Not just a present key -- real expected/found counts from the taxonomy
+    the schema declares, against the facts this basis actually produced."""
+    schema = {"modules": [{"module_id": "balance_sheet", "statement": "balance_sheet",
+                           "retrieval_units": [{"unit_id": "RU", "fields": [
+                               {"tag": "TOTNCNCA", "field_name": "Total assets", "sr_no": "1"},
+                               {"tag": "TOTL", "field_name": "Total liabilities", "sr_no": "2"},
+                               {"tag": "TOTEQNR", "field_name": "Total equity", "sr_no": "3"},
+                               {"tag": "MISSING1", "field_name": "Something unreported",
+                                "sr_no": "4"},
+                           ]}]}]}
+    fog = _balance_sheet_fog(100.0, 60.0, 40.0)
+    out = reason(fog, _balance_sheet_mapping(), schema, basis="consolidated")
+
+    totals = out["coverage"]["totals"]
+    assert totals["expected"] == 4
+    assert totals["found_extracted"] == 3
+    assert totals["missing_extracted"] == 1
+    assert "MISSING1" in out["coverage"]["missing_extracted"]
