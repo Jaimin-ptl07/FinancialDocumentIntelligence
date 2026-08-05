@@ -213,7 +213,12 @@ def test_a_contested_tag_names_its_winner_and_its_losers():
     assert got[0]["tag"] == "NETDTA"
     assert got[0]["claimants"] == 2
     assert got[0]["winner_label"] == "Deferred tax assets (net)"
-    assert got[0]["losers"] == ["Income tax assets (net)"]
+    assert got[0]["losers"] == [
+        {"label": "Income tax assets (net)", "value": 1259.0}
+    ]
+    assert got[0]["winner_value"] == 4465.0
+    # A large spread means one source is wrong, not that two agree.
+    assert got[0]["spread"] == 3206.0
 
 
 def test_a_note_exact_hit_beats_a_face_token_overlap_guess():
@@ -242,3 +247,43 @@ def test_the_face_still_wins_between_equally_good_matches():
     mapping = _mapping_with([
         ("li:note", "T", "lexical:name", 1.0), ("li:face", "T", "lexical:name", 1.0)])
     assert facts_from_mapping(fog, mapping, basis="consolidated")["T"] == 2.0
+
+
+def test_corroboration_and_mis_mapping_are_distinguishable():
+    """Recording only the LABELS was not enough: a face row and its note agreeing
+    on 11,027, and a face row losing 11,027 to an unrelated -109, produced the
+    SAME record. `spread` is what separates them."""
+    from fdi.core.fog_reason import contested_tags
+
+    agree = _fog_with([
+        {"id": "li:face", "parent": "st", "origin": "face",
+         "label": "Right-of-use assets", "current": 11027.0},
+        {"id": "li:note", "parent": "nt", "origin": "note",
+         "label": "Right of use assets total", "current": 11027.0},
+    ])
+    disagree = _fog_with([
+        {"id": "li:face", "parent": "st", "origin": "face",
+         "label": "Right-of-use assets", "current": 11027.0},
+        {"id": "li:note", "parent": "nt", "origin": "note",
+         "label": "Payment for acquiring right-of-use assets", "current": -109.0},
+    ])
+    mapping = _mapping_with([
+        ("li:face", "RGHTUA", "lexical:name", 1.0),
+        ("li:note", "RGHTUA", "lexical:name", 0.62),
+    ])
+    assert contested_tags(agree, mapping, basis="consolidated")[0]["spread"] == 0.0
+    assert contested_tags(disagree, mapping, basis="consolidated")[0]["spread"] == 11136.0
+
+
+def test_a_contested_tag_with_three_claimants_does_not_raise_on_sorting():
+    """Dicts are not orderable; a naive sorted() over loser records raised."""
+    from fdi.core.fog_reason import contested_tags
+
+    fog = _fog_with([
+        {"id": f"li:{c}", "parent": "st", "origin": "face", "label": c, "current": v}
+        for c, v in (("a", 1.0), ("b", 2.0), ("c", 3.0))
+    ])
+    mapping = _mapping_with([(f"li:{c}", "T", "lexical:name", 0.7) for c in "abc"])
+    got = contested_tags(fog, mapping, basis="consolidated")
+    assert got[0]["claimants"] == 3
+    assert len(got[0]["losers"]) == 2

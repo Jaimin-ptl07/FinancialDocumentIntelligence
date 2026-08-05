@@ -68,7 +68,9 @@ async def test_a_label_nothing_resolves_stays_visible_as_unmapped():
     """The whole point of the push model: it must not vanish."""
     client = FakeExtractorClient([{"Facility expenses": "unmapped"}])
     body = await _run(client)
-    assert "Facility expenses" in body["bases"]["consolidated"]["unmapped"]
+    unmapped = body["bases"]["consolidated"]["unmapped"]
+    entry = next(u for u in unmapped if u["label"] == "Facility expenses")
+    assert entry["reason"] == "model_said_unmapped"
 
 
 async def test_no_llm_call_is_made_when_the_free_tiers_settle_everything():
@@ -106,7 +108,12 @@ async def test_a_failing_llm_call_degrades_only_that_unit():
     body = await _run(Boom())
     # The lexical tier still produced its edge.
     assert body["bases"]["consolidated"]["edges"]
-    assert "Facility expenses" in body["bases"]["consolidated"]["unmapped"]
+    # A swallowed outage must NOT look like an honest refusal.
+    entry = next(
+        u for u in body["bases"]["consolidated"]["unmapped"]
+        if u["label"] == "Facility expenses"
+    )
+    assert entry["reason"] == "model_call_failed"
 
 
 async def test_the_body_is_deterministic():
@@ -129,7 +136,7 @@ def test_the_stage_is_registered_with_the_right_deps():
     stage = REGISTRY.get("fog_mapping")
     assert stage.deps == ("fog_objects",)
     # v2 added the `schema` usability block.
-    assert stage.version == 2
+    assert stage.version == 3
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():
@@ -194,3 +201,37 @@ def test_a_usable_schema_reports_its_concept_count():
     body = build_mapping(_FOG, _SCHEMA, client=None, store=None)
     assert body["schema"]["usable"] is True
     assert body["schema"]["face_concepts"] > 0
+
+
+async def test_a_refusal_and_an_outage_are_distinguishable():
+    """They previously produced byte-identical bodies AND diagnostics, so a dead
+    Azure endpoint read exactly like a model honestly declining to guess."""
+    from fdi.pipeline.stages.fog_mapping import build_mapping
+
+    class Boom:
+        calls: list[tuple[str, str]] = []
+
+        def extract(self, *, system: str, user: str):
+            raise RuntimeError("azure is down")
+
+    refused = build_mapping(
+        _FOG, _SCHEMA,
+        client=FakeExtractorClient([{"Facility expenses": "unmapped"}]), store=None,
+    )
+    outage = build_mapping(_FOG, _SCHEMA, client=Boom(), store=None)
+
+    def reason_for(body, label):
+        return next(u["reason"] for u in body["bases"]["consolidated"]["unmapped"]
+                    if u["label"] == label)
+
+    assert reason_for(refused, "Facility expenses") == "model_said_unmapped"
+    assert reason_for(outage, "Facility expenses") == "model_call_failed"
+
+
+async def test_no_client_is_its_own_reason():
+    from fdi.pipeline.stages.fog_mapping import build_mapping
+
+    body = build_mapping(_FOG, _SCHEMA, client=None, store=None)
+    entry = next(u for u in body["bases"]["consolidated"]["unmapped"]
+                 if u["label"] == "Facility expenses")
+    assert entry["reason"] == "no_client"

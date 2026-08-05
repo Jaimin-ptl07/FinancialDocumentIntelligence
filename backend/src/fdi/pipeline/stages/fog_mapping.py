@@ -72,8 +72,14 @@ def _resolve_unit(
     client: object,
     store: MemoryStore | None,
     usage: UsageAccumulator | None = None,
-) -> tuple[dict[str, Resolution], int]:
-    """One unit through all three tiers. Returns (resolutions, llm_calls)."""
+) -> tuple[dict[str, Resolution], int, str]:
+    """One unit through all three tiers.
+
+    Returns (resolutions, llm_calls, reason) where `reason` explains what
+    happened to whatever stayed UNMAPPED. "model answered unmapped" and
+    "the model call raised" previously produced byte-identical bodies AND
+    diagnostics -- an honest refusal and a swallowed outage were literally
+    indistinguishable, which is the failure this graph exists to prevent."""
     resolved: dict[str, Resolution] = {}
     if store is not None:
         resolved.update(resolve_from_memory(unit, store))
@@ -84,8 +90,10 @@ def _resolve_unit(
     # the Mapping[str, str] it's typed for is a stricter shape than the
     # Resolution values this stage actually keys by label.
     residue = unmapped_labels(unit, cast(Mapping[str, str], resolved))
-    if not residue or client is None:
-        return resolved, 0
+    if not residue:
+        return resolved, 0, ""
+    if client is None:
+        return resolved, 0, "no_client"
 
     ask = MapUnit(
         unit_id=unit.unit_id, kind=unit.kind, title=unit.title,
@@ -97,7 +105,7 @@ def _resolve_unit(
         ),
     )
     if not ask.candidates:
-        return resolved, 0
+        return resolved, 0, "no_candidate_left"
 
     system, user = build_map_prompt(ask)
     raw: object = {}
@@ -106,7 +114,7 @@ def _resolve_unit(
         raw = result.data
     except Exception:  # noqa: BLE001 - decision 10
         log.info("fog_mapping.unit_failed", unit=unit.unit_id)
-        return resolved, 1
+        return resolved, 1, "model_call_failed"
 
     # Usage bookkeeping gets its own guard, separate from the model call
     # above: a failed accumulator write must never lose `raw`, the result
@@ -119,7 +127,7 @@ def _resolve_unit(
 
     for label, tag in read_map_reply(raw, ask).items():
         resolved[label] = Resolution(label, tag, "llm", 0.0)
-    return resolved, 1
+    return resolved, 1, "model_said_unmapped"
 
 
 def build_mapping(
@@ -148,13 +156,18 @@ def build_mapping(
             region, face_candidates=face_candidates, note_candidates=note_candidates
         )
         resolutions: dict[str, dict[str, Resolution]] = {}
-        unmapped: list[str] = []
+        # label -> why. First reason wins: a label unresolved in one unit and
+        # resolved in another is not unmapped at all, and is dropped below.
+        unmapped: dict[str, str] = {}
         calls = 0
         for unit in units:
-            resolved, made = _resolve_unit(unit, client=client, store=store, usage=usage)
+            resolved, made, reason = _resolve_unit(
+                unit, client=client, store=store, usage=usage
+            )
             resolutions[unit.unit_id] = resolved
             calls += made
-            unmapped.extend(unmapped_labels(unit, cast(Mapping[str, str], resolved)))
+            for label in unmapped_labels(unit, cast(Mapping[str, str], resolved)):
+                unmapped.setdefault(label, reason or "no_candidate")
 
         edges, proof = mapping_edges(resolutions, region)
         tally = {"memory": 0, "lexical": 0, "llm": 0}
@@ -172,7 +185,10 @@ def build_mapping(
                 for e in edges
             ],
             "proof": proof,
-            "unmapped": sorted(set(unmapped)),
+            "unmapped": [
+                {"label": label, "reason": unmapped[label]}
+                for label in sorted(unmapped)
+            ],
         }
         diagnostics[basis] = {
             "units": len(units),
@@ -180,7 +196,7 @@ def build_mapping(
             "by_memory": tally["memory"],
             "by_lexical": tally["lexical"],
             "by_llm": tally["llm"],
-            "unmapped": len(set(unmapped)),
+            "unmapped": len(unmapped),
             "llm_calls": calls,
         }
 
@@ -200,7 +216,7 @@ def build_mapping(
         )
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
         "schema": {
             "face_concepts": len(face_candidates),
@@ -214,7 +230,7 @@ def build_mapping(
 
 class FogMappingStage:
     name = "fog_mapping"
-    version = 2
+    version = 3
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

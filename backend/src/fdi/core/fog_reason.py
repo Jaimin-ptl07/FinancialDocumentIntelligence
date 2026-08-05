@@ -143,18 +143,29 @@ def _arbitrate(
 def contested_tags(
     fog: Mapping[str, object], mapping: Mapping[str, object], *, basis: str
 ) -> list[dict[str, object]]:
-    """Tags more than one line item claimed, with the winner and the losers.
+    """Tags more than one line item claimed, with the winner, the losers, and
+    THE VALUES THEY DISAGREED BY.
 
     Corroboration and mis-mapping look identical from the fact map alone, so
     the competition is recorded rather than discarded -- `absent != missed`
-    applies to how a value was CHOSEN, not only to whether one exists."""
+    applies to how a value was CHOSEN, not only to whether one exists.
+
+    Recording only the LABELS was not enough: a face row and its note agreeing
+    on 11,027 and a face row losing 11,027 to an unrelated -109 produced the
+    same record. `spread` is the gap between the highest and lowest claim --
+    near zero means the sources corroborate, large means one of them is wrong
+    and a human should look."""
     winners = _arbitrate(fog, mapping, basis)
     items_raw = _region(fog, basis).get("line_items")
-    labels = {
-        str(i["id"]): str(i.get("label", ""))
-        for i in (items_raw if isinstance(items_raw, list) else [])
-        if isinstance(i, Mapping) and isinstance(i.get("id"), str)
-    }
+    labels: dict[str, str] = {}
+    values: dict[str, float] = {}
+    for i in items_raw if isinstance(items_raw, list) else []:
+        if not isinstance(i, Mapping) or not isinstance(i.get("id"), str):
+            continue
+        labels[str(i["id"])] = str(i.get("label", ""))
+        current = i.get("current")
+        if not isinstance(current, bool) and isinstance(current, int | float):
+            values[str(i["id"])] = float(current)
     counts: dict[str, list[str]] = {}
     edges_raw = _region(mapping, basis).get("edges")
     for edge in edges_raw if isinstance(edges_raw, list) else []:
@@ -170,15 +181,22 @@ def contested_tags(
         if len(claimants) < 2:
             continue
         winner = winners.get(tag)
+        claimed = [values[c] for c in claimants if c in values]
         out.append({
             "tag": tag,
             "claimants": len(claimants),
             "winner": winner.line_item if winner else "",
             "winner_label": winner.label if winner else "",
-            "losers": sorted(
-                labels[c] for c in claimants
+            "winner_value": winner.value if winner else None,
+            # Dicts are not orderable -- sort by the line-item id, which is
+            # already the stable identity everything else keys on.
+            "losers": [
+                {"label": labels[c], "value": values.get(c)}
+                for c in claimants
                 if winner is None or c != winner.line_item
-            ),
+            ],
+            # 0 => the sources agree (corroboration). Large => one is wrong.
+            "spread": round(max(claimed) - min(claimed), 4) if claimed else None,
         })
     return out
 
