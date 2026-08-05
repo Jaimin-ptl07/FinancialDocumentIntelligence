@@ -65,6 +65,37 @@ def test_memory_returns_nothing_for_an_unseen_label():
     assert resolve_from_memory(_UNIT, InMemoryStore()) == {}
 
 
+def test_the_memory_key_is_scoped_by_basis_not_just_label_and_section():
+    """"Computer equipment" under PPE is a fixed asset, "Computer software"
+    under intangibles is not -- and CONSOLIDATED and STANDALONE are different
+    numbers for the same concept, the same class of confusion. A mapping
+    learned on one basis must never answer for a label under another."""
+    facexp = _c("FACEXP", "Facility costs")
+    store = InMemoryStore()
+    observe(
+        store,
+        MemoryKey.of("Facility expenses", "Other expenses", "consolidated"),
+        "OTEXP", confidence=1.0, method="semantic", confirmed=True,
+    )
+    observe(
+        store,
+        MemoryKey.of("Facility expenses", "Other expenses", "standalone"),
+        "FACEXP", confidence=1.0, method="semantic", confirmed=True,
+    )
+    consolidated_unit = MapUnit(
+        unit_id="nt:consolidated:13", kind="note", title="Other expenses",
+        labels=("Facility expenses",), candidates=(*_CANDS, facexp),
+        basis="consolidated",
+    )
+    standalone_unit = MapUnit(
+        unit_id="nt:standalone:13", kind="note", title="Other expenses",
+        labels=("Facility expenses",), candidates=(*_CANDS, facexp),
+        basis="standalone",
+    )
+    assert resolve_from_memory(consolidated_unit, store)["Facility expenses"].tag == "OTEXP"
+    assert resolve_from_memory(standalone_unit, store)["Facility expenses"].tag == "FACEXP"
+
+
 def test_memory_never_returns_a_tag_the_unit_does_not_offer():
     """A remembered mapping from another statement must not leak in."""
     store = InMemoryStore()
@@ -100,6 +131,22 @@ def test_units_from_fog_makes_one_unit_per_statement_and_note():
     assert by_id["st:consolidated:profit_and_loss"].labels == ("Other expenses",)
     assert by_id["nt:consolidated:13"].kind == "note"
     assert by_id["nt:consolidated:13"].labels == ("Travel expenses",)
+
+
+def test_units_from_fog_carries_the_basis_onto_every_unit():
+    """`resolve_from_memory` scopes its lookups by `unit.basis` -- so the
+    basis a region belongs to must reach the units it produces."""
+    region = {
+        "statements": [], "notes": [
+            {"id": "nt:consolidated:13", "ref": "13", "title": "Other expenses"}],
+        "line_items": [{"id": "li:b", "parent": "nt:consolidated:13",
+                        "origin": "note", "label": "Travel expenses", "current": 1000.0}],
+        "edges": [],
+    }
+    units = units_from_fog(
+        region, face_candidates=_CANDS, note_candidates=_CANDS, basis="standalone"
+    )
+    assert units[0].basis == "standalone"
 
 
 def test_a_unit_with_no_line_items_is_not_emitted():

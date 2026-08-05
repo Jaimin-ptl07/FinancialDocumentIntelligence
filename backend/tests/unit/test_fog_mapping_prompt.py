@@ -28,19 +28,19 @@ _UNIT = MapUnit(
 
 
 def test_the_prompt_carries_every_label_the_unit_holds():
-    _system, user = build_map_prompt(_UNIT)
+    _system, user, _dropped = build_map_prompt(_UNIT)
     assert "Facility expenses" in user
     assert "Travel expenses" in user
 
 
 def test_the_prompt_carries_every_candidate_tag_and_name():
-    _system, user = build_map_prompt(_UNIT)
+    _system, user, _dropped = build_map_prompt(_UNIT)
     assert "TCEXP" in user
     assert "Travel and conveyance" in user
 
 
 def test_the_prompt_names_the_unit_so_the_model_knows_the_context():
-    _system, user = build_map_prompt(_UNIT)
+    _system, user, _dropped = build_map_prompt(_UNIT)
     assert "Other expenses" in user
     assert "nt:consolidated:13" in user
 
@@ -48,9 +48,33 @@ def test_the_prompt_names_the_unit_so_the_model_knows_the_context():
 def test_the_system_prompt_forbids_inventing_values():
     """The mapper assigns CONCEPTS. Values are already parsed deterministically,
     and letting the model restate one reintroduces the comma bug."""
-    system, _user = build_map_prompt(_UNIT)
+    system, _user, _dropped = build_map_prompt(_UNIT)
     assert "value" in system.lower()
     assert "unmapped" in system.lower()
+
+
+def test_a_unit_within_the_cap_drops_nothing():
+    """MAX_CANDIDATES is 40 (fdi.core.concepts); `_UNIT` offers 2."""
+    _system, _user, dropped = build_map_prompt(_UNIT)
+    assert dropped == 0
+
+
+def test_candidates_beyond_the_cap_are_dropped_and_the_drop_is_reported():
+    """MEASURED: an uncapped note-candidate set ran to ~519 concepts and
+    ~12.3k tokens/unit -- `build_map_prompt` was the one place that bypassed
+    the `MAX_CANDIDATES` cap every other candidate-set builder respects. A
+    silent cap would read as "considered everything"; `dropped` is what makes
+    the truncation visible to a caller."""
+    from fdi.core.concepts import MAX_CANDIDATES
+
+    many = tuple(
+        _c(f"T{i}", f"Concept {i}") for i in range(MAX_CANDIDATES + 5)
+    )
+    unit = MapUnit("u", "note", "t", ("Label",), many)
+    _system, user, dropped = build_map_prompt(unit)
+    assert dropped == 5
+    assert f"T{MAX_CANDIDATES - 1}" in user
+    assert f"T{MAX_CANDIDATES}" not in user
 
 
 def test_a_reply_maps_labels_to_tags():
@@ -101,7 +125,7 @@ def test_a_unit_with_no_candidates_maps_nothing():
 
 def test_the_prompt_survives_a_candidate_with_no_aliases():
     """Most taxonomy leaves have none; rendering must not crash or print None."""
-    _system, user = build_map_prompt(
+    _system, user, _dropped = build_map_prompt(
         MapUnit("u", "note", "t", ("Label",), (_c("OTEXP", "Other expenses"),))
     )
     assert "OTEXP" in user

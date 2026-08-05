@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from fdi.core.concepts import ConceptCandidate
+from fdi.core.concepts import MAX_CANDIDATES, ConceptCandidate
 from fdi.core.fog import Edge
 from fdi.core.mapping import lexical_match
 from fdi.core.memory import MemoryKey, MemoryStore, recall
@@ -38,7 +38,11 @@ class MapUnit:
 
     `kind` is "face" or "note", and it decides the candidate set: face rows are
     SUMMARIES and match parent concepts, note rows are DETAIL and match
-    descendants. Conflating the two left 15 of TCS's 28 face rows unmapped."""
+    descendants. Conflating the two left 15 of TCS's 28 face rows unmapped.
+
+    `basis` ("consolidated" | "standalone" | ...) is carried so memory lookups
+    can be scoped by it -- see `resolve_from_memory`'s docstring for why a
+    label alone is not a safe key."""
 
     unit_id: str
     kind: str
@@ -46,6 +50,7 @@ class MapUnit:
     labels: tuple[str, ...]
     candidates: tuple[ConceptCandidate, ...]
     kinds: tuple[str, ...] = ()
+    basis: str = ""
 
 
 _SYSTEM = """\
@@ -68,21 +73,30 @@ Answer with a JSON object mapping each label to a tag or to "unmapped".\
 """
 
 
-def build_map_prompt(unit: MapUnit) -> tuple[str, str]:
-    """`(system, user)` for one unit. The system half is shared and versioned;
-    the user half is this unit's labels and its candidate concepts."""
+def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
+    """`(system, user, dropped)` for one unit. The system half is shared and
+    versioned; the user half is this unit's labels and its candidate concepts.
+
+    Candidates are capped at `MAX_CANDIDATES` (fdi.core.concepts): an
+    uncapped note-candidate set MEASURED at ~519 concepts, ~12.3k tokens/unit,
+    ~INR 218/document -- `build_map_prompt` was the one place in the mapper
+    that bypassed the cap every other candidate-set builder already respects.
+    `dropped` is how many candidates the cap cut, so a caller can log it
+    rather than let the truncation pass as "considered everything"."""
+    kept = unit.candidates[:MAX_CANDIDATES]
+    dropped = max(0, len(unit.candidates) - len(kept))
     lines = [
         f"UNIT: {unit.unit_id} ({unit.kind})",
         f"TITLE: {unit.title}",
         "",
         "CONCEPTS (tag - name - aliases):",
     ]
-    for c in unit.candidates:
+    for c in kept:
         aliases = ", ".join(c.aliases) if c.aliases else "-"
         lines.append(f"  {c.tag} - {c.name} - {aliases}")
     lines += ["", "LABELS to map:"]
     lines += [f"  {label}" for label in unit.labels]
-    return _SYSTEM, "\n".join(lines)
+    return _SYSTEM, "\n".join(lines), dropped
 
 
 def read_map_reply(reply: object, unit: MapUnit) -> dict[str, str]:
@@ -187,15 +201,17 @@ def resolve_from_memory(
 
     Keyed on (label, section, basis) rather than label alone: "Computer
     equipment" under PPE is a fixed asset, "Computer software" under
-    intangibles is not. `MemoryKey.of` normalises all three parts, so callers
-    never have to match its casing rules by hand.
+    intangibles is not -- and CONSOLIDATED and STANDALONE are different
+    numbers for the same concept, which is exactly the confusion the basis
+    model exists to prevent. `MemoryKey.of` normalises all three parts, so
+    callers never have to match its casing rules by hand.
 
     `recall` returns only TRUSTED entries, and a remembered tag this unit does
     not offer is DROPPED -- memory from another statement must not leak in."""
     offered = {c.tag for c in unit.candidates}
     out: dict[str, Resolution] = {}
     for label in unit.labels:
-        entry = recall(store, MemoryKey.of(label, unit.title))
+        entry = recall(store, MemoryKey.of(label, unit.title, unit.basis))
         if entry is not None and entry.tag in offered:
             out[label] = Resolution(label, entry.tag, "memory", entry.confidence)
     return out
@@ -218,11 +234,16 @@ def units_from_fog(
     *,
     face_candidates: Sequence[ConceptCandidate],
     note_candidates: Sequence[ConceptCandidate],
+    basis: str = "",
 ) -> list[MapUnit]:
     """One MapUnit per statement face and per note that HAS line items.
 
     A unit with no items is not emitted: it would cost an LLM call and answer
-    nothing. Units are id-sorted so the artifact hashes stably. Total."""
+    nothing. Units are id-sorted so the artifact hashes stably. Total.
+
+    `basis` is carried onto every unit unchanged -- it identifies which of the
+    FOG's bases this `region` IS, not something derived per-unit -- so
+    `resolve_from_memory` can scope its lookups by it."""
     by_parent = _items_by_parent(region)
     units: list[MapUnit] = []
 
@@ -248,7 +269,7 @@ def units_from_fog(
             units.append(MapUnit(
                 unit_id=node_id, kind=kind, title=title, labels=labels,
                 candidates=candidates_for_kind(kind, face_candidates, note_candidates),
-                kinds=kinds,
+                kinds=kinds, basis=basis,
             ))
     units.sort(key=lambda u: u.unit_id)
     return units

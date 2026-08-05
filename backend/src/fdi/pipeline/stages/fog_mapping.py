@@ -33,6 +33,7 @@ from typing import cast
 import structlog
 
 from fdi.core.concepts import (
+    MAX_CANDIDATES,
     ConceptCandidate,
     all_concepts,
     build_concept_index,
@@ -74,11 +75,17 @@ def _resolve_unit(
     client: object,
     store: MemoryStore | None,
     usage: UsageAccumulator | None = None,
-) -> tuple[dict[str, Resolution], int, str]:
+) -> tuple[dict[str, Resolution], int, int, int, str]:
     """One unit through all three tiers.
 
-    Returns (resolutions, llm_calls, reason) where `reason` explains what
-    happened to whatever stayed UNMAPPED. "model answered unmapped" and
+    Returns (resolutions, llm_calls, llm_calls_billed, dropped, reason).
+    `llm_calls` is every model call ATTEMPTED (success or failure);
+    `llm_calls_billed` is the subset that returned `.usage` -- the two used
+    to be conflated under one `llm_calls` count, so the artifact and
+    `GET /documents/{doc_id}/cost` disagreed about how many calls were
+    actually billed. `dropped` is how many candidates `build_map_prompt`
+    capped out of the prompt (0 when no call was made). `reason` explains
+    what happened to whatever stayed UNMAPPED. "model answered unmapped" and
     "the model call raised" previously produced byte-identical bodies AND
     diagnostics -- an honest refusal and a swallowed outage were literally
     indistinguishable, which is the failure this graph exists to prevent."""
@@ -93,9 +100,9 @@ def _resolve_unit(
     # Resolution values this stage actually keys by label.
     residue = unmapped_labels(unit, cast(Mapping[str, str], resolved))
     if not residue:
-        return resolved, 0, ""
+        return resolved, 0, 0, 0, ""
     if client is None:
-        return resolved, 0, "no_client"
+        return resolved, 0, 0, 0, "no_client"
 
     ask = MapUnit(
         unit_id=unit.unit_id, kind=unit.kind, title=unit.title,
@@ -105,31 +112,45 @@ def _resolve_unit(
             c for c in unit.candidates
             if c.tag not in {r.tag for r in resolved.values()}
         ),
+        basis=unit.basis,
     )
     if not ask.candidates:
-        return resolved, 0, "no_candidate_left"
+        return resolved, 0, 0, 0, "no_candidate_left"
 
-    system, user = build_map_prompt(ask)
+    system, user, dropped = build_map_prompt(ask)
+    if dropped:
+        log.info(
+            "fog_mapping.candidates_capped", unit=unit.unit_id,
+            dropped=dropped, cap=MAX_CANDIDATES,
+        )
     raw: object = {}
     try:
         result = client.extract(system=system, user=user)  # type: ignore[attr-defined]
         raw = result.data
+        # Read INSIDE the same guard as the call itself (Decision 10): a
+        # client returning a malformed result -- `.data` present, `.usage`
+        # missing entirely -- must degrade this unit, not raise past it.
+        result_usage = result.usage
     except Exception:  # noqa: BLE001 - decision 10
         log.info("fog_mapping.unit_failed", unit=unit.unit_id)
-        return resolved, 1, "model_call_failed"
+        return resolved, 1, 0, dropped, "model_call_failed"
 
-    # Usage bookkeeping gets its own guard, separate from the model call
-    # above: a failed accumulator write must never lose `raw`, the result
-    # the call already paid for (see module docstring for the measured scar).
-    if usage is not None and result.usage is not None:
-        try:
-            usage.record_llm("fog_mapping", result.usage)
-        except Exception:  # noqa: BLE001 - decision 10
-            log.info("fog_mapping.usage_record_failed", unit=unit.unit_id)
+    billed = 0
+    if result_usage is not None:
+        billed = 1
+        # Usage bookkeeping gets its own guard, separate from the model call
+        # above: a failed accumulator write must never lose `raw`, the
+        # result the call already paid for (see module docstring for the
+        # measured scar).
+        if usage is not None:
+            try:
+                usage.record_llm("fog_mapping", result_usage)
+            except Exception:  # noqa: BLE001 - decision 10
+                log.info("fog_mapping.usage_record_failed", unit=unit.unit_id)
 
     for label, tag in read_map_reply(raw, ask).items():
         resolved[label] = Resolution(label, tag, "llm", 0.0)
-    return resolved, 1, "model_said_unmapped"
+    return resolved, 1, billed, dropped, "model_said_unmapped"
 
 
 def build_mapping(
@@ -155,19 +176,24 @@ def build_mapping(
         if not isinstance(region, Mapping):
             continue
         units = units_from_fog(
-            region, face_candidates=face_candidates, note_candidates=note_candidates
+            region, face_candidates=face_candidates, note_candidates=note_candidates,
+            basis=basis,
         )
         resolutions: dict[str, dict[str, Resolution]] = {}
         # label -> why. First reason wins: a label unresolved in one unit and
         # resolved in another is not unmapped at all, and is dropped below.
         unmapped: dict[str, str] = {}
         calls = 0
+        billed_calls = 0
+        dropped_candidates = 0
         for unit in units:
-            resolved, made, reason = _resolve_unit(
+            resolved, made, billed, dropped, reason = _resolve_unit(
                 unit, client=client, store=store, usage=usage
             )
             resolutions[unit.unit_id] = resolved
             calls += made
+            billed_calls += billed
+            dropped_candidates += dropped
             for label in unmapped_labels(unit, cast(Mapping[str, str], resolved)):
                 unmapped.setdefault(label, reason or "no_candidate")
 
@@ -199,7 +225,15 @@ def build_mapping(
             "by_lexical": tally["lexical"],
             "by_llm": tally["llm"],
             "unmapped": len(unmapped),
+            # `llm_calls` is every attempt; `llm_calls_billed` is the subset
+            # that returned `.usage` -- a failed call is attempted but never
+            # billed, and conflating the two made this artifact disagree with
+            # GET /documents/{doc_id}/cost about how many calls were paid for.
             "llm_calls": calls,
+            "llm_calls_billed": billed_calls,
+            # How many candidates `build_map_prompt`'s MAX_CANDIDATES cap cut
+            # out of a prompt in this basis -- 0 means nothing was capped.
+            "prompt_candidates_dropped": dropped_candidates,
         }
 
     # A schema that yields NO concepts makes every basis map nothing, and the
@@ -221,7 +255,10 @@ def build_mapping(
         # v4: `resolve_lexical` refuses a kind-mismatched candidate (a count,
         # per-share figure or ratio can never satisfy a currency concept) and
         # a match below `LEXICAL_FLOOR`, so `proof` and `unmapped` both change.
-        "schema_version": 4,
+        # v5: diagnostics split `llm_calls` (attempted) from `llm_calls_billed`
+        # (returned usage) and gained `prompt_candidates_dropped`; memory
+        # lookups are now basis-scoped -- Task 6, the Phase 3-4 review minors.
+        "schema_version": 5,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
         "schema": {
             "face_concepts": len(face_candidates),
@@ -236,7 +273,8 @@ def build_mapping(
 class FogMappingStage:
     name = "fog_mapping"
     # v4: kind-mismatched and sub-floor lexical matches are now refused.
-    version = 4
+    # v5: billed-call count, prompt candidate cap, and basis-scoped memory.
+    version = 5
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

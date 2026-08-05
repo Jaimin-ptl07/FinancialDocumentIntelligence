@@ -116,6 +116,75 @@ async def test_a_failing_llm_call_degrades_only_that_unit():
     assert entry["reason"] == "model_call_failed"
 
 
+async def test_a_failing_call_is_attempted_but_not_billed():
+    """`llm_calls` (attempted) and `llm_calls_billed` (returned usage) used to
+    be one conflated count, so this artifact and `GET /documents/{doc_id}/cost`
+    disagreed about how many calls were actually billed."""
+    class Boom:
+        calls: list[tuple[str, str]] = []
+
+        def extract(self, *, system: str, user: str):
+            raise RuntimeError("azure is down")
+
+    body = await _run(Boom())
+    d = body["diagnostics"]["consolidated"]
+    assert d["llm_calls"] == 1
+    assert d["llm_calls_billed"] == 0
+
+
+async def test_a_result_without_usage_degrades_the_unit_not_raises():
+    """Decision 10: `result.usage` used to be read OUTSIDE the model call's
+    try/except, so a client returning a malformed result -- `.data` present,
+    `.usage` missing entirely -- raised past the guard instead of degrading
+    just this unit."""
+    class NoUsageResult:
+        data = {"Facility expenses": "FACEXP"}
+        # deliberately no `.usage` attribute
+
+    class NoUsageClient:
+        def extract(self, *, system: str, user: str):
+            return NoUsageResult()
+
+    body = await _run(NoUsageClient())
+    entry = next(
+        u for u in body["bases"]["consolidated"]["unmapped"]
+        if u["label"] == "Facility expenses"
+    )
+    assert entry["reason"] == "model_call_failed"
+
+
+async def test_prompt_candidates_dropped_is_recorded_when_the_cap_bites():
+    """MEASURED: an uncapped note-candidate set ran to ~519 concepts,
+    ~12.3k tokens/unit, ~INR 218/document -- `build_map_prompt` was the one
+    place that bypassed `MAX_CANDIDATES`. The stage now records what the cap
+    cut, so a silent truncation cannot pass as "considered everything"."""
+    from fdi.core.concepts import MAX_CANDIDATES
+    from fdi.pipeline.stages.fog_mapping import build_mapping
+
+    fields = [
+        {"tag": f"T{i}", "field_name": f"Concept {i}", "origin": "extracted"}
+        for i in range(MAX_CANDIDATES + 5)
+    ]
+    schema = {"modules": [{
+        "module_id": "profit_and_loss", "statement": "profit_and_loss",
+        "retrieval_units": [{"unit_id": "RU", "fields": fields}],
+    }]}
+    fog = {
+        "doc_id": "doc-1",
+        "bases": {"consolidated": {
+            "statements": [],
+            "notes": [{"id": "nt:consolidated:1", "ref": "1", "title": "Many"}],
+            "line_items": [{"id": "li:a", "parent": "nt:consolidated:1",
+                            "origin": "note", "label": "Unmatched label",
+                            "current": 1.0}],
+            "edges": [],
+        }},
+    }
+    client = FakeExtractorClient([{"Unmatched label": "unmapped"}])
+    body = build_mapping(fog, schema, client=client, store=None)
+    assert body["diagnostics"]["consolidated"]["prompt_candidates_dropped"] == 5
+
+
 async def test_the_body_is_deterministic():
     from fdi.core.serialization import canonical_json_bytes
     from fdi.pipeline.stages.fog_mapping import build_mapping
@@ -137,7 +206,8 @@ def test_the_stage_is_registered_with_the_right_deps():
     assert stage.deps == ("fog_objects",)
     # v2 added the `schema` usability block.
     # v4 refuses a kind-mismatched or sub-floor lexical match.
-    assert stage.version == 4
+    # v5 splits billed calls, caps prompt candidates, scopes memory by basis.
+    assert stage.version == 5
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():

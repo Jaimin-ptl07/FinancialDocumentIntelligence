@@ -33,14 +33,25 @@ def _region(doc: Mapping[str, object], basis: str) -> Mapping[str, object]:
 
 
 def facts_from_mapping(
-    fog: Mapping[str, object], mapping: Mapping[str, object], *, basis: str
+    fog: Mapping[str, object],
+    mapping: Mapping[str, object],
+    *,
+    basis: str,
+    _arbitrated: Mapping[str, _Claim] | None = None,
 ) -> dict[str, float]:
     """tag -> current-year value, ARBITRATED when more than one line claims it.
 
     A line item with NO figure yields no fact. A disclosed nil is not a zero,
     and emitting 0.0 would let it satisfy a reported total's reconciliation and
-    claim the books tie. Total: never raises."""
-    return {tag: claim.value for tag, claim in _arbitrate(fog, mapping, basis).items()}
+    claim the books tie. Total: never raises.
+
+    `_arbitrated` lets a caller that already ran `_arbitrate` (namely `reason`,
+    which also needs it for `contested_tags`) pass the result in rather than
+    pay for it twice; every other caller leaves it None and this computes its
+    own. Underscore-prefixed and keyword-only: plumbing for this module, not
+    part of the function's public contract."""
+    claims = _arbitrated if _arbitrated is not None else _arbitrate(fog, mapping, basis)
+    return {tag: claim.value for tag, claim in claims.items()}
 
 
 @dataclass(frozen=True)
@@ -152,7 +163,11 @@ def _arbitrate(
 
 
 def contested_tags(
-    fog: Mapping[str, object], mapping: Mapping[str, object], *, basis: str
+    fog: Mapping[str, object],
+    mapping: Mapping[str, object],
+    *,
+    basis: str,
+    _arbitrated: Mapping[str, _Claim] | None = None,
 ) -> list[dict[str, object]]:
     """Tags more than one line item claimed, with the winner, the losers, and
     THE VALUES THEY DISAGREED BY.
@@ -165,8 +180,11 @@ def contested_tags(
     on 11,027 and a face row losing 11,027 to an unrelated -109 produced the
     same record. `spread` is the gap between the highest and lowest claim --
     near zero means the sources corroborate, large means one of them is wrong
-    and a human should look."""
-    winners = _arbitrate(fog, mapping, basis)
+    and a human should look.
+
+    `_arbitrated`: see `facts_from_mapping`'s docstring -- same plumbing, same
+    reason."""
+    winners = _arbitrated if _arbitrated is not None else _arbitrate(fog, mapping, basis)
     items_raw = _region(fog, basis).get("line_items")
     labels: dict[str, str] = {}
     values: dict[str, float] = {}
@@ -247,7 +265,11 @@ def reason(
     basis: str,
 ) -> dict[str, object]:
     """The full reasoning pass over one basis. Total: never raises."""
-    facts = facts_from_mapping(fog, mapping, basis=basis)
+    # Computed ONCE and threaded to both callers below: `_arbitrate` used to
+    # run twice per `reason()` call -- once here, once inside `contested_tags`
+    # -- for identical inputs and an identical answer.
+    arbitrated = _arbitrate(fog, mapping, basis)
+    facts = facts_from_mapping(fog, mapping, basis=basis, _arbitrated=arbitrated)
     formulas = read_formulas(schema) if isinstance(schema, Mapping) else {}
     composed = compose(facts, formulas)
 
@@ -288,7 +310,7 @@ def reason(
         # Recorded, not discarded: a face row and its note are CORROBORATION,
         # a face row and an unrelated fuzzy match are a MIS-MAPPING, and the
         # fact map alone cannot tell them apart.
-        "contested": contested_tags(fog, mapping, basis=basis),
+        "contested": contested_tags(fog, mapping, basis=basis, _arbitrated=arbitrated),
         "composed": composed_body,
         "checks": checks,
         "coverage": coverage_body,

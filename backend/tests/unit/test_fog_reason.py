@@ -86,6 +86,24 @@ def test_reason_is_deterministic():
     assert canonical_json_bytes(a) == canonical_json_bytes(b)
 
 
+def test_arbitrate_runs_once_per_reason_call(monkeypatch):
+    """`_arbitrate` used to run twice per `reason()` call -- once for `facts`,
+    once inside `contested_tags` -- over identical inputs for an identical
+    answer. `reason` must compute it once and pass it to both."""
+    import fdi.core.fog_reason as fog_reason_mod
+
+    calls: list[str] = []
+    original = fog_reason_mod._arbitrate
+
+    def counting(*args: object, **kwargs: object) -> object:
+        calls.append("call")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fog_reason_mod, "_arbitrate", counting)
+    reason(_FOG, _MAPPING, _SCHEMA, basis="consolidated")
+    assert len(calls) == 1
+
+
 def test_malformed_input_never_raises():
     assert facts_from_mapping({}, {}, basis="consolidated") == {}
     out = reason({}, {}, {}, basis="consolidated")
