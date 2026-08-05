@@ -130,3 +130,41 @@ def test_the_prompt_survives_a_candidate_with_no_aliases():
     )
     assert "OTEXP" in user
     assert "None" not in user
+
+
+def test_the_cap_keeps_the_RELEVANT_candidates_not_the_first_declared():
+    """The cap trims ~519 concepts to 40. Truncating in schema DECLARATION order
+    leaves the model answering from a set that is 92% blind, and the right
+    concept is almost never in it -- a confidently wrong answer from a blind
+    shortlist is worse than the cost the cap was saving."""
+    from fdi.core.concepts import MAX_CANDIDATES
+
+    noise = tuple(
+        _c(f"NOISE{i}", f"Wholly unrelated concept {i}")
+        for i in range(MAX_CANDIDATES + 20)
+    )
+    target = _c("TCEXP", "Travel and conveyance", ("travel expenses",))
+    unit = MapUnit(
+        unit_id="u", kind="note", title="Other expenses",
+        labels=("Travel expenses",),
+        candidates=(*noise, target),   # declared LAST, far beyond the cap
+    )
+    _system, user, dropped = build_map_prompt(unit)
+    assert "TCEXP" in user
+    assert dropped == len(noise) + 1 - MAX_CANDIDATES
+
+
+def test_the_capped_prompt_is_deterministic():
+    """It feeds a prompt whose answer reaches a content-addressed artifact."""
+    unit = MapUnit(
+        unit_id="u", kind="note", title="t",
+        labels=("Travel expenses",),
+        candidates=tuple(_c(f"T{i}", f"Concept {i}") for i in range(60)),
+    )
+    assert build_map_prompt(unit) == build_map_prompt(unit)
+
+
+def test_a_unit_with_no_labels_keeps_declaration_order():
+    unit = MapUnit("u", "note", "t", (), (_c("A", "Alpha"), _c("B", "Beta")))
+    _system, user, _dropped = build_map_prompt(unit)
+    assert user.index("A") < user.index("B")

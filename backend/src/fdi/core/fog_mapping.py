@@ -73,6 +73,24 @@ Answer with a JSON object mapping each label to a tag or to "unmapped".\
 """
 
 
+def _ranked_candidates(unit: MapUnit) -> tuple[ConceptCandidate, ...]:
+    """`unit.candidates`, best-affinity-first for the labels being asked.
+
+    Ties keep declaration order (`sorted` is stable), so the result is
+    deterministic -- this feeds a prompt whose answer reaches an artifact."""
+    if not unit.labels:
+        return unit.candidates
+
+    def affinity(candidate: ConceptCandidate) -> float:
+        best = 0.0
+        for label in unit.labels:
+            _hit, _method, score = lexical_match(label, (candidate,))
+            best = max(best, score)
+        return best
+
+    return tuple(sorted(unit.candidates, key=affinity, reverse=True))
+
+
 def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
     """`(system, user, dropped)` for one unit. The system half is shared and
     versioned; the user half is this unit's labels and its candidate concepts.
@@ -82,8 +100,20 @@ def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
     ~INR 218/document -- `build_map_prompt` was the one place in the mapper
     that bypassed the cap every other candidate-set builder already respects.
     `dropped` is how many candidates the cap cut, so a caller can log it
-    rather than let the truncation pass as "considered everything"."""
-    kept = unit.candidates[:MAX_CANDIDATES]
+    rather than let the truncation pass as "considered everything".
+
+    WHICH candidates survive is the whole game. Truncating in schema
+    DECLARATION order keeps an arbitrary 40 of ~519 and leaves the model
+    answering from a set that is 92% blind -- the right concept is almost
+    never in it, and a confidently wrong answer from a blind shortlist is
+    worse than the cost the cap was saving. Candidates are therefore
+    ranked by their best lexical affinity to any label this unit is
+    actually asking about, and the cap keeps the strongest.
+
+    This tier only ever sees labels the FREE tiers could not settle, so a
+    high affinity here means "close but under the floor" -- exactly the
+    population a judgement is worth paying for."""
+    kept = _ranked_candidates(unit)[:MAX_CANDIDATES]
     dropped = max(0, len(unit.candidates) - len(kept))
     lines = [
         f"UNIT: {unit.unit_id} ({unit.kind})",
