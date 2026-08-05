@@ -128,7 +128,8 @@ def test_the_stage_is_registered_with_the_right_deps():
 
     stage = REGISTRY.get("fog_mapping")
     assert stage.deps == ("fog_objects",)
-    assert stage.version == 1
+    # v2 added the `schema` usability block.
+    assert stage.version == 2
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():
@@ -172,3 +173,24 @@ async def test_a_none_accumulator_is_harmless():
     body = build_mapping(_FOG, _SCHEMA, client=client, store=None, usage=None)
     proof = {p["label"]: p for p in body["bases"]["consolidated"]["proof"]}
     assert proof["Facility expenses"]["tag"] == "FACEXP"
+
+
+def test_a_schema_with_no_concepts_is_recorded_not_silent():
+    """MEASURED: the v3.2 seed `load_schema` serves by default carries ZERO
+    `tag` keys, so every basis mapped nothing -- 0 edges, 0 facts, 0 cost, no
+    failure, and per-basis diagnostics byte-identical to an honest "this
+    document discloses nothing". The concept count is what separates "the
+    schema is wrong" from "the report is empty"."""
+    from fdi.pipeline.stages.fog_mapping import build_mapping
+
+    body = build_mapping(_FOG, {"modules": []}, client=None, store=None)
+    assert body["schema"]["usable"] is False
+    assert body["schema"]["face_concepts"] == 0
+
+
+def test_a_usable_schema_reports_its_concept_count():
+    from fdi.pipeline.stages.fog_mapping import build_mapping
+
+    body = build_mapping(_FOG, _SCHEMA, client=None, store=None)
+    assert body["schema"]["usable"] is True
+    assert body["schema"]["face_concepts"] > 0

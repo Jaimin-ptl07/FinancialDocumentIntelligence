@@ -47,8 +47,15 @@ class _Claim:
     @property
     def rank(self) -> tuple[int, int, float, str]:
         """Higher is better. Ties break on the line-item id so the winner is
-        stable across runs -- this reaches an artifact body."""
-        return (_ORIGIN_RANK.get(self.origin, 0), _tier(self.method, self.score),
+        stable across runs -- this reaches an artifact body.
+
+        EVIDENCE OUTRANKS POSITION. Ordering origin first meant a face row's
+        token-overlap GUESS (tier 1) beat a note row's EXACT hit (tier 3),
+        resurrecting the very scar this arbitration was written to fix for
+        every concept whose authoritative row lives in a note. Being on the
+        face is a tie-breaker between equally-good matches, not a licence
+        to override a better one."""
+        return (_tier(self.method, self.score), _ORIGIN_RANK.get(self.origin, 0),
                 self.score, self.line_item)
 
 

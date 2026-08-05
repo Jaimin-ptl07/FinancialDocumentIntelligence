@@ -184,9 +184,29 @@ def build_mapping(
             "llm_calls": calls,
         }
 
+    # A schema that yields NO concepts makes every basis map nothing, and the
+    # per-basis diagnostics of that are byte-identical to an honest "this
+    # document discloses nothing" -- 0 edges, 0 facts, 0 cost, no failure.
+    # MEASURED: the on-disk v3.2 seed `load_schema` serves by default carries
+    # ZERO `tag` keys (v4.3 carries 262), so wiring it turned the whole of
+    # Domain 1 into a silent no-op. Recording the concept count is what makes
+    # "the schema is wrong" distinguishable from "the report is empty".
+    if not face_candidates:
+        log.warning(
+            "fog_mapping.schema_has_no_concepts",
+            doc_id=str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
+            hint="load_schema is serving a schema with no `tag` keys "
+                 "(the v3.2 seed); the FOG requires a v4.3-shaped document",
+        )
+
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
+        "schema": {
+            "face_concepts": len(face_candidates),
+            "note_concepts": len(note_candidates),
+            "usable": bool(face_candidates),
+        },
         "bases": out_bases,
         "diagnostics": diagnostics,
     }
@@ -194,7 +214,7 @@ def build_mapping(
 
 class FogMappingStage:
     name = "fog_mapping"
-    version = 1
+    version = 2
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

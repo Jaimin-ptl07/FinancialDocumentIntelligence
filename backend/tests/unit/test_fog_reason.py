@@ -214,3 +214,31 @@ def test_a_contested_tag_names_its_winner_and_its_losers():
     assert got[0]["claimants"] == 2
     assert got[0]["winner_label"] == "Deferred tax assets (net)"
     assert got[0]["losers"] == ["Income tax assets (net)"]
+
+
+def test_a_note_exact_hit_beats_a_face_token_overlap_guess():
+    """EVIDENCE OUTRANKS POSITION. Ranking origin before the evidence tier let a
+    face row's fuzzy guess override a note row's exact hit -- the same wrong
+    value (1,259 for NETDTA) that arbitration was introduced to prevent."""
+    fog = _fog_with([
+        {"id": "li:face", "parent": "st", "origin": "face",
+         "label": "Income tax assets (net)", "current": 1259.0},
+        {"id": "li:note", "parent": "nt", "origin": "note",
+         "label": "Deferred tax assets (net)", "current": 4465.0},
+    ])
+    mapping = _mapping_with([
+        ("li:face", "NETDTA", "lexical:name", 0.71),
+        ("li:note", "NETDTA", "lexical:name", 1.0),
+    ])
+    assert facts_from_mapping(fog, mapping, basis="consolidated")["NETDTA"] == 4465.0
+
+
+def test_the_face_still_wins_between_equally_good_matches():
+    """Position remains the tie-breaker it was meant to be."""
+    fog = _fog_with([
+        {"id": "li:note", "parent": "nt", "origin": "note", "label": "X", "current": 1.0},
+        {"id": "li:face", "parent": "st", "origin": "face", "label": "X", "current": 2.0},
+    ])
+    mapping = _mapping_with([
+        ("li:note", "T", "lexical:name", 1.0), ("li:face", "T", "lexical:name", 1.0)])
+    assert facts_from_mapping(fog, mapping, basis="consolidated")["T"] == 2.0
