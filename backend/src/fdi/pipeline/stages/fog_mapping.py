@@ -48,7 +48,9 @@ from fdi.core.fog_mapping import (
     units_from_fog,
     unmapped_labels,
 )
+from fdi.core.hashing import sha256_hex
 from fdi.core.memory import MemoryStore
+from fdi.core.serialization import canonical_json_bytes
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.stage import StageContext
 from fdi.pipeline.usage import UsageAccumulator
@@ -245,6 +247,17 @@ class FogMappingStage:
         # raising -- this stage must never fail the DAG over bookkeeping.
         usage = cast(UsageAccumulator | None, ctx.services.get("usage"))
         return build_mapping(fog, schema, client=client, store=None, usage=usage)
+
+    def key_material(self, services: Mapping[str, object]) -> str:
+        """The taxonomy schema's digest. Canonical JSON so dict ordering cannot
+        change the key and cause a spurious re-bill of the only paid stage."""
+        schema = services.get("schema")
+        if not isinstance(schema, Mapping):
+            return ""
+        try:
+            return sha256_hex(canonical_json_bytes(schema))
+        except Exception:  # noqa: BLE001 - a key is never worth failing a run
+            return ""
 
 
 REGISTRY.register(FogMappingStage())

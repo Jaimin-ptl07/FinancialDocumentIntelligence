@@ -1,6 +1,7 @@
 """The framework around a Stage: hashing, the content-addressed cache, persistence,
 and successor scheduling. A stage stays a pure transform; all of that lives here."""
 
+import contextlib
 import time
 import uuid
 from collections.abc import Mapping
@@ -67,6 +68,12 @@ async def run_stage(
             doc = await s.get(Document, doc_id)
             checksum = doc.checksum.encode() if doc and doc.checksum else None
             input_hash = root_input_hash(checksum)
+
+        material = ""
+        with contextlib.suppress(Exception):
+            material = stage.key_material(svcs)
+        if material:
+            input_hash = derived_input_hash([input_hash, material])
 
     key = artifact_key(doc_id, stage_name, stage.version, input_hash)
 

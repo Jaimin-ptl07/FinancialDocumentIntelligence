@@ -2,11 +2,14 @@
 skips the body; a version bump flips staleness. The body is run at most once per key."""
 
 import uuid
+from collections.abc import Mapping
 
 import pytest
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from fdi.core.hashing import sha256_hex
+from fdi.core.serialization import canonical_json_bytes
 from fdi.pipeline.keys import artifact_key, root_input_hash
 from fdi.pipeline.registry import StageRegistry
 from fdi.pipeline.resolver import DagResolver
@@ -109,3 +112,59 @@ async def test_read_source_and_services_reach_the_stage(session_factory, store) 
 
     body = await store.get_json(artifact_key(doc, "probe", 1, root_input_hash(checksum.encode())))
     assert body == {"src": "PDFBYTES", "svc": "hi"}
+
+
+class _SchemaAware:
+    """A root stage whose output depends on an INJECTED SERVICE, not a declared
+    dep -- the shape review finding I4 describes. `key_material` is what closes
+    the hole (fdi.pipeline.stage.Stage.key_material's docstring)."""
+
+    name = "schema_aware"
+    version = 1
+    deps: tuple[str, ...] = ()
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, ctx: StageContext) -> object:
+        self.calls += 1
+        return {"seen_schema": ctx.services.get("schema")}
+
+    def key_material(self, services: Mapping[str, object]) -> str:
+        schema = services.get("schema")
+        if not isinstance(schema, Mapping):
+            return ""
+        return sha256_hex(canonical_json_bytes(schema))
+
+
+async def test_a_service_derived_schema_change_busts_the_cache(session_factory, store) -> None:
+    """Closes I4 end-to-end through `run_stage`: the taxonomy schema arrives via
+    `ctx.services`, outside `stage.deps`, so without folding `key_material` into
+    `input_hash` a schema edit would change what the stage WOULD produce while
+    the old artifact keeps being served. Same schema -> same key -> cache hit
+    (no re-run); different schema -> different key -> cache miss (re-run)."""
+    stage = _SchemaAware()
+    reg = StageRegistry()
+    reg.register(stage)
+    resolver = DagResolver(reg.all())
+    doc = str(uuid.uuid4())
+
+    async with session_factory() as s:
+        from fdi.platform.db.repository import RegistryRepository
+        await RegistryRepository(s).create_document(doc)
+        await s.commit()
+
+    common = {
+        "doc_id": doc, "stage_name": "schema_aware", "correlation_id": "c1",
+        "session_factory": session_factory, "store": store,
+        "registry": reg, "resolver": resolver,
+    }
+    schema_a = {"modules": [{"module_id": "pl"}]}
+    schema_b = {"modules": [{"module_id": "bs"}]}
+
+    await run_stage(run_id=str(uuid.uuid4()), services={"schema": schema_a}, **common)
+    await run_stage(run_id=str(uuid.uuid4()), services={"schema": schema_a}, **common)
+    assert stage.calls == 1, "an unchanged schema must be a cache HIT, not a re-run"
+
+    await run_stage(run_id=str(uuid.uuid4()), services={"schema": schema_b}, **common)
+    assert stage.calls == 2, "a changed schema must be a cache MISS, or I4 is still open"
