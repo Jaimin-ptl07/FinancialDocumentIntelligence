@@ -26,6 +26,7 @@ _ITEM = LineItem(
     table_index=88,
     row_index=4,
     source_row=6,
+    kind="currency",
 )
 
 
@@ -66,6 +67,7 @@ def test_line_item_body_round_trips_every_field():
     assert body["origin"] == "face"
     assert body["ref"] == "10"
     assert body["row_index"] == 4
+    assert body["kind"] == "currency"
 
 
 def test_a_null_amount_stays_null_not_zero():
@@ -106,8 +108,9 @@ def test_the_artifact_keys_everything_by_basis():
 def test_the_artifact_carries_its_doc_id_and_schema_version():
     artifact = build_fog_artifact({}, doc_id="doc-1", diagnostics={})
     assert artifact["doc_id"] == "doc-1"
-    # v2 added `source_row`; v4 records the footing target that was used.
-    assert artifact["schema_version"] == 4
+    # v2 added `source_row`; v4 records the footing target that was used;
+    # v5 adds `kind` to every LineItem body.
+    assert artifact["schema_version"] == 5
 
 
 def test_edges_are_sorted_so_the_artifact_hashes_stably():

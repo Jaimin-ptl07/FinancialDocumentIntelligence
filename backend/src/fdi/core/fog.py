@@ -60,6 +60,7 @@ class LineItem:
     table_index: int
     row_index: int
     source_row: int
+    kind: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ def line_item_body(item: LineItem) -> dict[str, object]:
         "table_index": item.table_index,
         "row_index": item.row_index,
         "source_row": item.source_row,
+        "kind": item.kind,
     }
 
 
@@ -138,6 +140,8 @@ def build_fog_artifact(
             ],
         }
     return {
+        # v5: every LineItem body carries `kind` -- the quantity kind
+        # (currency/count/per_share/ratio/unknown) classified from its label.
         # v3: a note row printing an explicit nil (`Communication | - | -`) is
         # now a LineItem with `current=None` instead of the block's caption, so
         # note `row_index` ordinals -- and therefore LineItem ids -- move.
@@ -145,7 +149,7 @@ def build_fog_artifact(
         # `regions_without_statements`.
         # v2 added `source_row` to every LineItem body -- see LineItem's
         # docstring for why the valued-row ordinal could not address a cell.
-        "schema_version": 4,
+        "schema_version": 5,
         "doc_id": doc_id,
         "bases": bases,
         "diagnostics": dict(diagnostics),

@@ -134,7 +134,7 @@ def test_output_is_deterministic_for_content_addressing():
 
 def test_malformed_input_never_raises():
     assert build_statement_index({}, {}) == {
-        "schema_version": 4, "statements": [], "discarded": [],
+        "schema_version": 5, "statements": [], "discarded": [],
         "regions": [{
             "basis": "unknown", "page_lo": 1, "page_hi": 100_000,
             "raw_page_lo": 1, "raw_page_hi": 100_000,

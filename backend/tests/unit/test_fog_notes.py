@@ -218,3 +218,29 @@ def test_a_note_with_no_tables_yields_nothing():
 
 def test_malformed_input_never_raises():
     assert note_line_items({}, {}, basis="consolidated") == ([], [])
+
+
+def test_a_share_count_note_row_is_not_currency():
+    """MEASURED: the weighted average share count competed with share capital
+    for EQWVR and won, with a contested spread of 3.6 billion."""
+    from fdi.core.fog_build import build_note_index, note_line_items
+
+    table = {
+        "bounding_regions": [{"page_number": 300}],
+        "spans": [{"offset": 2150, "length": 60}],
+        "cells": [
+            _cell(0, 0, "Particulars"), _cell(0, 1, "2025-26"),
+            _cell(1, 0, "Weighted average number of equity shares"),
+            _cell(1, 1, "3,61,80,87,518"),
+        ],
+    }
+    head = {
+        "content": "18. Earnings per share", "role": "sectionHeading",
+        "bounding_regions": [{"page_number": 300}],
+        "spans": [{"offset": 2000, "length": 22}],
+    }
+    ocr = {"paragraphs": [head], "tables": [table]}
+    basis = {"default_basis": "unknown",
+             "regions": [{"basis": "consolidated", "start_page": 300, "end_page": 400}]}
+    items, _ = note_line_items(ocr, build_note_index(ocr, basis), basis="consolidated")
+    assert items[0].kind == "count"

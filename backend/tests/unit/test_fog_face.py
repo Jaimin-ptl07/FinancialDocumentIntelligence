@@ -132,3 +132,9 @@ def test_a_basis_with_no_statements_yields_nothing_not_a_crash():
 
 def test_malformed_input_never_raises():
     assert face_line_items({}, {}, {}, basis="consolidated") == ([], [])
+
+
+def test_a_face_row_carries_its_quantity_kind():
+    items, _ = _build()
+    revenue = next(i for i in items if i.label == "Revenue from operations")
+    assert revenue.kind == "currency"

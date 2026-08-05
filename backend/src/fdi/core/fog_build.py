@@ -18,6 +18,7 @@ from fdi.core.basis import basis_regions
 from fdi.core.fog import Edge, LineItem, build_fog_artifact, line_item_id
 from fdi.core.notes import find_statement_pages
 from fdi.core.numbers import is_nil_marker, parse_amount
+from fdi.core.quantity import classify_quantity
 from fdi.core.statements import (
     STATEMENT_ANCHORS,
     FaceRow,
@@ -258,13 +259,14 @@ def build_statement_index(
         chosen.values(), key=lambda s: (str(s["basis"]), str(s["statement"]))
     )
     discarded.sort(key=_discard_key)
+    # v5: bumped alongside the FOG schema_version (kind on every LineItem).
     # v3: `regions` is new -- the scanned spans, the raw basis spans they were
     # narrowed from, and the face count each yielded. `region_bodies` follows the
     # basis artifact's own document order, which is deterministic.
     # v2 added `discarded`, and chose a face once per (basis, statement) across
     # every region rather than once per region.
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "statements": statements,
         "discarded": discarded,
         "regions": region_bodies,
@@ -443,6 +445,7 @@ def face_line_items(
                 table_index=table_index,
                 row_index=row_index,
                 source_row=row.source_row,
+                kind=classify_quantity(row.label, row.current),
             )
             items.append(item)
             edges.append(Edge("CONTAINS", stmt_id, item.id))
@@ -595,6 +598,7 @@ def note_line_items(
                     table_index=table_index,
                     row_index=row_index,
                     source_row=row.source_row,
+                    kind=classify_quantity(row.label, row.current),
                 )
                 items.append(item)
                 edges.append(Edge("CONTAINS", note_id, item.id))
