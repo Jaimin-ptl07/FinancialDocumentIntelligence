@@ -216,7 +216,10 @@ def build_mapping(
         )
 
     return {
-        "schema_version": 3,
+        # v4: `resolve_lexical` refuses a kind-mismatched candidate (a count,
+        # per-share figure or ratio can never satisfy a currency concept) and
+        # a match below `LEXICAL_FLOOR`, so `proof` and `unmapped` both change.
+        "schema_version": 4,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
         "schema": {
             "face_concepts": len(face_candidates),
@@ -230,7 +233,8 @@ def build_mapping(
 
 class FogMappingStage:
     name = "fog_mapping"
-    version = 3
+    # v4: kind-mismatched and sub-floor lexical matches are now refused.
+    version = 4
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

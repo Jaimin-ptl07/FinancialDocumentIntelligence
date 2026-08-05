@@ -136,7 +136,8 @@ def test_the_stage_is_registered_with_the_right_deps():
     stage = REGISTRY.get("fog_mapping")
     assert stage.deps == ("fog_objects",)
     # v2 added the `schema` usability block.
-    assert stage.version == 3
+    # v4 refuses a kind-mismatched or sub-floor lexical match.
+    assert stage.version == 4
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():

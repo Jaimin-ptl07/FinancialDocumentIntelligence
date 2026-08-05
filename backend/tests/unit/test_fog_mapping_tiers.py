@@ -184,3 +184,59 @@ def test_a_resolution_for_a_line_item_that_does_not_exist_is_dropped():
 def test_malformed_input_never_raises():
     assert units_from_fog({}, face_candidates=(), note_candidates=()) == []
     assert mapping_edges({}, {}) == ([], [])
+
+
+def test_a_count_is_never_mapped_onto_a_currency_concept():
+    """MEASURED: the weighted average share count 361,80,87,518 won EQWVR
+    (equity share capital, 362) with a contested spread of 3.6 billion. Both are
+    valid numbers, so arbitration cannot separate them -- only the KIND can."""
+    unit = MapUnit(
+        unit_id="nt:consolidated:18", kind="note", title="Earnings per share",
+        labels=("Weighted average number of equity shares",),
+        kinds=("count",),
+        candidates=(_c("EQWVR", "Equity share capital with voting rights",
+                       ("weighted average number of equity shares",)),),
+    )
+    assert resolve_lexical(unit) == {}
+
+
+def test_a_currency_line_still_maps_onto_a_currency_concept():
+    unit = MapUnit(
+        unit_id="st", kind="face", title="Balance sheet",
+        labels=("Share capital",), kinds=("currency",),
+        candidates=(_c("EQWVR", "Equity share capital with voting rights",
+                       ("share capital",)),),
+    )
+    assert resolve_lexical(unit)["Share capital"].tag == "EQWVR"
+
+
+def test_a_weak_token_overlap_is_refused_rather_than_guessed():
+    """Below the floor, silence beats a guess: an unmapped label is visible and
+    a wrong value is not."""
+    from fdi.core.fog_mapping import LEXICAL_FLOOR
+
+    assert LEXICAL_FLOOR > 0.5
+    unit = MapUnit(
+        unit_id="u", kind="note", title="t",
+        labels=("Something only faintly related",), kinds=("currency",),
+        candidates=(_c("TCEXP", "Travel and conveyance"),),
+    )
+    assert resolve_lexical(unit) == {}
+
+
+def test_an_exact_hit_is_never_refused_by_the_floor():
+    unit = MapUnit(
+        unit_id="u", kind="note", title="t",
+        labels=("Travel expenses",), kinds=("currency",), candidates=_CANDS,
+    )
+    assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"
+
+
+def test_an_unknown_kind_is_permitted_not_refused():
+    """A row we could not classify must not become unmappable -- that would turn
+    a classification gap into silent data loss."""
+    unit = MapUnit(
+        unit_id="u", kind="note", title="t",
+        labels=("Travel expenses",), kinds=("unknown",), candidates=_CANDS,
+    )
+    assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"

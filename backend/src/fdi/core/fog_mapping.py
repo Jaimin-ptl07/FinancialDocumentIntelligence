@@ -45,6 +45,7 @@ class MapUnit:
     title: str
     labels: tuple[str, ...]
     candidates: tuple[ConceptCandidate, ...]
+    kinds: tuple[str, ...] = ()
 
 
 _SYSTEM = """\
@@ -146,6 +147,18 @@ class Resolution:
     score: float
 
 
+# Below this, `lexical_match` is guessing from token overlap rather than
+# recognising a name. MEASURED: sub-floor overlaps produced every remaining
+# wrong value (REMC 1, RIL 2) by winning uncontested. Silence is better --
+# an unmapped label is visible in the artifact, a wrong number is not.
+LEXICAL_FLOOR = 0.75
+
+# A concept expecting money can never be satisfied by a share count, a
+# per-share figure or a ratio. "unknown" is permitted: a classification gap
+# must not become silent data loss.
+_CURRENCY_ONLY = frozenset({"count", "per_share", "ratio"})
+
+
 def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
     """Labels an alias or normalised form settles, with no model call.
 
@@ -157,9 +170,12 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
     score)` and REFUSES a tie rather than guessing, so a None here means the
     label is genuinely ambiguous and belongs to the semantic tier."""
     out: dict[str, Resolution] = {}
-    for label in unit.labels:
+    for index, label in enumerate(unit.labels):
+        kind = unit.kinds[index] if index < len(unit.kinds) else "unknown"
+        if kind in _CURRENCY_ONLY:
+            continue
         candidate, method, score = lexical_match(label, unit.candidates)
-        if candidate is not None:
+        if candidate is not None and score >= LEXICAL_FLOOR:
             out[label] = Resolution(label, candidate.tag, f"lexical:{method}", score)
     return out
 
@@ -224,10 +240,15 @@ def units_from_fog(
             )
             if not labels:
                 continue
+            kinds = tuple(
+                str(i.get("kind", "unknown"))
+                for i in items if str(i.get("label", ""))
+            )
             title = str(node.get("title") or node.get("statement") or "")
             units.append(MapUnit(
                 unit_id=node_id, kind=kind, title=title, labels=labels,
                 candidates=candidates_for_kind(kind, face_candidates, note_candidates),
+                kinds=kinds,
             ))
     units.sort(key=lambda u: u.unit_id)
     return units
