@@ -33,7 +33,8 @@ def test_the_body_carries_doc_id_and_schema_version():
 
     body = build_reasoning(_FOG, _MAPPING, _SCHEMA)
     assert body["doc_id"] == "doc-1"
-    assert body["schema_version"] == 1
+    # v2 added the `contested` section (arbitration winners and losers).
+    assert body["schema_version"] == 2
 
 
 def test_every_basis_present_in_the_fog_is_reasoned_over():
@@ -64,7 +65,7 @@ def test_the_stage_declares_both_artifacts_it_reads():
 
     stage = REGISTRY.get("fog_reason")
     assert set(stage.deps) == {"fog_mapping", "fog_objects"}
-    assert stage.version == 1
+    assert stage.version == 2
 
 
 def test_the_dag_orders_fog_reason_last():

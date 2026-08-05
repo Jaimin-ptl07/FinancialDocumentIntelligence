@@ -23,7 +23,7 @@ def build_reasoning(
     bases_raw = fog.get("bases") if isinstance(fog, Mapping) else None
     bases = sorted(bases_raw) if isinstance(bases_raw, Mapping) else []
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
         "bases": {b: reason(fog, mapping, schema, basis=b) for b in bases},
     }
@@ -31,7 +31,7 @@ def build_reasoning(
 
 class FogReasonStage:
     name = "fog_reason"
-    version = 1
+    version = 2
     deps: tuple[str, ...] = ("fog_mapping", "fog_objects")
 
     async def run(self, ctx: StageContext) -> object:
