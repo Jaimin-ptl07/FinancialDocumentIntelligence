@@ -109,8 +109,8 @@ def test_the_artifact_carries_its_doc_id_and_schema_version():
     artifact = build_fog_artifact({}, doc_id="doc-1", diagnostics={})
     assert artifact["doc_id"] == "doc-1"
     # v2 added `source_row`; v4 records the footing target that was used;
-    # v5 adds `kind` to every LineItem body.
-    assert artifact["schema_version"] == 5
+    # v5 adds `kind` to every LineItem body; v6 adds `section_path`.
+    assert artifact["schema_version"] == 6
 
 
 def test_edges_are_sorted_so_the_artifact_hashes_stably():

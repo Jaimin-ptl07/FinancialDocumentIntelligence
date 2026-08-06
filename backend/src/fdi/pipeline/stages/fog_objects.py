@@ -20,6 +20,8 @@ from fdi.pipeline.stage import StageContext
 
 class FogObjectsStage:
     name = "fog_objects"
+    # v6: every LineItem body carries `section_path` -- the chain of captions
+    # above the row (outermost first), not just the nearest one.
     # v5: every LineItem body carries `kind` -- the quantity kind
     # (currency/count/per_share/ratio/unknown) classified from its label.
     # v3: a nil note row is a LineItem with `current=None` rather than the
@@ -27,7 +29,7 @@ class FogObjectsStage:
     # diagnostics gain `refs_beyond_bound` / `regions_without_statements`.
     # v2: LineItem bodies carry `source_row`, and a basis with several regions
     # no longer mints duplicate ids. The body shape is part of the cache key.
-    version = 5
+    version = 6
     deps: tuple[str, ...] = ("ocr", "statement_index", "note_index", "structure")
 
     async def run(self, ctx: StageContext) -> object:

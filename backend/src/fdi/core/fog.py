@@ -61,6 +61,7 @@ class LineItem:
     row_index: int
     source_row: int
     kind: str = "unknown"
+    section_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ def line_item_body(item: LineItem) -> dict[str, object]:
         "row_index": item.row_index,
         "source_row": item.source_row,
         "kind": item.kind,
+        "section_path": list(item.section_path),
     }
 
 
@@ -140,6 +142,11 @@ def build_fog_artifact(
             ],
         }
     return {
+        # v6: every LineItem body carries `section_path` -- the chain of
+        # captions above the row (outermost first), not just the nearest one.
+        # MEASURED ON TCS: two face rows sharing the caption `Financial
+        # liabilities` (non-current and current) were indistinguishable
+        # without it.
         # v5: every LineItem body carries `kind` -- the quantity kind
         # (currency/count/per_share/ratio/unknown) classified from its label.
         # v3: a note row printing an explicit nil (`Communication | - | -`) is
@@ -149,7 +156,7 @@ def build_fog_artifact(
         # `regions_without_statements`.
         # v2 added `source_row` to every LineItem body -- see LineItem's
         # docstring for why the valued-row ordinal could not address a cell.
-        "schema_version": 5,
+        "schema_version": 6,
         "doc_id": doc_id,
         "bases": bases,
         "diagnostics": dict(diagnostics),

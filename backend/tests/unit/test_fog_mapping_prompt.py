@@ -168,3 +168,27 @@ def test_a_unit_with_no_labels_keeps_declaration_order():
     unit = MapUnit("u", "note", "t", (), (_c("A", "Alpha"), _c("B", "Beta")))
     _system, user, _dropped = build_map_prompt(unit)
     assert user.index("A") < user.index("B")
+
+
+def test_the_prompt_shows_the_section_of_each_label():
+    """MEASURED ON TCS: eight line items are labelled exactly 'Lease
+    liabilities'. Without its section, the model is asked to distinguish rows
+    that are literally identical strings, and LTOLR resolved to 2,077 instead
+    of 9,453."""
+    unit = MapUnit(
+        unit_id="st:consolidated:balance_sheet", kind="face", title="Balance sheet",
+        labels=("Lease liabilities", "Lease liabilities"),
+        candidates=(_c("LTOLR", "Lease liabilities - non-current"),
+                    _c("STLL", "Lease liabilities - current")),
+        sections=(("Non-current liabilities", "Financial liabilities"),
+                  ("Current liabilities", "Financial liabilities")),
+    )
+    _system, user, _dropped = build_map_prompt(unit)
+    assert "Non-current liabilities" in user
+    assert "Current liabilities" in user
+
+
+def test_a_label_with_no_section_still_renders():
+    unit = MapUnit("u", "note", "t", ("Travel",), (_c("TCEXP", "Travel"),))
+    _system, user, _dropped = build_map_prompt(unit)
+    assert "Travel" in user

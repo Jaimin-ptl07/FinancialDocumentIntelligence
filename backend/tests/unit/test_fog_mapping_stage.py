@@ -207,7 +207,8 @@ def test_the_stage_is_registered_with_the_right_deps():
     # v2 added the `schema` usability block.
     # v4 refuses a kind-mismatched or sub-floor lexical match.
     # v5 splits billed calls, caps prompt candidates, scopes memory by basis.
-    assert stage.version == 5
+    # v6 units carry each label's `section_path` and the prompt renders it.
+    assert stage.version == 6
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():

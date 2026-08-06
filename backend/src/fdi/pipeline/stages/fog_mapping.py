@@ -258,7 +258,10 @@ def build_mapping(
         # v5: diagnostics split `llm_calls` (attempted) from `llm_calls_billed`
         # (returned usage) and gained `prompt_candidates_dropped`; memory
         # lookups are now basis-scoped -- Task 6, the Phase 3-4 review minors.
-        "schema_version": 5,
+        # v6: units now carry each label's `section_path` and `build_map_prompt`
+        # renders it, so a document with two rows sharing one caption -- both
+        # labelled identically -- now asks the model to distinguish them.
+        "schema_version": 6,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
         "schema": {
             "face_concepts": len(face_candidates),
@@ -274,7 +277,8 @@ class FogMappingStage:
     name = "fog_mapping"
     # v4: kind-mismatched and sub-floor lexical matches are now refused.
     # v5: billed-call count, prompt candidate cap, and basis-scoped memory.
-    version = 5
+    # v6: units carry each label's `section_path` and the prompt renders it.
+    version = 6
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

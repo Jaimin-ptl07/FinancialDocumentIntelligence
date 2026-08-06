@@ -446,6 +446,7 @@ def face_line_items(
                 row_index=row_index,
                 source_row=row.source_row,
                 kind=classify_quantity(row.label, row.current),
+                section_path=row.section_path,
             )
             items.append(item)
             edges.append(Edge("CONTAINS", stmt_id, item.id))
@@ -599,6 +600,7 @@ def note_line_items(
                     row_index=row_index,
                     source_row=row.source_row,
                     kind=classify_quantity(row.label, row.current),
+                    section_path=(),  # a note has no statement section
                 )
                 items.append(item)
                 edges.append(Edge("CONTAINS", note_id, item.id))

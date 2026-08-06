@@ -51,6 +51,7 @@ class MapUnit:
     candidates: tuple[ConceptCandidate, ...]
     kinds: tuple[str, ...] = ()
     basis: str = ""
+    sections: tuple[tuple[str, ...], ...] = ()
 
 
 _SYSTEM = """\
@@ -125,7 +126,12 @@ def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
         aliases = ", ".join(c.aliases) if c.aliases else "-"
         lines.append(f"  {c.tag} - {c.name} - {aliases}")
     lines += ["", "LABELS to map:"]
-    lines += [f"  {label}" for label in unit.labels]
+    for index, label in enumerate(unit.labels):
+        section = unit.sections[index] if index < len(unit.sections) else ()
+        if section:
+            lines.append(f"  {label}  [section: {' > '.join(section)}]")
+        else:
+            lines.append(f"  {label}")
     return _SYSTEM, "\n".join(lines), dropped
 
 
@@ -259,6 +265,14 @@ def _items_by_parent(region: Mapping[str, object]) -> dict[str, list[Mapping[str
     return out
 
 
+def _section_path_of(item: Mapping[str, object]) -> tuple[str, ...]:
+    """A LineItem body's `section_path`, or `()` if absent or malformed."""
+    raw = item.get("section_path")
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(s) for s in raw)
+
+
 def units_from_fog(
     region: Mapping[str, object],
     *,
@@ -295,11 +309,14 @@ def units_from_fog(
                 str(i.get("kind", "unknown"))
                 for i in items if str(i.get("label", ""))
             )
+            sections = tuple(
+                _section_path_of(i) for i in items if str(i.get("label", ""))
+            )
             title = str(node.get("title") or node.get("statement") or "")
             units.append(MapUnit(
                 unit_id=node_id, kind=kind, title=title, labels=labels,
                 candidates=candidates_for_kind(kind, face_candidates, note_candidates),
-                kinds=kinds, basis=basis,
+                kinds=kinds, basis=basis, sections=sections,
             ))
     units.sort(key=lambda u: u.unit_id)
     return units

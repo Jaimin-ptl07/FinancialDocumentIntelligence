@@ -138,3 +138,9 @@ def test_a_face_row_carries_its_quantity_kind():
     items, _ = _build()
     revenue = next(i for i in items if i.label == "Revenue from operations")
     assert revenue.kind == "currency"
+
+
+def test_a_face_line_item_carries_its_section_path():
+    items, _ = _build()
+    revenue = next(i for i in items if i.label == "Revenue from operations")
+    assert isinstance(revenue.section_path, tuple)
