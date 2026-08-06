@@ -7,9 +7,12 @@
   "_unit": "INR crore, exactly as printed. No rescaling. Brackets are negative.",
   "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure DI OCR. Every subtotal re-derived by hand and ties.",
   "_coverage": "FACE LEVEL, deliberately partial. A tag is listed only where its mapping to a printed line is unambiguous. Tags in NEITHER list are out of scope and ignored by score_document -- putting a disclosed-but-unmappable tag in not_reported would score a CORRECT extraction as a false positive.",
-  "_notes": "Only share capital is unambiguous. Other equity (1,06,878), equity attributable to shareholders (1,07,240), non-controlling interests (1,238) and Total equity (1,08,478) all map to DERIVED tags in v4.3 (TOTOTEQ/TOTEQNR), so the reported values have no extractable home.",
+  "_notes": "EQWVR (equity share capital WITH VOTING RIGHTS) is deliberately out of scope: TCS reports a single 'Share capital' line and does not split by share class, so no printed line names it. Putting it in not_reported would be equally wrong -- the capital exists, it is simply not separately disclosed.",
   "values": {
-    "EQWVR": 362.0
+    "TOTEQ": 362.0,
+    "TOTOTEQ": 106878.0,
+    "TOTEQNR": 108478.0
   },
-  "not_reported": []
+  "not_reported": [],
+  "_correction_2026_08_06": "CORRECTED. This file originally keyed EQWVR=362 on the reasoning that Other equity, Equity attributable to shareholders and Total equity 'map to DERIVED tags so the reported values have no extractable home'. That reasoning was WRONG and the resulting 0%/0% equity score was this truth set's error, not the pipeline's. A derived concept IS mappable, and must be: this project's own rule is REPORTED WINS -- a parent the report prints keeps the reported value, and the sum of its children is a CHECK. The pipeline mapped all three correctly (TOTEQ 362, TOTOTEQ 106,878, TOTEQNR 108,478) while being scored against the wrong tag."
 }
