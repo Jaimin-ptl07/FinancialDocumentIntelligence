@@ -399,3 +399,38 @@ def test_coverage_is_genuinely_populated_from_the_schema():
     assert totals["found_extracted"] == 3
     assert totals["missing_extracted"] == 1
     assert "MISSING1" in out["coverage"]["missing_extracted"]
+
+
+def test_a_section_confirmed_match_outranks_the_models_guess():
+    """MEASURED ON TCS: the balance sheet prints 'Lease liabilities' under both
+    Non-current and Current. The label matches its qualified concept at only
+    0.9, so it ranked as the WEAKEST evidence and the model's guess from an
+    unrelated note (tier 2) overwrote it -- LTOLR 9,453 -> 2,074 -- turning a
+    free 100%/100% liabilities score into 66.7%/66.7%."""
+    fog = _fog_with([
+        {"id": "li:face", "parent": "st", "origin": "face",
+         "label": "Lease liabilities", "current": 9453.0},
+        {"id": "li:note", "parent": "nt", "origin": "note",
+         "label": "Lease liabilities", "current": 2074.0},
+    ])
+    mapping = _mapping_with([
+        ("li:face", "LTOLR", "lexical:section:name", 0.9),
+        ("li:note", "LTOLR", "llm", 0.0),
+    ])
+    assert facts_from_mapping(fog, mapping, basis="consolidated")["LTOLR"] == 9453.0
+
+
+def test_an_unconfirmed_fuzzy_match_still_loses_to_the_model():
+    """The promotion is for SECTION confirmation only -- a bare token overlap
+    remains the weakest evidence, which is what stopped NETDTA being 1,259."""
+    fog = _fog_with([
+        {"id": "li:guess", "parent": "st", "origin": "face",
+         "label": "Income tax assets (net)", "current": 1259.0},
+        {"id": "li:model", "parent": "nt", "origin": "note",
+         "label": "Deferred tax assets", "current": 4465.0},
+    ])
+    mapping = _mapping_with([
+        ("li:guess", "NETDTA", "lexical:name", 0.71),
+        ("li:model", "NETDTA", "llm", 0.0),
+    ])
+    assert facts_from_mapping(fog, mapping, basis="consolidated")["NETDTA"] == 4465.0

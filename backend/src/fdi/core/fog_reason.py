@@ -97,9 +97,20 @@ def _tier(method: str, score: float) -> int:
     overlap outrank the model's considered answer.
 
     MEASURED on TCS: "Income tax assets (net)" token-overlapped onto NETDTA
-    (Deferred Tax Assets) and overwrote the correct 4,465 with 1,259."""
+    (Deferred Tax Assets) and overwrote the correct 4,465 with 1,259.
+
+    A SECTION-CONFIRMED match is strong evidence even at a fuzzy score. The
+    balance sheet prints "Lease liabilities" under both Non-current and
+    Current, and the label matches its qualified concept at only 0.9 -- so
+    without this it ranked as the WEAKEST evidence and the model's guess
+    from an unrelated note (tier 2) overwrote it: LTOLR 9,453 -> 2,074 and
+    STLL 1,830 -> 2,077, turning a free 100%/100% liabilities score into
+    66.7%/66.7%. The section agreeing is independent STRUCTURAL
+    corroboration, not a lucky token overlap."""
     if method == "memory":
         return 3
+    if method.startswith("lexical:section"):
+        return 3          # the row's own section confirms the variant
     if method.startswith("lexical") and score >= _EXACT_SCORE:
         return 3          # an exact name or alias hit is certain
     if method == "llm":

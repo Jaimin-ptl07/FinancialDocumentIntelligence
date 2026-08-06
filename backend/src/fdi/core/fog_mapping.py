@@ -310,7 +310,10 @@ def _match_with_section(
         if preferred:
             hit, method, score = lexical_match(label, preferred)
             if hit is not None and score >= LEXICAL_FLOOR:
-                return hit, method, score
+                # Marked SECTION-CONFIRMED. The section agreeing is
+                # independent structural corroboration, not a lucky token
+                # overlap, and `_tier` must rank it accordingly.
+                return hit, f"section:{method}", score
         candidates = tuple(
             c for c in candidates
             if _qualifier(c.name) in ("", section_qualifier)
