@@ -208,6 +208,27 @@ LEXICAL_FLOOR = 0.75
 # must not become silent data loss.
 _CURRENCY_ONLY = frozenset({"count", "per_share", "ratio"})
 
+# A concept name may carry a period qualifier the SECTION can confirm or
+# contradict. These are the only two that matter on an Indian balance sheet,
+# and they are mutually exclusive by construction.
+_QUALIFIERS: tuple[tuple[str, str], ...] = (
+    ("non-current", "non-current"),
+    ("current", "current"),
+)
+
+
+def _qualifier(text: str) -> str:
+    """The period qualifier `text` asserts, or "".
+
+    "non-current" is tested FIRST and wins: it CONTAINS "current", so testing
+    in the other order would label every non-current concept "current" and
+    invert the disambiguation this exists to provide."""
+    key = text.lower()
+    for needle, name in _QUALIFIERS:
+        if needle in key:
+            return name
+    return ""
+
 
 def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
     """Labels an alias or normalised form settles, with no model call.
@@ -218,13 +239,30 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
 
     `lexical_match(label, candidates)` returns `(candidate | None, method,
     score)` and REFUSES a tie rather than guessing, so a None here means the
-    label is genuinely ambiguous and belongs to the semantic tier."""
+    label is genuinely ambiguous and belongs to the semantic tier.
+
+    A ROW'S SECTION BREAKS A TIE THE LABEL ALONE CANNOT. Two candidates
+    sharing a label -- "Lease liabilities" under both Non-current and Current
+    liabilities -- score identically on token overlap and `lexical_match`
+    refuses rather than guess. When the row's section carries a period
+    qualifier that CONTRADICTS a candidate's own qualifier, that candidate is
+    excluded before matching, so the surviving candidate is no longer tied
+    and resolves for free. If every candidate is excluded, the label stays
+    unresolved rather than accepting a contradicted match."""
     out: dict[str, Resolution] = {}
     for index, label in enumerate(unit.labels):
         kind = unit.kinds[index] if index < len(unit.kinds) else "unknown"
         if kind in _CURRENCY_ONLY:
             continue
-        candidate, method, score = lexical_match(label, unit.candidates)
+        section = unit.sections[index] if index < len(unit.sections) else ()
+        section_qualifier = _qualifier(" ".join(section))
+        candidates = unit.candidates
+        if section_qualifier:
+            candidates = tuple(
+                c for c in candidates
+                if _qualifier(c.name) in ("", section_qualifier)
+            )
+        candidate, method, score = lexical_match(label, candidates)
         if candidate is not None and score >= LEXICAL_FLOOR:
             out[label] = Resolution(label, candidate.tag, f"lexical:{method}", score)
     return out

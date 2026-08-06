@@ -287,3 +287,48 @@ def test_an_unknown_kind_is_permitted_not_refused():
         labels=("Travel expenses",), kinds=("unknown",), candidates=_CANDS,
     )
     assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"
+
+
+def test_a_section_qualifier_picks_the_right_concept_of_a_matching_pair():
+    """MEASURED ON TCS: 'Lease liabilities' appears under both Non-current and
+    Current liabilities, and the taxonomy has a concept for each. The label
+    alone is a tie; the section breaks it, for free."""
+    unit = MapUnit(
+        unit_id="st", kind="face", title="Balance sheet",
+        labels=("Lease liabilities",),
+        candidates=(_c("LTOLR", "Lease liabilities - non-current"),
+                    _c("STLL", "Lease liabilities - current")),
+        sections=(("Non-current liabilities", "Financial liabilities"),),
+    )
+    assert resolve_lexical(unit)["Lease liabilities"].tag == "LTOLR"
+
+
+def test_the_other_section_picks_the_other_concept():
+    unit = MapUnit(
+        unit_id="st", kind="face", title="Balance sheet",
+        labels=("Lease liabilities",),
+        candidates=(_c("LTOLR", "Lease liabilities - non-current"),
+                    _c("STLL", "Lease liabilities - current")),
+        sections=(("Current liabilities", "Financial liabilities"),),
+    )
+    assert resolve_lexical(unit)["Lease liabilities"].tag == "STLL"
+
+
+def test_a_contradicting_section_refuses_rather_than_guessing():
+    """If the only candidate's qualifier contradicts the section, silence beats
+    a confident wrong answer."""
+    unit = MapUnit(
+        unit_id="st", kind="face", title="Balance sheet",
+        labels=("Lease liabilities",),
+        candidates=(_c("STLL", "Lease liabilities - current"),),
+        sections=(("Non-current liabilities",),),
+    )
+    assert resolve_lexical(unit) == {}
+
+
+def test_no_section_leaves_existing_behaviour_untouched():
+    unit = MapUnit(
+        unit_id="u", kind="note", title="t",
+        labels=("Travel expenses",), candidates=_CANDS,
+    )
+    assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"
