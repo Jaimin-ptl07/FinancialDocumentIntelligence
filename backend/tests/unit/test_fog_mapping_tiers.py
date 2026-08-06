@@ -460,9 +460,43 @@ def test_a_concept_the_taxonomy_models_ONLY_as_derived_stays_reachable():
 
 def test_the_preference_applies_inside_a_section_confirmed_match_too():
     cands = (
-        _cd("TOTINVT", "Total Inventories", ("inventories",), "derived"),
-        _cd("INVT", "Inventories (as reported on the face)", ("inventories",)),
+        _cd("TOTNCA", "Total Non-Current Assets",
+            ("total non-current assets",), "derived"),
+        _cd("TOTNCR", "Total Non-Current Assets (as reported)",
+            ("total non-current assets",)),
     )
-    unit = MapUnit(unit_id="st", kind="face", title="BS", labels=("Inventories",),
-                   candidates=cands, sections=(("Current assets",),))
-    assert resolve_lexical(unit)["Inventories"].tag == "INVT"
+    unit = MapUnit(unit_id="st", kind="face", title="BS",
+                   labels=("Total non-current assets",),
+                   candidates=cands, sections=(("Non-current assets",),))
+    assert resolve_lexical(unit)["Total non-current assets"].tag == "TOTNCR"
+
+
+def test_only_the_DECLARED_twin_may_take_a_derived_hit():
+    """The swap once took ANY extracted concept within the margin. Measured
+    on TCS that retagged 108 rows, DESTROYED 14 facts (EEBEXP 1,54,994,
+    TOTFC 1,227, TOTTAXEXP 16,033) and CORRUPTED 5 more (CFTAX -14,384 ->
+    16,033, another line's value). Face-level ground truth scored none of
+    those tags, so the gate stayed green while the graph rotted."""
+    cands = (
+        _cd("TOTEQ", "Total Share Capital", ("share capital",), "derived"),
+        _cd("EQWVR", "Equity share capital with voting rights",
+            ("equity share capital",)),
+    )
+    unit = MapUnit(unit_id="st", kind="face", title="BS",
+                   labels=("Share capital",), candidates=cands)
+    # EQWVR is NOT "Total Share Capital (as reported)" -- it is a different
+    # concept that merely scores nearby, so it must never take the hit.
+    assert resolve_lexical(unit)["Share capital"].tag == "TOTEQ"
+
+
+def test_a_same_named_concept_from_another_statement_is_not_a_twin():
+    """MEASURED: "Finance costs" is the name of BOTH the derived TOTFC and the
+    cash-flow CFFIN. Treating name equality as the twin relationship moved
+    1,227 onto the wrong statement's concept and lost TOTFC entirely."""
+    cands = (
+        _cd("TOTFC", "Finance costs", (), "derived"),
+        _cd("CFFIN", "Finance costs", ()),
+    )
+    unit = MapUnit(unit_id="st", kind="face", title="P&L",
+                   labels=("Finance costs",), candidates=cands)
+    assert resolve_lexical(unit)["Finance costs"].tag == "TOTFC"

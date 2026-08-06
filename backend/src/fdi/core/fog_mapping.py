@@ -21,6 +21,7 @@ Pure (`fdi.core` law): no I/O, deterministic, total.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -281,6 +282,32 @@ def _qualifier(text: str) -> str:
     return ""
 
 
+_PARENTHETICAL = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _same_concept(a: str, b: str) -> bool:
+    """Do these two names denote the SAME concept, one merely qualified?
+
+    The taxonomy names a reported twin by appending a parenthetical --
+    "Total Non-Current Assets" / "Total Non-Current Assets (as reported)".
+    Stripping one trailing parenthetical is exactly that relationship.
+
+    WITHOUT THIS the swap took ANY extracted concept within the margin, not
+    the declared twin, and it shipped: measured on TCS it retagged 108 rows,
+    DESTROYED 14 facts (EEBEXP 1,54,994, TOTFC 1,227, TOTTAXEXP 16,033,
+    TOTPRVE 1,378, TOTOL 2,814) and CORRUPTED 5 more (CFTAX -14,384 ->
+    16,033, another line's value entirely). Face-level-only ground truth
+    scored none of those tags, so every number in the gate stayed green."""
+    # `a` must BE the qualified variant: it carries the parenthetical and `b`
+    # does not. Name equality alone is not enough -- "Finance costs" is the
+    # name of BOTH the derived TOTFC and the cash-flow CFFIN, and treating
+    # those as twins moved 1,227 onto the wrong statement's concept.
+    stripped = _PARENTHETICAL.sub("", a).strip()
+    if stripped == a.strip():
+        return False
+    return stripped.lower() == b.strip().lower()
+
+
 # The gap an "(as reported)" suffix costs: its derived twin matches by NAME
 # (1.0) while it matches by ALIAS (0.95). Wide enough to cross that, narrow
 # enough that a token-overlap guess never qualifies.
@@ -323,7 +350,10 @@ def _prefer_reported(
     extracted = tuple(c for c in candidates if c.origin != "derived")
     if not extracted:
         return hit, method, score
-    alt_hit, alt_method, alt_score = lexical_match(label, extracted)
+    twins = tuple(c for c in extracted if _same_concept(c.name, hit.name))
+    if not twins:
+        return hit, method, score
+    alt_hit, alt_method, alt_score = lexical_match(label, twins)
     if alt_hit is not None and alt_score >= score - _REPORTED_MARGIN:
         return alt_hit, alt_method, alt_score
     return hit, method, score
