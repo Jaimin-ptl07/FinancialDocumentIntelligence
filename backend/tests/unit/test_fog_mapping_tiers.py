@@ -332,3 +332,50 @@ def test_no_section_leaves_existing_behaviour_untouched():
         labels=("Travel expenses",), candidates=_CANDS,
     )
     assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"
+
+
+def test_an_unqualified_TOTAL_does_not_steal_a_qualified_component():
+    """MEASURED ON TCS: the balance sheet prints 'Lease liabilities' twice, under
+    Non-current (9,453) and Current (1,830). The taxonomy holds LTOLR, STLL AND
+    `LL` -- the unqualified TOTAL, an exact name match scoring 1.000 against the
+    qualified pair's 0.900. Both component rows resolved to the total and
+    NEITHER split tag resolved. Vetoing contradictions cannot help: `LL` has no
+    qualifier to contradict."""
+    cands = (
+        _c("LL", "Lease liabilities"),
+        _c("LTOLR", "Lease liabilities - non-current"),
+        _c("STLL", "Lease liabilities - current"),
+    )
+    non_current = MapUnit(
+        unit_id="st", kind="face", title="BS", labels=("Lease liabilities",),
+        candidates=cands, sections=(("Non-current liabilities", "Financial liabilities"),),
+    )
+    current = MapUnit(
+        unit_id="st", kind="face", title="BS", labels=("Lease liabilities",),
+        candidates=cands, sections=(("Current liabilities", "Financial liabilities"),),
+    )
+    assert resolve_lexical(non_current)["Lease liabilities"].tag == "LTOLR"
+    assert resolve_lexical(current)["Lease liabilities"].tag == "STLL"
+
+
+def test_an_unqualified_concept_still_wins_when_the_section_says_nothing():
+    """A row outside any period block must still reach the total."""
+    cands = (
+        _c("LL", "Lease liabilities"),
+        _c("LTOLR", "Lease liabilities - non-current"),
+    )
+    unit = MapUnit(
+        unit_id="st", kind="face", title="BS", labels=("Lease liabilities",),
+        candidates=cands, sections=((),),
+    )
+    assert resolve_lexical(unit)["Lease liabilities"].tag == "LL"
+
+
+def test_a_section_the_taxonomy_does_not_split_on_still_resolves():
+    """Falling back to the full set keeps such a row mappable, and the
+    contradiction veto still applies so the wrong period cannot win."""
+    unit = MapUnit(
+        unit_id="st", kind="face", title="BS", labels=("Travel expenses",),
+        candidates=_CANDS, sections=(("Non-current liabilities",),),
+    )
+    assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"

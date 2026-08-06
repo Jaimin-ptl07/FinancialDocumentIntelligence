@@ -230,6 +230,43 @@ def _qualifier(text: str) -> str:
     return ""
 
 
+def _match_with_section(
+    label: str,
+    candidates: tuple[ConceptCandidate, ...],
+    section_qualifier: str,
+) -> tuple[ConceptCandidate | None, str, float]:
+    """Match `label`, giving the section's own variant FIRST REFUSAL.
+
+    A section qualifier is evidence about WHICH variant of a concept a row
+    is, so variants that agree with it are tried alone before anything else.
+
+    MEASURED ON TCS: the balance sheet prints "Lease liabilities" twice --
+    once under Non-current liabilities (9,453), once under Current (1,830).
+    The taxonomy holds LTOLR (non-current), STLL (current) AND `LL`, the
+    unqualified TOTAL. `LL` is an exact name match and scores 1.000 against
+    the qualified pair's 0.900, so BOTH component rows resolved to the total
+    and neither split tag resolved at all. Merely vetoing contradictions -- as
+    the first version of this did -- cannot help: `LL` carries no qualifier to
+    contradict, so nothing dropped it.
+
+    Falling back to the full set keeps a row whose section names a period the
+    taxonomy does not split on resolvable, and the contradiction veto still
+    applies there so the wrong period can never win."""
+    if section_qualifier:
+        preferred = tuple(
+            c for c in candidates if _qualifier(c.name) == section_qualifier
+        )
+        if preferred:
+            hit, method, score = lexical_match(label, preferred)
+            if hit is not None and score >= LEXICAL_FLOOR:
+                return hit, method, score
+        candidates = tuple(
+            c for c in candidates
+            if _qualifier(c.name) in ("", section_qualifier)
+        )
+    return lexical_match(label, candidates)
+
+
 def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
     """Labels an alias or normalised form settles, with no model call.
 
@@ -256,13 +293,9 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
             continue
         section = unit.sections[index] if index < len(unit.sections) else ()
         section_qualifier = _qualifier(" ".join(section))
-        candidates = unit.candidates
-        if section_qualifier:
-            candidates = tuple(
-                c for c in candidates
-                if _qualifier(c.name) in ("", section_qualifier)
-            )
-        candidate, method, score = lexical_match(label, candidates)
+        candidate, method, score = _match_with_section(
+            label, unit.candidates, section_qualifier
+        )
         if candidate is not None and score >= LEXICAL_FLOOR:
             out[label] = Resolution(label, candidate.tag, f"lexical:{method}", score)
     return out
