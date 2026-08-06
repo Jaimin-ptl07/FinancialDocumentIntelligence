@@ -38,3 +38,6 @@ Thumbs.db
 
 # Local host-port overrides (Windows reserved-port workaround)
 docker/compose.override.yml
+
+# Measurement output bundles (large, regenerable)
+out/
