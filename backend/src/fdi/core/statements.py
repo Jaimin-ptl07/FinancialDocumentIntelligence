@@ -194,6 +194,7 @@ class FaceRow:
     current: float | None
     prior: float | None
     source_row: int = -1
+    section_path: tuple[str, ...] = ()
 
 
 def _is_note_header(text: str) -> bool:
@@ -206,6 +207,33 @@ def _is_note_header(text: str) -> bool:
     is a short label, not prose that mentions a note."""
     stripped = text.strip().rstrip(".:").strip()
     return len(stripped) <= 12 and "note" in stripped.lower()
+
+
+# The Schedule III blocks that RESET the path rather than nesting inside it.
+# A flat table carries no indentation, so depth is genuinely unknowable; what
+# IS knowable is that a statement's top-level blocks are mutually exclusive.
+# MEASURED: without this, `Non-current liabilities` and `Current liabilities`
+# both collapse into the caption `Financial liabilities`, and the two lease
+# rows become indistinguishable.
+_TOP_SECTIONS: tuple[str, ...] = (
+    "non-current assets", "current assets",
+    "non-current liabilities", "current liabilities",
+    "assets", "equity and liabilities", "equity", "liabilities",
+    "income", "expenses", "expenditure",
+)
+
+
+def _section_reset(label: str) -> str:
+    """The top-level block `label` opens, or "" if it opens none.
+
+    Longest match wins: "non-current liabilities" must not be read as
+    "liabilities", which would reset the path to the wrong block."""
+    key = label.strip().lower().rstrip(":")
+    best = ""
+    for section in _TOP_SECTIONS:
+        if key == section and len(section) > len(best):
+            best = section
+    return best
 
 
 def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
@@ -227,6 +255,7 @@ def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
         )
 
     out: list[FaceRow] = []
+    path: list[str] = []
     caption = ""
     for r in sorted(rows):
         if header is not None and r <= header:
@@ -243,7 +272,12 @@ def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
             if value is not None:
                 amounts.append(value)
         if not amounts:
-            caption = label          # a row with no amount anywhere is a CAPTION
+            # A row with no amount anywhere is a CAPTION.
+            if _section_reset(label):
+                path = [label]        # a top-level block starts a fresh path
+            else:
+                path.append(label)    # otherwise it nests under what is open
+            caption = label
             continue
         ref = parse_note_ref(cols.get(note_col)) if note_col is not None else ""
         out.append(FaceRow(
@@ -251,6 +285,7 @@ def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
             current=amounts[0],
             prior=amounts[1] if len(amounts) > 1 else None,
             source_row=r,
+            section_path=tuple(path),
         ))
     return out
 
