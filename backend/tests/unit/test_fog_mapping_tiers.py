@@ -424,3 +424,45 @@ def test_a_section_the_taxonomy_does_not_split_on_still_resolves():
         candidates=_CANDS, sections=(("Non-current liabilities",),),
     )
     assert resolve_lexical(unit)["Travel expenses"].tag == "TCEXP"
+
+
+def _cd(tag: str, name: str, aliases: tuple[str, ...] = (), origin: str = "extracted"):
+    from fdi.core.concepts import ConceptCandidate
+
+    return ConceptCandidate(tag=tag, name=name, field_path=f"x.{tag}", depth=1,
+                            origin=origin, aliases=aliases)
+
+
+def test_a_printed_total_maps_to_the_AS_REPORTED_tag_not_the_derived_one():
+    """MEASURED ON TCS: 'Total non-current assets' 46,667 resolved to TOTNCA
+    (DERIVED) instead of TOTNCR (as reported) because both carry the same alias
+    and the derived one is declared first. That puts a READ value where a
+    COMPUTED one belongs, leaves the reported slot empty, and destroys the
+    reported-vs-computed reconciliation the pair exists for."""
+    cands = (
+        _cd("TOTNCA", "Total Non-Current Assets", ("total non-current assets",), "derived"),
+        _cd("TOTNCR", "Total Non-Current Assets (as reported)", ("total non-current assets",)),
+    )
+    unit = MapUnit(unit_id="st", kind="face", title="BS",
+                   labels=("Total non-current assets",), candidates=cands)
+    got = resolve_lexical(unit)
+    assert got["Total non-current assets"].tag == "TOTNCR"
+
+
+def test_a_concept_the_taxonomy_models_ONLY_as_derived_stays_reachable():
+    """TOTEQ correctly wins 'Share capital' -- there is no reported counterpart,
+    and refusing derived outright would lose the value entirely."""
+    cands = (_cd("TOTEQ", "Total Share Capital", ("share capital",), "derived"),)
+    unit = MapUnit(unit_id="st", kind="face", title="BS",
+                   labels=("Share capital",), candidates=cands)
+    assert resolve_lexical(unit)["Share capital"].tag == "TOTEQ"
+
+
+def test_the_preference_applies_inside_a_section_confirmed_match_too():
+    cands = (
+        _cd("TOTINVT", "Total Inventories", ("inventories",), "derived"),
+        _cd("INVT", "Inventories (as reported on the face)", ("inventories",)),
+    )
+    unit = MapUnit(unit_id="st", kind="face", title="BS", labels=("Inventories",),
+                   candidates=cands, sections=(("Current assets",),))
+    assert resolve_lexical(unit)["Inventories"].tag == "INVT"

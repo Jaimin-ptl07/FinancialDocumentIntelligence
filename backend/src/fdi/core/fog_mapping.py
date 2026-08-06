@@ -281,6 +281,54 @@ def _qualifier(text: str) -> str:
     return ""
 
 
+# The gap an "(as reported)" suffix costs: its derived twin matches by NAME
+# (1.0) while it matches by ALIAS (0.95). Wide enough to cross that, narrow
+# enough that a token-overlap guess never qualifies.
+_REPORTED_MARGIN = 0.05
+
+
+def _prefer_reported(
+    label: str,
+    candidates: tuple[ConceptCandidate, ...],
+    hit: ConceptCandidate | None,
+    method: str,
+    score: float,
+) -> tuple[ConceptCandidate | None, str, float]:
+    """Prefer an "as reported" concept over a DERIVED one that matched
+    EQUALLY WELL.
+
+    A value read off the page belongs in the slot meant for a read value.
+    The taxonomy deliberately pairs a computed total with an "as reported"
+    counterpart -- TOTNCA/TOTNCR, TOTA/TOTCAR, TOTINVT/INVT -- carrying the
+    SAME alias, precisely so the two can be RECONCILED against each other.
+
+    MEASURED ON TCS: every printed total resolved to the DERIVED tag, purely
+    because it was declared first. That put a read value where a computed one
+    belongs, left the reported slot empty, and destroyed the reconciliation --
+    46,667 and 1,35,705 landed on tags nothing checks.
+
+    THE MARGIN IS THE WHOLE CONDITION, and both ways of getting it wrong are
+    measured. Dropping derived candidates whenever any extracted one merely
+    EXISTS took TCS equity from 100%/100% to 0%: "Share capital" then matched
+    the far poorer EQWVR instead of TOTEQ, which the taxonomy models only as
+    derived and which is the right answer. Requiring an EQUAL score fixed that
+    but stopped fixing the totals, because the reported twin is named
+    "... (as reported)" and so matches by ALIAS (0.95) where its derived
+    partner matches by NAME (1.0). That 0.05 is a naming convention, not a
+    quality difference -- so the twin is preferred within a small margin, and
+    a genuinely worse match (EQWVR at token-overlap distance) still cannot
+    displace a better one."""
+    if hit is None or hit.origin != "derived":
+        return hit, method, score
+    extracted = tuple(c for c in candidates if c.origin != "derived")
+    if not extracted:
+        return hit, method, score
+    alt_hit, alt_method, alt_score = lexical_match(label, extracted)
+    if alt_hit is not None and alt_score >= score - _REPORTED_MARGIN:
+        return alt_hit, alt_method, alt_score
+    return hit, method, score
+
+
 def _match_with_section(
     label: str,
     candidates: tuple[ConceptCandidate, ...],
@@ -308,7 +356,9 @@ def _match_with_section(
             c for c in candidates if _qualifier(c.name) == section_qualifier
         )
         if preferred:
-            hit, method, score = lexical_match(label, preferred)
+            hit, method, score = _prefer_reported(
+                label, preferred, *lexical_match(label, preferred)
+            )
             if hit is not None and score >= LEXICAL_FLOOR:
                 # Marked SECTION-CONFIRMED. The section agreeing is
                 # independent structural corroboration, not a lucky token
@@ -318,7 +368,7 @@ def _match_with_section(
             c for c in candidates
             if _qualifier(c.name) in ("", section_qualifier)
         )
-    return lexical_match(label, candidates)
+    return _prefer_reported(label, candidates, *lexical_match(label, candidates))
 
 
 def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
