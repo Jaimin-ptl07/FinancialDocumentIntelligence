@@ -46,6 +46,7 @@ from fdi.core.fog_mapping import (
     read_map_reply,
     resolve_from_memory,
     resolve_lexical,
+    row_ids,
     units_from_fog,
     unmapped_labels,
 )
@@ -92,27 +93,49 @@ def _resolve_unit(
     resolved: dict[str, Resolution] = {}
     if store is not None:
         resolved.update(resolve_from_memory(unit, store))
-    for label, resolution in resolve_lexical(unit).items():
-        resolved.setdefault(label, resolution)
+    for row_id, resolution in resolve_lexical(unit).items():
+        resolved.setdefault(row_id, resolution)
 
-    # unmapped_labels only checks label membership (fdi.core.fog_mapping) --
-    # the Mapping[str, str] it's typed for is a stricter shape than the
-    # Resolution values this stage actually keys by label.
-    residue = unmapped_labels(unit, cast(Mapping[str, str], resolved))
+    # `resolved` and `unmapped_labels`'s return are both keyed by
+    # `row_ids(unit)` (fdi.core.fog_mapping) -- the item id, not the label,
+    # so two rows sharing one caption ("Lease liabilities" under both
+    # Non-current and Current liabilities) are tracked as two rows here.
+    residue = unmapped_labels(unit, resolved)
     if not residue:
         return resolved, 0, 0, 0, ""
     if client is None:
         return resolved, 0, 0, 0, "no_client"
 
+    # Carry the residual rows' ids, kinds AND sections into the follow-up
+    # unit -- not just their labels. Losing any of the three here is exactly
+    # how the second pass would lose the information this fix adds: without
+    # ids the reply couldn't be keyed back to a row, without sections the
+    # model would see "Lease liabilities" twice with nothing to tell the
+    # rows apart.
+    residue_keys = {row_id for row_id, _label in residue}
+    row_index = {
+        row_id: index for index, row_id in enumerate(row_ids(unit))
+    }
+    positions = sorted(
+        row_index[row_id] for row_id in residue_keys if row_id in row_index
+    )
     ask = MapUnit(
         unit_id=unit.unit_id, kind=unit.kind, title=unit.title,
-        labels=tuple(residue),
+        labels=tuple(unit.labels[i] for i in positions),
         # Tags already claimed cannot be claimed twice.
         candidates=tuple(
             c for c in unit.candidates
             if c.tag not in {r.tag for r in resolved.values()}
         ),
+        kinds=tuple(
+            unit.kinds[i] if i < len(unit.kinds) else "unknown"
+            for i in positions
+        ),
         basis=unit.basis,
+        sections=tuple(
+            unit.sections[i] if i < len(unit.sections) else () for i in positions
+        ),
+        item_ids=tuple(row_ids(unit)[i] for i in positions),
     )
     if not ask.candidates:
         return resolved, 0, 0, 0, "no_candidate_left"
@@ -148,8 +171,9 @@ def _resolve_unit(
             except Exception:  # noqa: BLE001 - decision 10
                 log.info("fog_mapping.usage_record_failed", unit=unit.unit_id)
 
-    for label, tag in read_map_reply(raw, ask).items():
-        resolved[label] = Resolution(label, tag, "llm", 0.0)
+    ask_labels = dict(zip(row_ids(ask), ask.labels, strict=True))
+    for row_id, tag in read_map_reply(raw, ask).items():
+        resolved[row_id] = Resolution(ask_labels.get(row_id, row_id), tag, "llm", 0.0)
     return resolved, 1, billed, dropped, "model_said_unmapped"
 
 
@@ -180,9 +204,12 @@ def build_mapping(
             basis=basis,
         )
         resolutions: dict[str, dict[str, Resolution]] = {}
-        # label -> why. First reason wins: a label unresolved in one unit and
-        # resolved in another is not unmapped at all, and is dropped below.
-        unmapped: dict[str, str] = {}
+        # row id -> (label, why). Keyed by ROW, not by label: two rows can
+        # share one caption ("Lease liabilities" under both Non-current and
+        # Current liabilities), and a label key would let one row's reason
+        # silently stand in for the other's -- exactly the collapse this
+        # phase exists to fix.
+        unmapped: dict[str, tuple[str, str]] = {}
         calls = 0
         billed_calls = 0
         dropped_candidates = 0
@@ -194,8 +221,8 @@ def build_mapping(
             calls += made
             billed_calls += billed
             dropped_candidates += dropped
-            for label in unmapped_labels(unit, cast(Mapping[str, str], resolved)):
-                unmapped.setdefault(label, reason or "no_candidate")
+            for row_id, label in unmapped_labels(unit, resolved):
+                unmapped.setdefault(row_id, (label, reason or "no_candidate"))
 
         edges, proof = mapping_edges(resolutions, region)
         tally = {"memory": 0, "lexical": 0, "llm": 0}
@@ -213,9 +240,17 @@ def build_mapping(
                 for e in edges
             ],
             "proof": proof,
+            # Sorted by (label, row id): label-first keeps the common case --
+            # no two unresolved rows sharing a caption -- reading exactly as
+            # before; the row id is only a tiebreaker so two genuinely
+            # distinct rows with the same label never collapse into one
+            # artifact entry.
             "unmapped": [
-                {"label": label, "reason": unmapped[label]}
-                for label in sorted(unmapped)
+                {"label": label, "reason": reason}
+                for label, _row_id, reason in sorted(
+                    (label, row_id, reason)
+                    for row_id, (label, reason) in unmapped.items()
+                )
             ],
         }
         diagnostics[basis] = {
@@ -261,7 +296,15 @@ def build_mapping(
         # v6: units now carry each label's `section_path` and `build_map_prompt`
         # renders it, so a document with two rows sharing one caption -- both
         # labelled identically -- now asks the model to distinguish them.
-        "schema_version": 6,
+        # v7: every resolution table is keyed by ROW (the FOG line item id),
+        # not by label -- two rows sharing one caption ("Lease liabilities"
+        # under both Non-current and Current liabilities) used to collapse
+        # into a single label-keyed entry, so the second overwrote the
+        # first. The prompt now numbers each row and the reply is read back
+        # by that number; `proof` and `unmapped` both change shape as a
+        # result (still `{"label", "reason"}` per unmapped entry, but no
+        # longer collapsed across rows sharing a label).
+        "schema_version": 7,
         "doc_id": str(fog.get("doc_id", "")) if isinstance(fog, Mapping) else "",
         "schema": {
             "face_concepts": len(face_candidates),
@@ -278,7 +321,8 @@ class FogMappingStage:
     # v4: kind-mismatched and sub-floor lexical matches are now refused.
     # v5: billed-call count, prompt candidate cap, and basis-scoped memory.
     # v6: units carry each label's `section_path` and the prompt renders it.
-    version = 6
+    # v7: resolution tables are keyed by row (item id), not by label.
+    version = 7
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

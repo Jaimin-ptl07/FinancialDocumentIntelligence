@@ -42,7 +42,17 @@ class MapUnit:
 
     `basis` ("consolidated" | "standalone" | ...) is carried so memory lookups
     can be scoped by it -- see `resolve_from_memory`'s docstring for why a
-    label alone is not a safe key."""
+    label alone is not a safe key.
+
+    `item_ids` is the FOG line item id behind each label, parallel to
+    `labels` -- appended LAST with a default of `()` so no existing caller
+    (this module's own tests included) has to change. MEASURED ON TCS: the
+    balance sheet prints "Lease liabilities" TWICE, once under Non-current
+    liabilities and once under Current -- two ROWS, one STRING. Every
+    resolution table below used to be keyed by that string, so the second
+    row silently overwrote the first. `item_ids` gives each row a key the
+    label collision cannot touch; see `row_ids` for the fallback when it is
+    empty."""
 
     unit_id: str
     kind: str
@@ -52,6 +62,20 @@ class MapUnit:
     kinds: tuple[str, ...] = ()
     basis: str = ""
     sections: tuple[tuple[str, ...], ...] = ()
+    item_ids: tuple[str, ...] = ()
+
+
+def row_ids(unit: MapUnit) -> tuple[str, ...]:
+    """The per-ROW key every resolution table below is addressed by.
+
+    `unit.item_ids` when it covers every label -- the normal path, populated
+    by `units_from_fog` -- otherwise `unit.labels` itself, so a `MapUnit`
+    built without ids (an older caller, a test) still works. `fdi.core` is
+    pure and TOTAL: this never raises and never lets a short `item_ids`
+    desync a row from its id."""
+    if len(unit.item_ids) == len(unit.labels):
+        return unit.item_ids
+    return unit.labels
 
 
 _SYSTEM = """\
@@ -59,18 +83,24 @@ You map line items from an Indian company's financial statements onto a fixed \
 list of accounting concepts.
 
 Rules:
-- For each LABEL, answer with the TAG of the single concept it represents.
+- Rows are numbered. For each ROW, answer with the TAG of the single concept \
+its label represents.
+- Two rows may print the IDENTICAL label -- e.g. "Lease liabilities" once \
+under Non-current liabilities and once under Current liabilities. They are \
+still separate rows and must be judged independently; the row's own section \
+(shown in brackets) is what tells them apart.
 - Use ONLY the tags listed. Never invent a tag, and never use one from \
 elsewhere in the taxonomy.
-- If a label has no good match in the list, answer "unmapped". Guessing is \
+- If a row has no good match in the list, answer "unmapped". Guessing is \
 worse than admitting the gap.
-- Each tag may be used at most ONCE. If two labels seem to fit one tag, keep \
+- Each tag may be used at most ONCE. If two rows seem to fit one tag, keep \
 the better fit and mark the other "unmapped".
 - Do NOT report any value, amount or number. Values are already extracted; you \
 are assigning concepts only.
 - Subtotal and total rows usually map to a parent concept, not a component.
 
-Answer with a JSON object mapping each label to a tag or to "unmapped".\
+Answer with a JSON object mapping each row's NUMBER, as a string (e.g. "1"), \
+to a tag or to "unmapped".\
 """
 
 
@@ -94,7 +124,13 @@ def _ranked_candidates(unit: MapUnit) -> tuple[ConceptCandidate, ...]:
 
 def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
     """`(system, user, dropped)` for one unit. The system half is shared and
-    versioned; the user half is this unit's labels and its candidate concepts.
+    versioned; the user half is this unit's rows and its candidate concepts.
+
+    Each row is rendered with a 1-based ROW NUMBER -- cheap in tokens and
+    trivial for the model to echo -- because two rows can share one label
+    verbatim (see `MapUnit.item_ids`'s docstring) and a prompt that lists
+    bare labels cannot ask the model to tell them apart. `read_map_reply`
+    reads the reply back by that same number.
 
     Candidates are capped at `MAX_CANDIDATES` (fdi.core.concepts): an
     uncapped note-candidate set MEASURED at ~519 concepts, ~12.3k tokens/unit,
@@ -125,53 +161,68 @@ def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
     for c in kept:
         aliases = ", ".join(c.aliases) if c.aliases else "-"
         lines.append(f"  {c.tag} - {c.name} - {aliases}")
-    lines += ["", "LABELS to map:"]
+    lines += ["", "ROWS to map (answer keyed by row number):"]
     for index, label in enumerate(unit.labels):
+        row_number = index + 1
         section = unit.sections[index] if index < len(unit.sections) else ()
         if section:
-            lines.append(f"  {label}  [section: {' > '.join(section)}]")
+            lines.append(f"  {row_number}. {label}  [section: {' > '.join(section)}]")
         else:
-            lines.append(f"  {label}")
+            lines.append(f"  {row_number}. {label}")
     return _SYSTEM, "\n".join(lines), dropped
 
 
 def read_map_reply(reply: object, unit: MapUnit) -> dict[str, str]:
-    """`{label: tag}` for the assignments this unit actually authorises.
+    """`{row_id: tag}` for the assignments this unit actually authorises,
+    keyed by `row_ids(unit)` -- the item id, or the label when the unit
+    carries no ids.
 
-    Four filters, each closing a way the answer could be unauditable:
-    a label the unit never held, a tag it never offered, an explicit
-    `unmapped`, and a second claim on an already-taken tag. Total: never
-    raises."""
+    The reply itself is keyed by 1-based ROW NUMBER (`build_map_prompt`'s
+    contract), not by label: two rows can print the identical label, and a
+    reply keyed by that label could never say which row it meant. Reading
+    positionally off `unit`'s own rows means a row the unit never held
+    cannot be answered for -- there is no key for it to arrive on. The
+    remaining filters close the other ways the answer could be unauditable:
+    a tag the unit never offered, an explicit `unmapped`, and a second claim
+    on an already-taken tag. Total: never raises."""
     if not isinstance(reply, Mapping):
         return {}
     offered = {c.tag for c in unit.candidates}
-    held = set(unit.labels)
 
     out: dict[str, str] = {}
     taken: set[str] = set()
-    # Iterate the UNIT's order, not the reply's: two labels racing for one tag
-    # must resolve the same way on every run or the artifact stops hashing
-    # stably.
-    for label in unit.labels:
-        if label not in held:  # pragma: no cover - held is built from labels
-            continue
-        raw = reply.get(label)
+    # Iterate the UNIT's row order, not the reply's: two rows racing for one
+    # tag must resolve the same way on every run or the artifact stops
+    # hashing stably.
+    for index, row_id in enumerate(row_ids(unit)):
+        raw = reply.get(str(index + 1))
         if not isinstance(raw, str):
             continue
         tag = raw.strip()
         if tag.lower() in _UNMAPPED or tag not in offered or tag in taken:
             continue
-        out[label] = tag
+        out[row_id] = tag
         taken.add(tag)
     return out
 
 
-def unmapped_labels(unit: MapUnit, resolved: Mapping[str, str]) -> list[str]:
-    """The unit's labels that nothing resolved, in unit order.
+def unmapped_labels(
+    unit: MapUnit, resolved: Mapping[str, object]
+) -> list[tuple[str, str]]:
+    """`(row_id, label)` for the unit's rows that nothing resolved, in unit
+    order. `resolved` is keyed by `row_ids(unit)`, same as every resolution
+    table in this module.
 
     These are the point of the push model: "Facility expenses 2,966" has no
-    taxonomy home, and it must stay VISIBLE rather than vanish."""
-    return [label for label in unit.labels if label not in resolved]
+    taxonomy home, and it must stay VISIBLE rather than vanish. The id
+    travels alongside the label rather than replacing it: a caller still
+    needs the label to DISPLAY, and the id alone cannot reconstruct it once
+    two rows share one string."""
+    return [
+        (row_id, label)
+        for row_id, label in zip(row_ids(unit), unit.labels, strict=True)
+        if row_id not in resolved
+    ]
 
 
 def candidates_for_kind(
@@ -285,9 +336,14 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
     qualifier that CONTRADICTS a candidate's own qualifier, that candidate is
     excluded before matching, so the surviving candidate is no longer tied
     and resolves for free. If every candidate is excluded, the label stays
-    unresolved rather than accepting a contradicted match."""
+    unresolved rather than accepting a contradicted match.
+
+    Keyed by `row_ids(unit)`, not by label -- two rows sharing a label share
+    nothing else here, and a label key would let the second overwrite the
+    first exactly as it did before this table was rekeyed."""
     out: dict[str, Resolution] = {}
-    for index, label in enumerate(unit.labels):
+    for index, row_id in enumerate(row_ids(unit)):
+        label = unit.labels[index]
         kind = unit.kinds[index] if index < len(unit.kinds) else "unknown"
         if kind in _CURRENCY_ONLY:
             continue
@@ -297,7 +353,7 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
             label, unit.candidates, section_qualifier
         )
         if candidate is not None and score >= LEXICAL_FLOOR:
-            out[label] = Resolution(label, candidate.tag, f"lexical:{method}", score)
+            out[row_id] = Resolution(label, candidate.tag, f"lexical:{method}", score)
     return out
 
 
@@ -314,13 +370,19 @@ def resolve_from_memory(
     callers never have to match its casing rules by hand.
 
     `recall` returns only TRUSTED entries, and a remembered tag this unit does
-    not offer is DROPPED -- memory from another statement must not leak in."""
+    not offer is DROPPED -- memory from another statement must not leak in.
+
+    Keyed by `row_ids(unit)`, same as every resolution table in this module
+    -- the lookup itself still keys on the LABEL (that is what a previous
+    document's mapping was learned against), but the result must be
+    addressable per row so two rows sharing a label do not collide."""
     offered = {c.tag for c in unit.candidates}
     out: dict[str, Resolution] = {}
-    for label in unit.labels:
+    for index, row_id in enumerate(row_ids(unit)):
+        label = unit.labels[index]
         entry = recall(store, MemoryKey.of(label, unit.title, unit.basis))
         if entry is not None and entry.tag in offered:
-            out[label] = Resolution(label, entry.tag, "memory", entry.confidence)
+            out[row_id] = Resolution(label, entry.tag, "memory", entry.confidence)
     return out
 
 
@@ -383,11 +445,14 @@ def units_from_fog(
             sections = tuple(
                 _section_path_of(i) for i in items if str(i.get("label", ""))
             )
+            item_ids = tuple(
+                str(i.get("id", "")) for i in items if str(i.get("label", ""))
+            )
             title = str(node.get("title") or node.get("statement") or "")
             units.append(MapUnit(
                 unit_id=node_id, kind=kind, title=title, labels=labels,
                 candidates=candidates_for_kind(kind, face_candidates, note_candidates),
-                kinds=kinds, basis=basis, sections=sections,
+                kinds=kinds, basis=basis, sections=sections, item_ids=item_ids,
             ))
     units.sort(key=lambda u: u.unit_id)
     return units
@@ -399,21 +464,27 @@ def mapping_edges(
 ) -> tuple[list[Edge], list[dict[str, object]]]:
     """`MAPS_TO` edges plus the proof record behind each.
 
-    A resolution naming a line item this region does not hold is dropped: an
-    edge to a node that is not in the graph looks like navigation and leads
-    nowhere. Both outputs are sorted -- they reach an artifact body. Total."""
+    Looked up by ITEM ID, not by label: `resolutions[unit_id]` is keyed by
+    `row_ids(unit)` (see that function's docstring), and the normal path --
+    every unit built by `units_from_fog` -- makes that the FOG's own line
+    item ids. A resolution naming a line item this region does not hold is
+    dropped: an edge to a node that is not in the graph looks like
+    navigation and leads nowhere. Both outputs are sorted -- they reach an
+    artifact body. Total."""
     by_parent = _items_by_parent(region)
     edges: list[Edge] = []
     proof: list[dict[str, object]] = []
 
     for unit_id in sorted(resolutions):
-        per_label = resolutions[unit_id]
+        per_item = resolutions[unit_id]
         for item in by_parent.get(unit_id, []):
-            label = str(item.get("label", ""))
             item_id = item.get("id")
-            resolution = per_label.get(label)
-            if resolution is None or not isinstance(item_id, str):
+            if not isinstance(item_id, str):
                 continue
+            resolution = per_item.get(item_id)
+            if resolution is None:
+                continue
+            label = str(item.get("label", ""))
             edges.append(Edge("MAPS_TO", item_id, resolution.tag))
             proof.append({
                 "line_item": item_id,

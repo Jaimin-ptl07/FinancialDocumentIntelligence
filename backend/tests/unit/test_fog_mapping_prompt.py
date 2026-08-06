@@ -77,8 +77,11 @@ def test_candidates_beyond_the_cap_are_dropped_and_the_drop_is_reported():
     assert f"T{MAX_CANDIDATES}" not in user
 
 
-def test_a_reply_maps_labels_to_tags():
-    got = read_map_reply({"Travel expenses": "TCEXP"}, _UNIT)
+def test_a_reply_maps_row_numbers_to_tags():
+    """`_UNIT` has no `item_ids`, so `row_ids` falls back to the label -- the
+    reply itself is still keyed by 1-based ROW NUMBER: "Travel expenses" is
+    row 2."""
+    got = read_map_reply({"2": "TCEXP"}, _UNIT)
     assert got == {"Travel expenses": "TCEXP"}
 
 
@@ -86,28 +89,28 @@ def test_a_tag_the_unit_never_offered_is_dropped():
     """The model occasionally answers with a plausible concept from elsewhere in
     the taxonomy. A fact attributed to a note that does not mention it is
     unauditable."""
-    assert read_map_reply({"Travel expenses": "GRSPNE"}, _UNIT) == {}
+    assert read_map_reply({"2": "GRSPNE"}, _UNIT) == {}
 
 
-def test_a_label_the_unit_never_held_is_dropped():
-    assert read_map_reply({"Invented line": "TCEXP"}, _UNIT) == {}
+def test_a_row_number_the_unit_never_held_is_dropped():
+    """`_UNIT` has 3 rows; row "9" does not exist, so there is no key for the
+    reply to arrive on."""
+    assert read_map_reply({"9": "TCEXP"}, _UNIT) == {}
 
 
 def test_an_explicit_unmapped_marker_is_honoured_not_guessed():
-    assert read_map_reply({"Facility expenses": "unmapped"}, _UNIT) == {}
+    assert read_map_reply({"1": "unmapped"}, _UNIT) == {}
 
 
 def test_a_null_or_empty_assignment_is_dropped():
-    assert read_map_reply({"Facility expenses": None}, _UNIT) == {}
-    assert read_map_reply({"Facility expenses": ""}, _UNIT) == {}
+    assert read_map_reply({"1": None}, _UNIT) == {}
+    assert read_map_reply({"1": ""}, _UNIT) == {}
 
 
-def test_two_labels_may_not_claim_the_same_tag():
+def test_two_rows_may_not_claim_the_same_tag():
     """One concept, one line. Otherwise a note's components double-count into
     the same tag and its total can never arbitrate them."""
-    got = read_map_reply(
-        {"Travel expenses": "TCEXP", "Facility expenses": "TCEXP"}, _UNIT
-    )
+    got = read_map_reply({"2": "TCEXP", "1": "TCEXP"}, _UNIT)
     assert list(got.values()) == ["TCEXP"]
     assert len(got) == 1
 
@@ -120,7 +123,7 @@ def test_a_malformed_reply_yields_nothing_and_never_raises():
 
 def test_a_unit_with_no_candidates_maps_nothing():
     empty = MapUnit("u", "note", "t", ("Label",), ())
-    assert read_map_reply({"Label": "TCEXP"}, empty) == {}
+    assert read_map_reply({"1": "TCEXP"}, empty) == {}
 
 
 def test_the_prompt_survives_a_candidate_with_no_aliases():
@@ -192,3 +195,39 @@ def test_a_label_with_no_section_still_renders():
     unit = MapUnit("u", "note", "t", ("Travel",), (_c("TCEXP", "Travel"),))
     _system, user, _dropped = build_map_prompt(unit)
     assert "Travel" in user
+
+
+def test_two_identical_labels_are_rendered_as_two_distinct_numbered_rows():
+    """MEASURED ON TCS: 'Lease liabilities' prints twice -- once under
+    Non-current liabilities (9,453), once under Current (1,830). A prompt
+    that lists bare labels gives the model no way to tell the two rows
+    apart; the row NUMBER is what makes them addressable independently."""
+    unit = MapUnit(
+        unit_id="st:consolidated:balance_sheet", kind="face", title="Balance sheet",
+        labels=("Lease liabilities", "Lease liabilities"),
+        candidates=(_c("LTOLR", "Lease liabilities - non-current"),
+                    _c("STLL", "Lease liabilities - current")),
+        sections=(("Non-current liabilities",), ("Current liabilities",)),
+        item_ids=("li:ltolr", "li:stll"),
+    )
+    _system, user, _dropped = build_map_prompt(unit)
+    assert "1. Lease liabilities" in user
+    assert "2. Lease liabilities" in user
+    assert "Non-current liabilities" in user
+    assert "Current liabilities" in user
+
+
+def test_a_reply_assigning_different_tags_to_two_identical_labels_is_honoured():
+    """The whole point of the rekey: two rows sharing one caption must be able
+    to resolve to two DIFFERENT concepts, keyed by item id rather than by the
+    label they happen to share."""
+    unit = MapUnit(
+        unit_id="st:consolidated:balance_sheet", kind="face", title="Balance sheet",
+        labels=("Lease liabilities", "Lease liabilities"),
+        candidates=(_c("LTOLR", "Lease liabilities - non-current"),
+                    _c("STLL", "Lease liabilities - current")),
+        sections=(("Non-current liabilities",), ("Current liabilities",)),
+        item_ids=("li:ltolr", "li:stll"),
+    )
+    got = read_map_reply({"1": "LTOLR", "2": "STLL"}, unit)
+    assert got == {"li:ltolr": "LTOLR", "li:stll": "STLL"}

@@ -133,6 +133,25 @@ def test_units_from_fog_makes_one_unit_per_statement_and_note():
     assert by_id["nt:consolidated:13"].labels == ("Travel expenses",)
 
 
+def test_units_from_fog_carries_each_line_items_id():
+    """`item_ids` is what lets two rows sharing one label resolve
+    independently -- `units_from_fog` must populate it from the same items
+    it already walks to build `labels`."""
+    region = {
+        "statements": [], "notes": [
+            {"id": "nt:consolidated:13", "ref": "13", "title": "Other expenses"}],
+        "line_items": [
+            {"id": "li:b", "parent": "nt:consolidated:13", "origin": "note",
+             "label": "Travel expenses", "current": 1000.0},
+            {"id": "li:c", "parent": "nt:consolidated:13", "origin": "note",
+             "label": "Travel expenses", "current": 500.0},
+        ],
+        "edges": [],
+    }
+    units = units_from_fog(region, face_candidates=_CANDS, note_candidates=_CANDS)
+    assert units[0].item_ids == ("li:b", "li:c")
+
+
 def test_units_from_fog_carries_the_basis_onto_every_unit():
     """`resolve_from_memory` scopes its lookups by `unit.basis` -- so the
     basis a region belongs to must reach the units it produces."""
@@ -181,6 +200,8 @@ def test_units_are_ordered_deterministically():
 
 
 def test_mapping_edges_link_the_line_item_to_its_concept():
+    """`resolutions` is keyed by ITEM ID (`row_ids(unit)`'s normal path), not
+    by label -- `mapping_edges` looks a line item up by its own id."""
     region = {
         "statements": [], "notes": [],
         "line_items": [{"id": "li:b", "parent": "nt:consolidated:13",
@@ -190,7 +211,7 @@ def test_mapping_edges_link_the_line_item_to_its_concept():
     }
     resolutions = {
         "nt:consolidated:13": {
-            "Travel expenses": Resolution("Travel expenses", "TCEXP", "lexical", 1.0)
+            "li:b": Resolution("Travel expenses", "TCEXP", "lexical", 1.0)
         }
     }
     edges, proof = mapping_edges(resolutions, region)
@@ -212,17 +233,41 @@ def test_edges_are_sorted_so_the_artifact_hashes_stably():
         "edges": [],
     }
     resolutions = {"n": {
-        "A": Resolution("A", "TCEXP", "lexical", 1.0),
-        "B": Resolution("B", "OTEXP", "llm", 0.8),
+        "li:a": Resolution("A", "TCEXP", "lexical", 1.0),
+        "li:z": Resolution("B", "OTEXP", "llm", 0.8),
     }}
     edges, _ = mapping_edges(resolutions, region)
     keys = [(e.source, e.target) for e in edges]
     assert keys == sorted(keys)
 
 
+def test_two_items_sharing_a_label_resolve_to_two_different_edges():
+    """MEASURED ON TCS: 'Lease liabilities' prints twice under two different
+    sections and two different item ids. Both must produce their OWN edge --
+    the failure this rekey fixes is the second overwriting the first."""
+    region = {
+        "statements": [], "notes": [],
+        "line_items": [
+            {"id": "li:ltolr", "parent": "st", "origin": "face",
+             "label": "Lease liabilities", "current": 9453.0},
+            {"id": "li:stll", "parent": "st", "origin": "face",
+             "label": "Lease liabilities", "current": 1830.0},
+        ],
+        "edges": [],
+    }
+    resolutions = {"st": {
+        "li:ltolr": Resolution("Lease liabilities", "LTOLR", "lexical", 1.0),
+        "li:stll": Resolution("Lease liabilities", "STLL", "lexical", 1.0),
+    }}
+    edges, proof = mapping_edges(resolutions, region)
+    targets = {e.source: e.target for e in edges}
+    assert targets == {"li:ltolr": "LTOLR", "li:stll": "STLL"}
+    assert len(proof) == 2
+
+
 def test_a_resolution_for_a_line_item_that_does_not_exist_is_dropped():
     region = {"statements": [], "notes": [], "line_items": [], "edges": []}
-    resolutions = {"n": {"A": Resolution("A", "TCEXP", "llm", 0.5)}}
+    resolutions = {"n": {"li:missing": Resolution("A", "TCEXP", "llm", 0.5)}}
     edges, proof = mapping_edges(resolutions, region)
     assert edges == []
     assert proof == []

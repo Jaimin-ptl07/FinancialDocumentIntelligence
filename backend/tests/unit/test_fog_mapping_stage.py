@@ -46,9 +46,57 @@ async def _run(client) -> Mapping[str, object]:
     return build_mapping(_FOG, _SCHEMA, client=client, store=None)
 
 
+# MEASURED ON TCS: the balance sheet prints "Segment revenue" (stand-in for
+# the real "Lease liabilities") TWICE under one face unit, with nothing in
+# the taxonomy close enough to settle either lexically -- so both rows must
+# survive to the LLM tier as TWO rows, not collapse into one.
+_SCHEMA_DUP = {
+    "modules": [{
+        "module_id": "profit_and_loss", "statement": "profit_and_loss",
+        "retrieval_units": [{"unit_id": "RU_DUP", "fields": [
+            {"tag": "SEGA", "field_name": "Segment A revenue", "origin": "extracted"},
+            {"tag": "SEGB", "field_name": "Segment B revenue", "origin": "extracted"},
+        ]}],
+    }]
+}
+
+_FOG_DUP = {
+    "doc_id": "doc-dup",
+    "bases": {"consolidated": {
+        "statements": [{"id": "st:consolidated:profit_and_loss",
+                        "statement": "profit_and_loss"}],
+        "notes": [],
+        "line_items": [
+            {"id": "li:s0", "parent": "st:consolidated:profit_and_loss",
+             "origin": "face", "label": "Segment revenue", "current": 100.0},
+            {"id": "li:s1", "parent": "st:consolidated:profit_and_loss",
+             "origin": "face", "label": "Segment revenue", "current": 200.0},
+        ],
+        "edges": [],
+    }},
+    "diagnostics": {},
+}
+
+
+async def test_two_rows_sharing_a_label_resolve_to_two_different_concepts():
+    """The end-to-end proof of the rekey: "Segment revenue" appears twice in
+    ONE unit, neither settles lexically (a tie), both ride the SAME residue
+    into ONE LLM call, and the reply -- keyed by ROW NUMBER, not by the
+    shared label -- assigns each its own tag. Before the fix, the second row
+    silently overwrote the first at every one of these tables."""
+    from fdi.pipeline.stages.fog_mapping import build_mapping
+
+    client = FakeExtractorClient([{"1": "SEGA", "2": "SEGB"}])
+    body = build_mapping(_FOG_DUP, _SCHEMA_DUP, client=client, store=None)
+    proof = {p["line_item"]: p for p in body["bases"]["consolidated"]["proof"]}
+    assert proof["li:s0"]["tag"] == "SEGA"
+    assert proof["li:s1"]["tag"] == "SEGB"
+    assert len(client.calls) == 1
+
+
 async def test_a_label_the_free_tiers_settle_costs_no_llm_call():
     """"Travel expenses" is an exact alias of TCEXP."""
-    client = FakeExtractorClient([{"Facility expenses": "FACEXP"}])
+    client = FakeExtractorClient([{"1": "FACEXP"}])
     body = await _run(client)
     proof = {p["label"]: p for p in body["bases"]["consolidated"]["proof"]}
     # resolve_lexical (fdi.core.fog_mapping) qualifies its tier as
@@ -57,7 +105,7 @@ async def test_a_label_the_free_tiers_settle_costs_no_llm_call():
 
 
 async def test_the_residue_goes_to_the_model_and_becomes_an_edge():
-    client = FakeExtractorClient([{"Facility expenses": "FACEXP"}])
+    client = FakeExtractorClient([{"1": "FACEXP"}])
     body = await _run(client)
     proof = {p["label"]: p for p in body["bases"]["consolidated"]["proof"]}
     assert proof["Facility expenses"]["method"] == "llm"
@@ -66,7 +114,7 @@ async def test_the_residue_goes_to_the_model_and_becomes_an_edge():
 
 async def test_a_label_nothing_resolves_stays_visible_as_unmapped():
     """The whole point of the push model: it must not vanish."""
-    client = FakeExtractorClient([{"Facility expenses": "unmapped"}])
+    client = FakeExtractorClient([{"1": "unmapped"}])
     body = await _run(client)
     unmapped = body["bases"]["consolidated"]["unmapped"]
     entry = next(u for u in unmapped if u["label"] == "Facility expenses")
@@ -90,7 +138,7 @@ async def test_no_llm_call_is_made_when_the_free_tiers_settle_everything():
 
 
 async def test_diagnostics_split_the_tiers():
-    client = FakeExtractorClient([{"Facility expenses": "FACEXP"}])
+    client = FakeExtractorClient([{"1": "FACEXP"}])
     body = await _run(client)
     d = body["diagnostics"]["consolidated"]
     assert d["by_lexical"] >= 1
@@ -138,7 +186,7 @@ async def test_a_result_without_usage_degrades_the_unit_not_raises():
     `.usage` missing entirely -- raised past the guard instead of degrading
     just this unit."""
     class NoUsageResult:
-        data = {"Facility expenses": "FACEXP"}
+        data = {"1": "FACEXP"}
         # deliberately no `.usage` attribute
 
     class NoUsageClient:
@@ -180,7 +228,7 @@ async def test_prompt_candidates_dropped_is_recorded_when_the_cap_bites():
             "edges": [],
         }},
     }
-    client = FakeExtractorClient([{"Unmatched label": "unmapped"}])
+    client = FakeExtractorClient([{"1": "unmapped"}])
     body = build_mapping(fog, schema, client=client, store=None)
     assert body["diagnostics"]["consolidated"]["prompt_candidates_dropped"] == 5
 
@@ -190,10 +238,10 @@ async def test_the_body_is_deterministic():
     from fdi.pipeline.stages.fog_mapping import build_mapping
 
     a = build_mapping(_FOG, _SCHEMA,
-                      client=FakeExtractorClient([{"Facility expenses": "FACEXP"}]),
+                      client=FakeExtractorClient([{"1": "FACEXP"}]),
                       store=None)
     b = build_mapping(_FOG, _SCHEMA,
-                      client=FakeExtractorClient([{"Facility expenses": "FACEXP"}]),
+                      client=FakeExtractorClient([{"1": "FACEXP"}]),
                       store=None)
     assert canonical_json_bytes(a) == canonical_json_bytes(b)
 
@@ -208,7 +256,8 @@ def test_the_stage_is_registered_with_the_right_deps():
     # v4 refuses a kind-mismatched or sub-floor lexical match.
     # v5 splits billed calls, caps prompt candidates, scopes memory by basis.
     # v6 units carry each label's `section_path` and the prompt renders it.
-    assert stage.version == 6
+    # v7 keys resolution tables by row (item id), not by label.
+    assert stage.version == 7
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():
@@ -231,7 +280,7 @@ async def test_a_recorded_llm_call_appears_on_the_accumulator():
     class UsageClient:
         def extract(self, *, system: str, user: str) -> ExtractResult:
             return ExtractResult(
-                data={"Facility expenses": "FACEXP"},
+                data={"1": "FACEXP"},
                 usage=LlmCallUsage(
                     model="gpt-4o", input_tokens=10, output_tokens=5, duration_ms=100
                 ),
@@ -248,7 +297,7 @@ async def test_a_none_accumulator_is_harmless():
     degrade quietly, never take the mapping result down with it."""
     from fdi.pipeline.stages.fog_mapping import build_mapping
 
-    client = FakeExtractorClient([{"Facility expenses": "FACEXP"}])
+    client = FakeExtractorClient([{"1": "FACEXP"}])
     body = build_mapping(_FOG, _SCHEMA, client=client, store=None, usage=None)
     proof = {p["label"]: p for p in body["bases"]["consolidated"]["proof"]}
     assert proof["Facility expenses"]["tag"] == "FACEXP"
@@ -288,7 +337,7 @@ async def test_a_refusal_and_an_outage_are_distinguishable():
 
     refused = build_mapping(
         _FOG, _SCHEMA,
-        client=FakeExtractorClient([{"Facility expenses": "unmapped"}]), store=None,
+        client=FakeExtractorClient([{"1": "unmapped"}]), store=None,
     )
     outage = build_mapping(_FOG, _SCHEMA, client=Boom(), store=None)
 
