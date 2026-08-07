@@ -58,7 +58,16 @@ export function chooseBasis(reason: unknown): Basis | null {
 /** Every fact, joined to the proof and the line item behind it.
  *
  *  A fact whose proof record is missing is KEPT with `method: ""`. Dropping it
- *  would hide a real number because its bookkeeping was incomplete. */
+ *  would hide a real number because its bookkeeping was incomplete.
+ *
+ *  The proof shown is the one `fog_reason` ARBITRATED IN, not the first record
+ *  carrying the tag. More than one row claims a tag for 80 of TCS's 153
+ *  consolidated facts, and `fog_mapping.proof` is ordered by unit, so the first
+ *  record is routinely a LOSER: BB's value is the balance-sheet row "Other
+ *  balances with banks" (6,491) while the first claimant is note 8(d)'s
+ *  "Earmarked balances with banks". Taking the first labelled the number with a
+ *  caption that is not its own and sent the page jump to the wrong note --
+ *  showing the value's provenance as some other value's. */
 export function readFacts(
   reason: unknown,
   mapping: unknown,
@@ -68,10 +77,21 @@ export function readFacts(
   const facts = region(reason, basis).facts;
   if (!isRecord(facts)) return [];
 
+  const winnerByTag = new Map<string, string>();
+  for (const raw of arr(region(reason, basis).contested)) {
+    if (isRecord(raw) && typeof raw.tag === "string" && typeof raw.winner === "string") {
+      winnerByTag.set(raw.tag, raw.winner);
+    }
+  }
+
   const proofByTag = new Map<string, Record<string, unknown>>();
   for (const record of arr(region(mapping, basis).proof)) {
-    if (isRecord(record) && typeof record.tag === "string") {
-      if (!proofByTag.has(record.tag)) proofByTag.set(record.tag, record);
+    if (!isRecord(record) || typeof record.tag !== "string") continue;
+    const winner = winnerByTag.get(record.tag);
+    // Keep the first record UNLESS a later one is the arbitration winner. An
+    // uncontested tag has no winner entry and keeps its only claimant.
+    if (!proofByTag.has(record.tag) || (winner && record.line_item === winner)) {
+      proofByTag.set(record.tag, record);
     }
   }
 

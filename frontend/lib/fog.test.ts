@@ -68,6 +68,55 @@ describe("readFacts", () => {
     expect(pbtr?.page).toBe(167);
   });
 
+  it("shows the proof that WON arbitration, not the first claimant", () => {
+    // Real TCS shape: five rows claim BB, `proof` is ordered by unit so the
+    // balance-sheet winner is LAST, and the fact's value (6491) is the
+    // winner's. Taking the first record labelled 6491 "Earmarked balances
+    // with banks" on page 185 -- another row's caption and another row's
+    // page, attached to a number belonging to neither.
+    const contestedReason = {
+      bases: {
+        consolidated: {
+          facts: { BB: 6491 },
+          contested: [
+            { tag: "BB", winner: "li:st:r19", winner_label: "Other balances with banks",
+              winner_value: 6491, spread: 6194, losers: [] },
+          ],
+        },
+      },
+    };
+    const contestedMapping = {
+      bases: {
+        consolidated: {
+          proof: [
+            { line_item: "li:nt:8d:r0", tag: "BB", label: "Earmarked balances with banks",
+              method: "lexical:name", score: 0.9, unit: "nt:8(d)" },
+            { line_item: "li:st:r19", tag: "BB", label: "Other balances with banks",
+              method: "lexical:name", score: 0.9, unit: "st:balance_sheet" },
+          ],
+        },
+      },
+    };
+    const contestedFog = {
+      bases: {
+        consolidated: {
+          line_items: [
+            { id: "li:nt:8d:r0", label: "Earmarked balances with banks", page: 185 },
+            { id: "li:st:r19", label: "Other balances with banks", page: 166 },
+          ],
+        },
+      },
+    };
+    const [bb] = readFacts(contestedReason, contestedMapping, contestedFog, "consolidated");
+    expect(bb.label).toBe("Other balances with banks");
+    expect(bb.page).toBe(166);
+  });
+
+  it("keeps the only claimant when a tag is uncontested", () => {
+    const facts = readFacts(reason, mapping, fog, "consolidated");
+    expect(facts.find((f) => f.tag === "CT")?.label).toBe("Current tax");
+  });
+
   it("is sorted by tag so the list does not reshuffle between runs", () => {
     const tags = readFacts(reason, mapping, fog, "consolidated").map((f) => f.tag);
     expect(tags).toEqual([...tags].sort());
