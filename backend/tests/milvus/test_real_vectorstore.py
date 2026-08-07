@@ -56,7 +56,12 @@ def test_real_upsert_and_search_finds_the_match() -> None:
         store = MilvusVectorStore.from_settings(get_settings())
     except MilvusException as exc:  # pragma: no cover - environment-dependent
         pytest.skip(f"Milvus unreachable at the configured URI: {exc}")
-    assert store is not None
+    if store is None:  # pragma: no cover - environment-dependent
+        # `from_settings` now ABSORBS an unreachable server and returns None,
+        # so the except above no longer fires: a Milvus that is merely down
+        # must not fail the API at lifespan. None is therefore the same
+        # "not available here" signal the exception used to be.
+        pytest.skip("Milvus not reachable at the configured URI")
 
     doc_id = f"sp14-smoke-{uuid.uuid4()}"
     dim = get_settings().embed_dim

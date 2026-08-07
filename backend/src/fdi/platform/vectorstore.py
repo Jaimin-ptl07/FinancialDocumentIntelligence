@@ -18,9 +18,12 @@ catch here; no blanket ignore is needed."""
 from collections.abc import Mapping
 from typing import cast
 
+import structlog
 from pymilvus import DataType, Function, FunctionType, MilvusClient
 
 from fdi.platform.config import Settings
+
+log = structlog.get_logger(__name__)
 
 # Explicit, because Milvus REFUSES to output a SPARSE_FLOAT_VECTOR field --
 # `output_fields=["*"]` fails the moment `sparse` exists on the schema.
@@ -182,10 +185,33 @@ class MilvusVectorStore:
 
     @staticmethod
     def from_settings(settings: "Settings") -> "MilvusVectorStore | None":
+        """The configured store, or None.
+
+        UNCONFIGURED and UNREACHABLE both yield None, deliberately.
+        `MilvusClient.__init__` opens a gRPC channel and raises when the
+        server is not answering, and this runs inside the API's lifespan --
+        so a Milvus that is merely DOWN took the whole API down with it, and
+        with it every route that has nothing to do with vectors. MEASURED:
+        milvus aborted (exit 134) and the API then failed startup in a loop,
+        blocking the FOG screens, which use no vector store at all.
+
+        This codebase already holds that "an unconfigured optional backend is
+        a reportable outcome, not a KeyError" (IndexStage returns
+        `{skipped: "vector_store not configured"}`). Unreachable is the same
+        kind of fact and gets the same treatment: callers already handle None,
+        and /health still probes and reports the truth."""
         if not settings.milvus_uri:
             return None
-        return MilvusVectorStore(
-            uri=settings.milvus_uri,
-            collection=settings.milvus_collection,
-            dim=settings.embed_dim,
-        )
+        try:
+            return MilvusVectorStore(
+                uri=settings.milvus_uri,
+                collection=settings.milvus_collection,
+                dim=settings.embed_dim,
+            )
+        except Exception:  # noqa: BLE001 - an optional backend may not fail the app
+            log.warning(
+                "vectorstore.unreachable",
+                uri=settings.milvus_uri,
+                effect="retrieval degrades; the FOG path is unaffected",
+            )
+            return None
