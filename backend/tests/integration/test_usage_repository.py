@@ -237,3 +237,86 @@ async def test_corpus_cost_by_document_excludes_ask_agents_untethered_rows(
     async with session_factory() as s:
         rows = await RegistryRepository(s).corpus_cost_by_document()
     assert all(r["doc_id"] is not None for r in rows)
+
+
+async def test_fog_mapping_is_an_accepted_llm_usage_source(session_factory) -> None:
+    """`fog_mapping` is the only FOG stage that spends money, and
+    ck_llm_usage_event_source rejected it until migration 0009. The
+    rejection was not a lost billing row: record_llm_usage runs AFTER the
+    Azure call returns, so the CheckViolationError propagated out of the
+    stage and killed a run whose LLM calls had already been paid for."""
+    doc_id, run_id = await _make_document_and_stage_run(session_factory)
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="fog_mapping", correlation_id="corr-fog",
+            model="gpt-4o", input_tokens=41, output_tokens=9, duration_ms=70,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        rows = await RegistryRepository(s).document_usage_events(doc_id)
+    row = next(r for r in rows if r["source"] == "fog_mapping")
+    assert row["input_tokens"] == 41
+    assert row["output_tokens"] == 9
+
+
+async def test_stage_cost_totals_attributes_spend_to_the_stage_that_ran(
+    session_factory,
+) -> None:
+    """Attribution comes from the JOINED stage_run, not from the `source`
+    string. The previous implementation filtered on source ==
+    'semantic_classify' and hardcoded the key "semantic", so a mapping call
+    billed under a real stage_run reported as zero cost -- a stage that
+    spends money reading as free is the one error a cost screen must not
+    make."""
+    doc_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.create_document(doc_id)
+        await repo.start_run(run_id, doc_id, "fog_mapping", 7, "hash-fog", "corr-fog")
+        await s.commit()
+
+    async with session_factory() as s:
+        before = (await RegistryRepository(s).stage_cost_totals()).get("fog_mapping")
+    before_in = before["llm_input_tokens"] if before else 0
+
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=doc_id, stage_run_id=run_id,
+            source="fog_mapping", correlation_id="corr-fog",
+            model="gpt-4o", input_tokens=120, output_tokens=25, duration_ms=90,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        after = await RegistryRepository(s).stage_cost_totals()
+    assert after["fog_mapping"]["llm_input_tokens"] - before_in == 120
+
+
+async def test_stage_cost_totals_ignores_calls_with_no_stage_run(
+    session_factory,
+) -> None:
+    """/ask and /extract/document run outside run_stage. They have no
+    stage to attribute to, so the inner join must drop them rather than
+    invent one."""
+    async with session_factory() as s:
+        before = await RegistryRepository(s).stage_cost_totals()
+
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=None, stage_run_id=None,
+            source="ask_agent", correlation_id="corr-ask",
+            model="gpt-4o", input_tokens=500, output_tokens=50, duration_ms=200,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        after = await RegistryRepository(s).stage_cost_totals()
+    assert {k: v["llm_input_tokens"] for k, v in after.items()} == {
+        k: v["llm_input_tokens"] for k, v in before.items()
+    }

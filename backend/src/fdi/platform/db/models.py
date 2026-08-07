@@ -137,19 +137,27 @@ class OcrUsageEvent(Base):
 
 class LlmUsageEvent(Base):
     """One real Azure OpenAI chat.completions.create() call, across all
-    three call sites (semantic classification, schema-driven extraction,
-    the /ask agent loop). `doc_id`/`stage_run_id` are nullable: `/ask` is
-    corpus-wide (doc_id NULL), and both `/ask` and `/extract/document` run
-    OUTSIDE run_stage entirely (stage_run_id NULL) -- only the `semantic`
-    stage's calls carry a real stage_run_id. Costing feature (docs/
-    superpowers/specs/2026-07-28-costing-feature-design.md); INR cost is
-    computed at read time from input_tokens/output_tokens, never stored
-    here."""
+    four call sites (semantic classification, FOG concept mapping, schema-
+    driven extraction, the /ask agent loop). `doc_id`/`stage_run_id` are
+    nullable: `/ask` is corpus-wide (doc_id NULL), and both `/ask` and
+    `/extract/document` run OUTSIDE run_stage entirely (stage_run_id NULL)
+    -- only the `semantic` and `fog_mapping` stages' calls carry a real
+    stage_run_id. Costing feature (docs/superpowers/specs/2026-07-28-
+    costing-feature-design.md); INR cost is computed at read time from
+    input_tokens/output_tokens, never stored here.
+
+    `fog_mapping` was added to the source set in migration 0009. Its
+    absence was not a cosmetic gap: the constraint is enforced on INSERT,
+    so every mapping call raised CheckViolationError while recording the
+    usage it had ALREADY spent money on, and the stage died mid-run. A
+    billing ledger that rejects a real charge is worse than one that
+    misses it -- it takes the work down with it."""
 
     __tablename__ = "llm_usage_event"
     __table_args__ = (
         CheckConstraint(
-            "source IN ('semantic_classify','extract_document','ask_agent')",
+            "source IN ('semantic_classify','fog_mapping','extract_document',"
+            "'ask_agent')",
             name="ck_llm_usage_event_source",
         ),
     )

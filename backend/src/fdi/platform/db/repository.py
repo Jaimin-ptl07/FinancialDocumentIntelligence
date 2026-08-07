@@ -627,12 +627,19 @@ class RegistryRepository:
         return result
 
     async def stage_cost_totals(self) -> dict[str, CorpusCostTotals]:
-        """{stage_name: totals} for the two stages that ever cost anything:
-        "ocr" (page charges) and "semantic" (its LLM calls, source=
-        'semantic_classify'). /ask and extract_document have no
-        stage_run_id and so no stage entry here -- they only ever appear in
+        """{stage_name: totals} for every stage that cost anything: "ocr"
+        (page charges) plus each stage whose LLM calls carry a stage_run_id.
+        /ask and extract_document run outside run_stage, so they have no
+        stage_run_id and no stage entry here -- they only ever appear in
         corpus_cost_totals. A stage with zero billable events is simply
-        absent from the returned dict."""
+        absent from the returned dict.
+
+        The stage name is JOINED from stage_run rather than inferred from
+        `source`. The previous version filtered on source == 'semantic_
+        classify' and hardcoded the key "semantic", which reported every
+        other stage's spend as zero -- and `fog_mapping`, the only stage in
+        the FOG pipeline that spends money at all, is exactly such a stage.
+        Joining means a new billed stage appears here on its own."""
         result: dict[str, CorpusCostTotals] = {}
         ocr_total = (
             await self._s.execute(
@@ -643,18 +650,25 @@ class RegistryRepository:
             result["ocr"] = CorpusCostTotals(
                 ocr_page_count=int(ocr_total), llm_input_tokens=0, llm_output_tokens=0
             )
-        semantic_totals = (
+        by_stage = (
             await self._s.execute(
                 select(
+                    StageRun.stage_name,
                     func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
                     func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
-                ).where(LlmUsageEvent.source == "semantic_classify")
+                )
+                .join(StageRun, LlmUsageEvent.stage_run_id == StageRun.id)
+                .group_by(StageRun.stage_name)
             )
-        ).one()
-        if semantic_totals[0] or semantic_totals[1]:
-            result["semantic"] = CorpusCostTotals(
-                ocr_page_count=0, llm_input_tokens=int(semantic_totals[0]),
-                llm_output_tokens=int(semantic_totals[1]),
+        ).all()
+        for stage_name, in_tok, out_tok in by_stage:
+            if not in_tok and not out_tok:
+                continue
+            prior = result.get(stage_name)
+            result[stage_name] = CorpusCostTotals(
+                ocr_page_count=prior["ocr_page_count"] if prior else 0,
+                llm_input_tokens=int(in_tok),
+                llm_output_tokens=int(out_tok),
             )
         return result
 
