@@ -43,7 +43,7 @@ async def _read_provenance(
     repo: RegistryRepository, store: ArtifactStore, doc_id: str
 ) -> dict[str, dict[str, object]]:
     """bare node_id -> {"page", "bounding_regions"}, read ONCE per doc_id."""
-    run = await repo.latest_run(doc_id, "provenance")
+    run = await repo.latest_completed_run(doc_id, "provenance")
     if run is None or run.artifact_key is None:
         return {}
     body = cast(Mapping[str, object], await store.get_json(run.artifact_key))

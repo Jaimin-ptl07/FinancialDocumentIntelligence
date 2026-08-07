@@ -248,10 +248,50 @@ class RegistryRepository:
         return facts
 
     async def latest_run(self, doc_id: str, stage_name: str) -> StageRun | None:
+        """The most recent run of `stage_name`, WHATEVER its status.
+
+        Use this to answer "what is this stage doing?". To answer "give me
+        this stage's output", use `latest_completed_run` -- see its docstring
+        for what taking the newest row instead actually costs."""
         return (
             await self._s.execute(
                 sqlalchemy.select(StageRun)
                 .where(StageRun.doc_id == doc_id, StageRun.stage_name == stage_name)
+                .order_by(StageRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+
+    async def latest_completed_run(self, doc_id: str, stage_name: str) -> StageRun | None:
+        """The most recent run of `stage_name` that PRODUCED AN ARTIFACT.
+
+        A stage can hold several runs at once: an older `done` one with a real
+        `artifact_key`, and a newer `running` or `failed` one with NULL. Asking
+        for the newest row and then testing its `artifact_key` reports "no
+        artifact" whenever a re-run is in flight -- even though a perfectly good
+        artifact is sitting in the store, and even though the re-run may be
+        about to fail and leave that artifact the only answer there is.
+
+        MEASURED: reprocessing RIL from `basis` left `fog_mapping` with a `done`
+        run and a newer `running` one. `run_stage`'s dependency read took the
+        newer row, found a NULL key, and `fog_reason` died with a bare
+        `AssertionError()`. The same lookup backs
+        `GET /documents/{id}/artifacts/{stage}`, so the UI simultaneously showed
+        "not built yet" for stages whose artifacts existed.
+
+        Filtering on `artifact_key IS NOT NULL` as well as `status` is
+        deliberate belt-and-braces: the key is what the caller actually needs,
+        and a `done` row without one would be a broken invariant rather than a
+        reason to hand back None from a different code path."""
+        return (
+            await self._s.execute(
+                sqlalchemy.select(StageRun)
+                .where(
+                    StageRun.doc_id == doc_id,
+                    StageRun.stage_name == stage_name,
+                    StageRun.status == "done",
+                    StageRun.artifact_key.is_not(None),
+                )
                 .order_by(StageRun.created_at.desc())
                 .limit(1)
             )

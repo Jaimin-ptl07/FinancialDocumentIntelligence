@@ -8,11 +8,24 @@ pytestmark = pytest.mark.integration
 
 
 async def test_alembic_version_is_stamped(migrated_engine: AsyncEngine) -> None:
+    """The database is stamped at the migration directory's OWN head.
+
+    Derived, not hardcoded. A literal here has to be edited by every commit
+    that adds a migration, and it fails in a way that says nothing about the
+    new migration -- it just reports two revision numbers and leaves you to
+    work out which is the database and which is the assertion. Reading the head
+    from the script directory asserts the thing actually worth asserting:
+    `alembic upgrade head` really did reach head."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+    assert head is not None
     async with migrated_engine.connect() as conn:
         result = await conn.execute(sqlalchemy.text(
             "SELECT version_num FROM alembic_version"
         ))
-        assert result.scalar_one() == "0008"
+        assert result.scalar_one() == head
 
 
 async def test_usage_event_tables_exist(migrated_engine: AsyncEngine) -> None:

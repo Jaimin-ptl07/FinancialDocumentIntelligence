@@ -38,8 +38,18 @@ async def run_stage(
 
     async def read_artifact(d: str, upstream: str) -> object:
         async with session_factory() as s:
-            run = await RegistryRepository(s).latest_run(d, upstream)
-        assert run is not None and run.artifact_key is not None
+            run = await RegistryRepository(s).latest_completed_run(d, upstream)
+        if run is None or run.artifact_key is None:
+            # NOT an assert. A missing dependency artifact is a reachable
+            # state -- an upstream stage that failed, or was never run -- so
+            # it deserves a named error, not "impossible". The bare
+            # `AssertionError()` this replaces reported no doc, no stage and
+            # no dependency, and `python -O` would have removed the check
+            # entirely, leaving `store.get_json(None)` to fail instead.
+            raise ValueError(
+                f"{stage_name} for document {d} needs {upstream}, "
+                f"which has no completed run"
+            )
         return await store.get_json(run.artifact_key)
 
     async def read_source() -> bytes:

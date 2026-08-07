@@ -537,7 +537,10 @@ async def document_stages(doc_id: str, session: SessionDep) -> StagesView:
 async def document_artifact(
     doc_id: str, stage: str, session: SessionDep, store: StoreDep
 ) -> dict[str, object]:
-    run = await RegistryRepository(session).latest_run(doc_id, stage)
+    # `latest_completed_run`, not `latest_run`: a re-run in flight adds a newer
+    # row with a NULL artifact_key, and answering 404 from it would hide an
+    # artifact that exists and is still the best answer available.
+    run = await RegistryRepository(session).latest_completed_run(doc_id, stage)
     if run is None or run.artifact_key is None:
         raise HTTPException(status_code=404, detail=f"no {stage} artifact for document {doc_id}")
     body = await store.get_json(run.artifact_key)

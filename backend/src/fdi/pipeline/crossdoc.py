@@ -35,7 +35,7 @@ async def read_artifact(
     one document. Same isolate-one-failure posture as `routes._probe`: a scan
     over many independently-produced artifacts should not let one bad object
     sink every other document's resolution."""
-    run = await repo.latest_run(doc_id, stage)
+    run = await repo.latest_completed_run(doc_id, stage)
     if run is None or run.artifact_key is None:
         return None
     try:

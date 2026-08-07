@@ -35,7 +35,7 @@ from fdi.platform.storage.artifact_store import ArtifactStore
 async def read_chunks(
     repo: RegistryRepository, store: ArtifactStore, doc_id: str
 ) -> list[Mapping[str, object]]:
-    run = await repo.latest_run(doc_id, "chunks")
+    run = await repo.latest_completed_run(doc_id, "chunks")
     if run is None or run.artifact_key is None:
         return []
     body = cast(Mapping[str, object], await store.get_json(run.artifact_key))

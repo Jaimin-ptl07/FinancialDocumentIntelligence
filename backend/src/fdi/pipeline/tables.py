@@ -28,7 +28,7 @@ async def _read_structure(
     session: AsyncSession, store: ArtifactStore, doc_id: str
 ) -> Mapping[str, object] | None:
     repo = RegistryRepository(session)
-    run = await repo.latest_run(doc_id, "structure")
+    run = await repo.latest_completed_run(doc_id, "structure")
     if run is None or run.artifact_key is None:
         return None
     return cast(Mapping[str, object], await store.get_json(run.artifact_key))

@@ -488,7 +488,9 @@ async def _read_latest_artifact(
     the highlight, not the document's whole extraction batch."""
     body: Mapping[str, object] = {}
     with contextlib.suppress(Exception):
-        run = await RegistryRepository(ctx.session).latest_run(ctx.doc_id, stage)
+        run = await RegistryRepository(ctx.session).latest_completed_run(
+            ctx.doc_id, stage
+        )
         if run is not None and run.artifact_key is not None:
             raw = await ctx.store.get_json(run.artifact_key)
             if isinstance(raw, Mapping):
