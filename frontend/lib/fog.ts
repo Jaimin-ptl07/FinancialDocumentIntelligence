@@ -16,6 +16,13 @@ export type FogFact = {
   /** How the mapping was resolved: "memory" | "lexical:*" | "llm" | "".
    *  Empty means the proof record is absent, NOT that it was guessed. */
   method: string;
+  /** The match score behind `method`. Carried because METHOD ALONE CANNOT
+   *  RANK the evidence: `lexical_match` returns "name" for both an exact hit
+   *  (1.0) and a token-overlap guess (<= 0.9), and only the score separates
+   *  them. Without it a UI mirroring `core/fog_reason.py::_tier` has to treat
+   *  every bare lexical match as the weakest evidence, which mis-ranks every
+   *  exact one. 0 when no proof record exists. */
+  score: number;
   page: number | null;
   label: string;
 };
@@ -84,6 +91,7 @@ export function readFacts(
       tag,
       value: raw,
       method: proof && typeof proof.method === "string" ? proof.method : "",
+      score: proof && isNumber(proof.score) ? proof.score : 0,
       label: proof && typeof proof.label === "string" ? proof.label : "",
       page: item && isNumber(item.page) ? item.page : null,
     });

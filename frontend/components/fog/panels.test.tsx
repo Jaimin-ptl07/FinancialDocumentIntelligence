@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { FogFact } from "@/lib/fog";
 import { FactsPanel } from "./FactsPanel";
 import { AttentionPanel } from "./AttentionPanel";
 import { HealthPanel } from "./HealthPanel";
@@ -102,5 +103,39 @@ describe("HealthPanel", () => {
   it("shows no alert when the schema is fine", () => {
     render(<HealthPanel health={health} />);
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("FactsPanel evidence tiers mirror the backend", () => {
+  const fact = (over: Partial<FogFact>): FogFact => ({
+    tag: "T", value: 1, method: "lexical:name", page: 1, label: "L", score: 1, ...over,
+  });
+
+  const weightOf = (f: FogFact) => {
+    const { unmount } = render(
+      <FactsPanel facts={[f]} selected={null} onSelect={() => {}} />,
+    );
+    const el = screen.getByText(f.method) as HTMLElement;
+    const weight = Number(el.style.fontWeight);
+    unmount();
+    return weight;
+  };
+
+  it("ranks an EXACT lexical hit as strong, not as a guess", () => {
+    // `lexical_match` returns "name" for both 1.0 and <= 0.9; only the score
+    // separates them, and ranking on the string alone filed every exact match
+    // under the weakest evidence there is.
+    expect(weightOf(fact({ method: "lexical:name", score: 1 })))
+      .toBeGreaterThan(weightOf(fact({ method: "lexical:name", score: 0.71 })));
+  });
+
+  it("ranks a section-confirmed hit as strong even at a fuzzy score", () => {
+    expect(weightOf(fact({ method: "lexical:section:name", score: 0.9 })))
+      .toBeGreaterThan(weightOf(fact({ method: "lexical:name", score: 0.9 })));
+  });
+
+  it("ranks the model above a bare token overlap", () => {
+    expect(weightOf(fact({ method: "llm", score: 0 })))
+      .toBeGreaterThan(weightOf(fact({ method: "lexical:name", score: 0.7 })));
   });
 });

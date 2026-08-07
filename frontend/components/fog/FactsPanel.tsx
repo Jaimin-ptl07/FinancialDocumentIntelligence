@@ -2,10 +2,17 @@
  *  proves it.
  *
  *  Presentational only: props in, markup out. Method weight tracks evidence
- *  tier, mirroring `core/fog_reason.py::_tier` -- memory and a section-
- *  confirmed lexical hit are the heaviest evidence, an LLM judgement is mid,
- *  and anything else (bare token overlap, or the score data this view model
- *  does not carry) is treated as the lightest rather than assumed strong.
+ *  tier, mirroring `core/fog_reason.py::_tier` EXACTLY: memory, a section-
+ *  confirmed lexical hit, and an EXACT lexical hit (score >= 0.95) are the
+ *  heaviest evidence; an LLM judgement is mid; a bare token overlap is the
+ *  lightest.
+ *
+ *  The score is what makes that possible. `lexical_match` returns method
+ *  "name" for BOTH an exact hit (1.0) and a token-overlap guess (<= 0.9), so
+ *  ranking on the method string alone would file every exact match under the
+ *  weakest evidence there is -- the same conflation the backend had to fix in
+ *  `_tier` itself.
+ *
  *  Weight and glyph carry the distinction, never a colour -- --tether stays
  *  reserved for provenance elsewhere in the app. */
 
@@ -14,9 +21,13 @@ import { formatInr } from "@/lib/format";
 
 const NO_PROOF = "no proof recorded";
 
-function methodWeight(method: string): number {
+/** Mirrors `core/fog_reason.py::_EXACT_SCORE`. */
+const EXACT_SCORE = 0.95;
+
+function methodWeight(method: string, score: number): number {
   if (method === "memory") return 700;
   if (method.startsWith("lexical:section")) return 700;
+  if (method.startsWith("lexical") && score >= EXACT_SCORE) return 700;
   if (method === "llm") return 500;
   return 400;
 }
@@ -69,7 +80,7 @@ export function FactsPanel({
                 <span
                   style={{
                     fontSize: "var(--text-xs)",
-                    fontWeight: hasProof ? methodWeight(fact.method) : 400,
+                    fontWeight: hasProof ? methodWeight(fact.method, fact.score) : 400,
                     color: hasProof ? "var(--ink-soft)" : "var(--flag)",
                     borderBottom: hasProof ? undefined : "1.5px dotted var(--flag)",
                   }}

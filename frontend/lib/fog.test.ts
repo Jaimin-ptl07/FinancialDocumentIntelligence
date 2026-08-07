@@ -194,3 +194,18 @@ describe("readHealth", () => {
     expect(empty.schemaUsable).toBeNull();
   });
 });
+
+describe("FogFact.score", () => {
+  it("carries the score, because method alone cannot rank the evidence", () => {
+    // `lexical_match` returns "name" for BOTH an exact hit (1.0) and a token
+    // overlap (<= 0.9); only the score separates them.
+    const facts = readFacts(reason, mapping, fog, "consolidated");
+    expect(facts.find((f) => f.tag === "PBTR")?.score).toBe(0.9);
+    expect(facts.find((f) => f.tag === "CT")?.score).toBe(0);
+  });
+
+  it("is 0 when no proof record exists, not undefined", () => {
+    const facts = readFacts(reason, { bases: { consolidated: {} } }, fog, "consolidated");
+    expect(facts[0].score).toBe(0);
+  });
+});
