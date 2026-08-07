@@ -257,7 +257,9 @@ def test_the_stage_is_registered_with_the_right_deps():
     # v5 splits billed calls, caps prompt candidates, scopes memory by basis.
     # v6 units carry each label's `section_path` and the prompt renders it.
     # v7 keys resolution tables by row (item id), not by label.
-    assert stage.version == 7
+    # v8 raises the section subset's first-refusal bar to _SECTION_CONFIDENT,
+    #    and lets a reply name only a candidate the prompt actually showed.
+    assert stage.version == 8
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():

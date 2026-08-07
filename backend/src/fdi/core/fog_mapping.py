@@ -123,6 +123,22 @@ def _ranked_candidates(unit: MapUnit) -> tuple[ConceptCandidate, ...]:
     return tuple(sorted(unit.candidates, key=affinity, reverse=True))
 
 
+def shown_candidates(unit: MapUnit) -> tuple[ConceptCandidate, ...]:
+    """The candidates the model is ACTUALLY SHOWN for this unit.
+
+    One definition, used by both `build_map_prompt` (to render them) and
+    `read_map_reply` (to decide what the reply may name). They were two
+    expressions before: the prompt rendered the capped top slice while the
+    reader validated against `unit.candidates`, all ~577 of them. A tag from
+    the other ~537 -- one the model never saw and therefore cannot have read
+    off the shortlist -- was accepted as if the unit had offered it, and
+    `read_map_reply`'s own docstring claimed the opposite.
+
+    Pure and deterministic, so recomputing it here yields the identical
+    sequence the prompt rendered."""
+    return _ranked_candidates(unit)[:MAX_CANDIDATES]
+
+
 def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
     """`(system, user, dropped)` for one unit. The system half is shared and
     versioned; the user half is this unit's rows and its candidate concepts.
@@ -151,7 +167,7 @@ def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
     This tier only ever sees labels the FREE tiers could not settle, so a
     high affinity here means "close but under the floor" -- exactly the
     population a judgement is worth paying for."""
-    kept = _ranked_candidates(unit)[:MAX_CANDIDATES]
+    kept = shown_candidates(unit)
     dropped = max(0, len(unit.candidates) - len(kept))
     lines = [
         f"UNIT: {unit.unit_id} ({unit.kind})",
@@ -184,11 +200,19 @@ def read_map_reply(reply: object, unit: MapUnit) -> dict[str, str]:
     positionally off `unit`'s own rows means a row the unit never held
     cannot be answered for -- there is no key for it to arrive on. The
     remaining filters close the other ways the answer could be unauditable:
-    a tag the unit never offered, an explicit `unmapped`, and a second claim
-    on an already-taken tag. Total: never raises."""
+    a tag the unit never SHOWED, an explicit `unmapped`, and a second claim
+    on an already-taken tag. Total: never raises.
+
+    "Showed" is the operative word, and it used to be wrong. This validated
+    against `unit.candidates` -- the full ~577 -- while the prompt renders
+    only the top `MAX_CANDIDATES` (~40, measured: 15,231 dropped on TCS's
+    consolidated basis alone). A tag from the ~537 the model never saw was
+    accepted as authorised, so the one class of answer the shortlist exists
+    to prevent -- a tag pulled from the taxonomy at large rather than read
+    off the offered list -- was the class that passed."""
     if not isinstance(reply, Mapping):
         return {}
-    offered = {c.tag for c in unit.candidates}
+    offered = {c.tag for c in shown_candidates(unit)}
 
     out: dict[str, str] = {}
     taken: set[str] = set()
@@ -254,6 +278,13 @@ class Resolution:
 # wrong value (REMC 1, RIL 2) by winning uncontested. Silence is better --
 # an unmapped label is visible in the artifact, a wrong number is not.
 LEXICAL_FLOOR = 0.75
+
+# The bar a SECTION-QUALIFIED subset must clear to win without the full set
+# being consulted. Set at the top of `lexical_match`'s token-overlap range
+# (that function caps overlap at 0.9 and reserves 0.95/1.0 for an exact alias
+# and an exact name), so clearing it means an exact hit or an overlap that
+# left nothing on the table -- never a partial-word guess.
+_SECTION_CONFIDENT = 0.9
 
 # A concept expecting money can never be satisfied by a share count, a
 # per-share figure or a ratio. "unknown" is permitted: a classification gap
@@ -380,7 +411,18 @@ def _match_with_section(
 
     Falling back to the full set keeps a row whose section names a period the
     taxonomy does not split on resolvable, and the contradiction veto still
-    applies there so the wrong period can never win."""
+    applies there so the wrong period can never win.
+
+    First refusal is granted at `_SECTION_CONFIDENT`, NOT at `LEXICAL_FLOOR`.
+    The distinction is what stops the preference from becoming a licence.
+    `lexical_match` scores an exact name 1.0, an exact alias 0.95, and caps
+    every token overlap at 0.9 -- so a subset hit between the floor (0.75) and
+    0.9 is a partial-word guess and nothing more. Returning it here did two
+    things at once: it beat an EXACT match available in the full set, and it
+    stamped the guess `section:`, which `_tier` ranks as certain evidence.
+    A 0.80 overlap outranking a 1.0 name match, and outranking it as proof,
+    is the inversion this threshold removes. The LL case still resolves:
+    "Lease liabilities" against the qualified variants scores exactly 0.900."""
     if section_qualifier:
         preferred = tuple(
             c for c in candidates if _qualifier(c.name) == section_qualifier
@@ -389,7 +431,7 @@ def _match_with_section(
             hit, method, score = _prefer_reported(
                 label, preferred, *lexical_match(label, preferred)
             )
-            if hit is not None and score >= LEXICAL_FLOOR:
+            if hit is not None and score >= _SECTION_CONFIDENT:
                 # Marked SECTION-CONFIRMED. The section agreeing is
                 # independent structural corroboration, not a lucky token
                 # overlap, and `_tier` must rank it accordingly.
@@ -398,6 +440,15 @@ def _match_with_section(
             c for c in candidates
             if _qualifier(c.name) in ("", section_qualifier)
         )
+        best, method, score = _prefer_reported(
+            label, candidates, *lexical_match(label, candidates)
+        )
+        # A sub-confident subset hit did not get first refusal, but if it wins
+        # the full contest ON ITS OWN SCORE the section still corroborates it,
+        # so the marking is earned rather than assumed.
+        if best is not None and best in preferred:
+            return best, f"section:{method}", score
+        return best, method, score
     return _prefer_reported(label, candidates, *lexical_match(label, candidates))
 
 

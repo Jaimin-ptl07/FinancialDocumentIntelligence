@@ -231,3 +231,33 @@ def test_a_reply_assigning_different_tags_to_two_identical_labels_is_honoured():
     )
     got = read_map_reply({"1": "LTOLR", "2": "STLL"}, unit)
     assert got == {"li:ltolr": "LTOLR", "li:stll": "STLL"}
+
+
+def test_a_reply_may_only_name_a_candidate_the_prompt_ACTUALLY_SHOWED():
+    """The shortlist is the contract. `unit.candidates` held ~577 concepts on
+    TCS while the prompt renders the top MAX_CANDIDATES (~40) -- validating
+    against the former accepted a tag from the ~537 the model never saw,
+    which is precisely the answer the shortlist exists to make impossible."""
+    from fdi.core.concepts import MAX_CANDIDATES
+    from fdi.core.fog_mapping import shown_candidates
+
+    # One label, so affinity ranking is well defined; far more candidates than
+    # the cap, with the decoy deliberately ranked last by having no overlap.
+    filler = tuple(
+        _c(f"F{i}", f"Facility expenses variant {i}") for i in range(MAX_CANDIDATES + 5)
+    )
+    unit = MapUnit(
+        unit_id="nt:consolidated:13", kind="note", title="Other expenses",
+        labels=("Facility expenses",),
+        candidates=(*filler, _c("ZZUNSEEN", "Zebra husbandry provisions")),
+    )
+
+    shown = {c.tag for c in shown_candidates(unit)}
+    _system, user, dropped = build_map_prompt(unit)
+    assert dropped > 0
+    assert "ZZUNSEEN" not in shown
+    assert "ZZUNSEEN" not in user  # never rendered, so never offered
+    assert read_map_reply({"1": "ZZUNSEEN"}, unit) == {}
+
+    a_shown_tag = next(iter(shown))
+    assert read_map_reply({"1": a_shown_tag}, unit) == {"Facility expenses": a_shown_tag}

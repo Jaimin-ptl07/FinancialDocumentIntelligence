@@ -322,7 +322,9 @@ class FogMappingStage:
     # v5: billed-call count, prompt candidate cap, and basis-scoped memory.
     # v6: units carry each label's `section_path` and the prompt renders it.
     # v7: resolution tables are keyed by row (item id), not by label.
-    version = 7
+    # v8: the section subset must clear _SECTION_CONFIDENT to take first
+    #     refusal, and a reply may only name a candidate the prompt SHOWED.
+    version = 8
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

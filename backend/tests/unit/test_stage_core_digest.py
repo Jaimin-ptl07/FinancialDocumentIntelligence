@@ -43,7 +43,7 @@ from fdi.pipeline.registry import REGISTRY
 # one closure -- all three are built from fdi.core.fog_build. That is correct
 # and load-bearing: a fog_build edit must be considered against all three.
 EXPECTED: dict[str, tuple[int, str]] = {
-    "fog_mapping": (7, "8d46fa8b294bc400"),
+    "fog_mapping": (8, "6cd6179a995c6631"),
     "fog_objects": (6, "3d124423a52f524c"),
     "fog_reason": (4, "1741923af98df827"),
     "note_index": (3, "3d124423a52f524c"),

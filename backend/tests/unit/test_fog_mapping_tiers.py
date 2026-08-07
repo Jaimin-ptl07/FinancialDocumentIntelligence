@@ -500,3 +500,48 @@ def test_a_same_named_concept_from_another_statement_is_not_a_twin():
     unit = MapUnit(unit_id="st", kind="face", title="P&L",
                    labels=("Finance costs",), candidates=cands)
     assert resolve_lexical(unit)["Finance costs"].tag == "TOTFC"
+
+
+def test_a_weak_section_hit_does_not_beat_an_exact_match_in_the_full_set():
+    """First refusal is granted at _SECTION_CONFIDENT (0.9), not at
+    LEXICAL_FLOOR (0.75).
+
+    `lexical_match` scores an exact name 1.0 and caps every token overlap at
+    0.9, so a section-subset hit in [0.75, 0.9) is a partial-word guess. Taking
+    it did two things at once: it beat an EXACT name match sitting in the full
+    set, and it stamped the guess `section:`, which `_tier` ranks as certain --
+    the weakest evidence there is, promoted above the strongest.
+
+    The row names UNSECURED receivables. The current-qualified subset offers
+    only the SECURED variant, sharing four of five tokens -- 0.800, measured,
+    not assumed. The full set holds the exact name at 1.000. Taking the 0.800
+    would report secured receivables as unsecured and call it certain."""
+    cands = (
+        _c("TRRU", "Trade receivables considered good unsecured"),
+        _c("STTRRS", "Trade receivables considered good secured - current"),
+    )
+    unit = MapUnit(
+        unit_id="st", kind="face", title="Balance sheet",
+        labels=("Trade receivables considered good unsecured",),
+        candidates=cands,
+        sections=(("Current assets",),),
+    )
+    resolved = resolve_lexical(unit)
+    assert resolved["Trade receivables considered good unsecured"].tag == "TRRU"
+
+
+def test_a_confident_section_hit_still_takes_first_refusal():
+    """The 0.900 qualified-pair match that motivated the preference is exactly
+    at the bar and must still win -- this is the LL case, unchanged."""
+    cands = (
+        _c("LL", "Lease liabilities"),
+        _c("LTOLR", "Lease liabilities - non-current"),
+        _c("STLL", "Lease liabilities - current"),
+    )
+    unit = MapUnit(
+        unit_id="st", kind="face", title="BS", labels=("Lease liabilities",),
+        candidates=cands, sections=(("Current liabilities",),),
+    )
+    resolution = resolve_lexical(unit)["Lease liabilities"]
+    assert resolution.tag == "STLL"
+    assert resolution.method.startswith("lexical:section")
