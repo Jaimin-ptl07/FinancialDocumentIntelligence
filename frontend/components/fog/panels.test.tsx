@@ -58,8 +58,11 @@ describe("AttentionPanel", () => {
       <AttentionPanel
         contested={[]}
         unmapped={[
-          { reason: "model_call_failed", labels: ["Travel"] },
-          { reason: "model_said_unmapped", labels: ["Facility expenses"] },
+          { reason: "model_call_failed", items: [{ id: "li:a", label: "Travel" }] },
+          {
+            reason: "model_said_unmapped",
+            items: [{ id: "li:b", label: "Facility expenses" }],
+          },
         ]}
       />,
     );

@@ -260,7 +260,8 @@ def test_the_stage_is_registered_with_the_right_deps():
     # v8 raises the section subset's first-refusal bar to _SECTION_CONFIDENT,
     #    and lets a reply name only a candidate the prompt actually showed.
     # v9 drops the GROSS twin of a shared name on a statement face.
-    assert stage.version == 9
+    # v10 emits each unmapped row's line_item.
+    assert stage.version == 10
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():

@@ -193,8 +193,48 @@ describe("readUnmapped", () => {
     const groups = readUnmapped(mapping, "consolidated");
     const failed = groups.find((g) => g.reason === "model_call_failed");
     const refused = groups.find((g) => g.reason === "model_said_unmapped");
-    expect(failed?.labels).toEqual(["Travel"]);
-    expect(refused?.labels).toEqual(["Facility expenses", "Other"]);
+    expect(failed?.items.map((i) => i.label)).toEqual(["Travel"]);
+    expect(refused?.items.map((i) => i.label)).toEqual(["Facility expenses", "Other"]);
+  });
+
+  it("gives two rows that print ONE STRING two distinct keys", () => {
+    // The crash: TCS's balance sheet prints "(iii) Disputed Dues-MSME" under
+    // both trade-payable ageing brackets, and 93 of its 379 unmapped records
+    // share a (label, reason) with another. Keyed on the caption, React saw
+    // duplicate keys and threw.
+    const duplicated = {
+      bases: {
+        consolidated: {
+          unmapped: [
+            { label: "(iii) Disputed Dues-MSME", reason: "model_said_unmapped",
+              line_item: "li:st:r41" },
+            { label: "(iii) Disputed Dues-MSME", reason: "model_said_unmapped",
+              line_item: "li:st:r47" },
+          ],
+        },
+      },
+    };
+    const [group] = readUnmapped(duplicated, "consolidated");
+    expect(group.items).toHaveLength(2);
+    expect(new Set(group.items.map((i) => i.id)).size).toBe(2);
+  });
+
+  it("still yields distinct keys for an artifact predating line_item", () => {
+    // Older artifacts carry only {label, reason}. They must degrade to unique
+    // positional keys, never collapse -- the panel is the fallback view when
+    // a filing is mid-reprocess.
+    const legacy = {
+      bases: {
+        consolidated: {
+          unmapped: [
+            { label: "Same", reason: "model_said_unmapped" },
+            { label: "Same", reason: "model_said_unmapped" },
+          ],
+        },
+      },
+    };
+    const [group] = readUnmapped(legacy, "consolidated");
+    expect(new Set(group.items.map((i) => i.id)).size).toBe(2);
   });
 
   it("never throws", () => {

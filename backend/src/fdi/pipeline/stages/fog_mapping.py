@@ -245,9 +245,17 @@ def build_mapping(
             # before; the row id is only a tiebreaker so two genuinely
             # distinct rows with the same label never collapse into one
             # artifact entry.
+            # `line_item` is EMITTED, not merely used to sort. It was a
+            # tiebreaker that got dropped, which made two genuinely distinct
+            # unresolved rows byte-identical in the artifact -- the exact
+            # collapse the tiebreaker existed to prevent, just moved one step
+            # later. MEASURED on TCS consolidated: 93 of 379 unmapped records
+            # share their (label, reason) with another, and a React list keyed
+            # on the label crashed on the duplicate. It also matches `proof`,
+            # so an unmapped row can be located on the page like any fact.
             "unmapped": [
-                {"label": label, "reason": reason}
-                for label, _row_id, reason in sorted(
+                {"label": label, "reason": reason, "line_item": row_id}
+                for label, row_id, reason in sorted(
                     (label, row_id, reason)
                     for row_id, (label, reason) in unmapped.items()
                 )
@@ -326,7 +334,9 @@ class FogMappingStage:
     #     refusal, and a reply may only name a candidate the prompt SHOWED.
     # v9: a statement FACE drops the GROSS twin of any name a NET twin
     #     shares -- the face reports net carrying amounts.
-    version = 9
+    # v10: an unmapped record carries its `line_item`, so two rows sharing
+    #      a caption stay distinct in the artifact.
+    version = 10
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

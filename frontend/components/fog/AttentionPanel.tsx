@@ -107,12 +107,15 @@ export function AttentionPanel({
                   {reasonProse(u.reason)}
                 </div>
                 <ul style={{ margin: "var(--sp-1) 0 0", padding: 0, listStyle: "none" }}>
-                  {u.labels.map((label) => (
+                  {/* Keyed by the row's own id, never its caption: two rows
+                      can print one string, and 93 of TCS's 379 unmapped
+                      records do. */}
+                  {u.items.map((item) => (
                     <li
-                      key={label}
+                      key={item.id}
                       style={{ fontSize: "var(--text-xs)", color: "var(--ink-soft)" }}
                     >
-                      {label}
+                      {item.label}
                     </li>
                   ))}
                 </ul>

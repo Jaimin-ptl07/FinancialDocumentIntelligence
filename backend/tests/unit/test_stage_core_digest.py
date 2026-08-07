@@ -2,17 +2,19 @@
 moves.
 
 `run.py` composes input_hash from declared deps, `Stage.version` and
-`key_material`. None of those sees `fdi.core` -- yet `fdi.core` is where every
+`key_material`. None of those sees the CODE -- yet the code is where every
 artifact body is actually computed. So editing a pure function to fix a wrong
 number leaves the key identical, and every document already processed keeps
 serving the wrong number forever. The fix is invisible in exactly the corpus
 that motivated it.
 
 This is not hypothetical: two commits on this branch changed `fdi.core`
-artifact bodies with no version bump.
+artifact bodies with no version bump, and a third changed a body from the STAGE
+module -- which the first version of this guard, scoped to `fdi.core` alone,
+would have waved through.
 
-The guard is a recorded digest over the TRANSITIVE `fdi.core` closure of each
-stage. Touch that closure and this test fails, telling you to bump the stage's
+The guard is a recorded digest over each stage's own module plus its transitive
+`fdi.core` closure. Touch either and this test fails, telling you to bump the
 version and record the new digest. It cannot know whether your edit changed the
 output, so it asks rather than guesses -- a cosmetic docstring edit is a
 one-line digest update, and a real change is a version bump. Both are
@@ -39,25 +41,34 @@ from fdi.pipeline.registry import REGISTRY
 # 100% throughout), so these digests pin a MEASURED state, not merely a
 # current one.
 #
-# statement_index, note_index and fog_objects share a digest because they share
-# one closure -- all three are built from fdi.core.fog_build. That is correct
-# and load-bearing: a fog_build edit must be considered against all three.
+# statement_index, note_index and fog_objects have DIFFERENT digests over the
+# SAME fdi.core closure -- all three are built from fdi.core.fog_build, and
+# each contributes its own stage module. An edit to fog_build still moves all
+# three at once, which is the load-bearing part: it must be considered against
+# every stage that reads it, not only the one being worked on.
 EXPECTED: dict[str, tuple[int, str]] = {
-    "fog_mapping": (9, "507114125e7fe1ab"),
-    "fog_objects": (6, "3d124423a52f524c"),
-    "fog_reason": (4, "1741923af98df827"),
-    "note_index": (3, "3d124423a52f524c"),
-    "statement_index": (4, "3d124423a52f524c"),
+    "fog_mapping": (10, "025ee2938eea8758"),
+    "fog_objects": (6, "7688b05187fa269b"),
+    "fog_reason": (4, "540aa4ac8389d1a7"),
+    "note_index": (3, "967d77c1b524bb84"),
+    "statement_index": (4, "48c540eaa51bffd0"),
 }
 
 
 def _core_closure(module_name: str) -> set[str]:
-    """Every `fdi.core` module reachable from `module_name` by import.
+    """The STAGE module plus every `fdi.core` module it reaches by import.
 
     Transitive, because the boundary that matters is the code that runs, not
     the code that is named: `fog_build` imports `statements`, and a wrong row
-    index in `statements` reaches the artifact just as directly."""
-    seen: set[str] = set()
+    index in `statements` reaches the artifact just as directly.
+
+    The stage module ITSELF is included, and that is not incidental. This guard
+    was first written over `fdi.core` alone, on the reasoning that `fdi.core`
+    is where artifact bodies are computed. It is not the only place: the stage
+    assembles the body it returns. `fog_mapping`'s stage dropped each unmapped
+    row's `line_item` when serialising, and adding it back changed the artifact
+    for every document -- a body change this guard would have waved through."""
+    seen: set[str] = {module_name}
     queue = [module_name]
     while queue:
         current = queue.pop()

@@ -130,7 +130,14 @@ export type Contested = {
   losers: { label: string; value: number | null }[];
 };
 
-export type Unmapped = { reason: string; labels: string[] };
+/** Labels nothing resolved, grouped by reason.
+ *
+ *  `items` carries each row's `lineItem` id, not just its caption. TWO ROWS CAN
+ *  PRINT ONE STRING -- the balance sheet's "Lease liabilities" under both
+ *  Non-current and Current, or TCS's "(iii) Disputed Dues-MSME" -- and 93 of
+ *  TCS's 379 unmapped records share their (label, reason) with another. A list
+ *  keyed on the caption collapses those into one React key and throws. */
+export type Unmapped = { reason: string; items: { id: string; label: string }[] };
 
 export type Health = {
   footing: { statement: string; passed: boolean | null; rule: string }[];
@@ -174,18 +181,26 @@ export function readContested(reason: unknown, basis: Basis): Contested[] {
  *  backend recorded a reason these produced byte-identical output, and a dead
  *  endpoint read exactly like a clean refusal. */
 export function readUnmapped(mapping: unknown, basis: Basis): Unmapped[] {
-  const groups = new Map<string, string[]>();
-  for (const raw of arr(region(mapping, basis).unmapped)) {
+  const groups = new Map<string, { id: string; label: string }[]>();
+  for (const [index, raw] of arr(region(mapping, basis).unmapped).entries()) {
     if (!isRecord(raw)) continue;
     const reason = str(raw.reason) || "unknown";
     const label = str(raw.label);
     if (!label) continue;
+    // `line_item` when the artifact carries it; the position otherwise, so an
+    // artifact predating the field still yields distinct keys rather than
+    // crashing the panel. Never the label alone -- that is what collapsed.
+    const id = str(raw.line_item) || `${reason}#${index}`;
+    const item = { id, label };
     const bucket = groups.get(reason);
-    if (bucket) bucket.push(label);
-    else groups.set(reason, [label]);
+    if (bucket) bucket.push(item);
+    else groups.set(reason, [item]);
   }
   return [...groups.entries()]
-    .map(([reason, labels]) => ({ reason, labels: labels.sort() }))
+    .map(([reason, items]) => ({
+      reason,
+      items: [...items].sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id)),
+    }))
     .sort((a, b) => a.reason.localeCompare(b.reason));
 }
 
