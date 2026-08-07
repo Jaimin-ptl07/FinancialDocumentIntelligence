@@ -8,8 +8,10 @@ import { HealthPanel } from "./HealthPanel";
 
 describe("FactsPanel", () => {
   const facts = [
-    { tag: "PBTR", value: 65487, method: "lexical:section:name", page: 167, label: "PROFIT BEFORE TAX" },
-    { tag: "CT", value: 16388, method: "llm", page: 167, label: "Current tax" },
+    { tag: "PBTR", value: 65487, method: "lexical:section:name", page: 167,
+      label: "PROFIT BEFORE TAX", score: 0.9 },
+    { tag: "CT", value: 16388, method: "llm", page: 167,
+      label: "Current tax", score: 0 },
   ];
 
   it("shows the tag, the value and HOW it was resolved", () => {
