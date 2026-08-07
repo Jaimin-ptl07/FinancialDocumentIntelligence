@@ -259,7 +259,8 @@ def test_the_stage_is_registered_with_the_right_deps():
     # v7 keys resolution tables by row (item id), not by label.
     # v8 raises the section subset's first-refusal bar to _SECTION_CONFIDENT,
     #    and lets a reply name only a candidate the prompt actually showed.
-    assert stage.version == 8
+    # v9 drops the GROSS twin of a shared name on a statement face.
+    assert stage.version == 9
 
 
 def test_the_dag_orders_fog_mapping_after_fog_objects():

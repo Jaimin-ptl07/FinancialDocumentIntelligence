@@ -324,7 +324,9 @@ class FogMappingStage:
     # v7: resolution tables are keyed by row (item id), not by label.
     # v8: the section subset must clear _SECTION_CONFIDENT to take first
     #     refusal, and a reply may only name a candidate the prompt SHOWED.
-    version = 8
+    # v9: a statement FACE drops the GROSS twin of any name a NET twin
+    #     shares -- the face reports net carrying amounts.
+    version = 9
     deps: tuple[str, ...] = ("fog_objects",)
 
     async def run(self, ctx: StageContext) -> object:

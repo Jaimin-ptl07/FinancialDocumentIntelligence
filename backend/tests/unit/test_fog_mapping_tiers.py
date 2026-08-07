@@ -545,3 +545,42 @@ def test_a_confident_section_hit_still_takes_first_refusal():
     resolution = resolve_lexical(unit)["Lease liabilities"]
     assert resolution.tag == "STLL"
     assert resolution.method.startswith("lexical:section")
+
+
+def test_the_balance_sheet_face_takes_the_NET_twin_not_the_GROSS_one():
+    """MEASURED on the v4.3 taxonomy: 49 concept names are claimed by 115
+    concepts, and NOT ONE is separable by `_qualifier`, which reads the name.
+    The PPE schedule is declared twice -- GRS* and NET* -- with names that
+    match EXACTLY, so `lexical_match` returned the first exact hit and
+    DECLARATION ORDER decided. GRS* is first, so TCS's balance sheet resolved
+    Goodwill to the GROSS block where the face prints the NET carrying amount.
+
+    A balance sheet states assets net of accumulated depreciation; the gross
+    block lives in the PPE note. So this is accounting, not preference."""
+    cands = (_c("GRSGW", "Goodwill"), _c("NETGW", "Goodwill"))
+    face = MapUnit(
+        unit_id="st:consolidated:balance_sheet", kind="face", title="Balance sheet",
+        labels=("Goodwill",), candidates=cands,
+    )
+    assert resolve_lexical(face)["Goodwill"].tag == "NETGW"
+
+
+def test_a_NOTE_keeps_both_twins_because_its_schedule_has_a_gross_column():
+    """The PPE note is exactly where the gross block is real. Dropping GRS*
+    there would make the gross column unresolvable."""
+    cands = (_c("GRSGW", "Goodwill"), _c("NETGW", "Goodwill"))
+    note = MapUnit(
+        unit_id="nt:consolidated:10", kind="note", title="Property, plant and equipment",
+        labels=("Goodwill",), candidates=cands,
+    )
+    from fdi.core.fog_mapping import drop_gross_twins
+    assert len(drop_gross_twins(cands)) == 1
+    assert len(note.candidates) == 2
+
+
+def test_a_gross_concept_with_no_net_twin_survives_on_the_face():
+    """The filter drops a GROSS twin only when a NET one shares the name. A
+    gross concept that is the only claimant of its name must still resolve."""
+    from fdi.core.fog_mapping import drop_gross_twins
+    cands = (_c("GRSONLY", "Capital work in progress"), _c("NETGW", "Goodwill"))
+    assert len(drop_gross_twins(cands)) == 2

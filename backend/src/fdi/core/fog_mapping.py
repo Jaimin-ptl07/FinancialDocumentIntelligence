@@ -25,7 +25,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from fdi.core.concepts import MAX_CANDIDATES, ConceptCandidate
+from fdi.core.concepts import MAX_CANDIDATES, ConceptCandidate, normalize
 from fdi.core.fog import Edge
 from fdi.core.mapping import lexical_match
 from fdi.core.memory import MemoryKey, MemoryStore, recall
@@ -313,6 +313,54 @@ def _qualifier(text: str) -> str:
     return ""
 
 
+def _measure(tag: str) -> str:
+    """"gross" | "net" | "" -- read from the TAG PREFIX, never from the name.
+
+    The taxonomy carries the gross/net distinction ONLY here: `GRSGW` and
+    `NETGW` are both named "Goodwill", `GRSPNE` and `NETPNE` both "Plant and
+    equipment"."""
+    upper = tag.upper()
+    if upper.startswith("GRS"):
+        return "gross"
+    if upper.startswith("NET"):
+        return "net"
+    return ""
+
+
+def drop_gross_twins(
+    candidates: tuple[ConceptCandidate, ...],
+) -> tuple[ConceptCandidate, ...]:
+    """`candidates` with the GROSS twin dropped wherever a NET twin shares its
+    name -- for STATEMENT FACE rows only.
+
+    MEASURED on the v4.3 taxonomy: 49 concept names are claimed by 115
+    concepts, and NOT ONE of the 49 is separable by `_qualifier`, which reads
+    the name. 21 are separable by the tag prefix, and the biggest family is the
+    PPE schedule -- Land, Buildings, Plant and equipment, Furniture and
+    fixtures, Vehicles, Leasehold improvements, Other tangible assets, Goodwill
+    -- each declared twice under GRS* and NET* with IDENTICAL names.
+
+    `lexical_match` returns the FIRST exact name hit, so DECLARATION ORDER
+    decided which one a face row got, and GRS* is declared first: TCS's balance
+    sheet resolved Goodwill to GRSGW = 9,108, the GROSS block, where the face
+    prints the NET carrying amount.
+
+    Dropping the gross twin on the face is accounting, not preference: a
+    balance sheet states assets NET of accumulated depreciation, and the gross
+    block appears only in the PPE note's own schedule. Notes keep both twins,
+    because that schedule is exactly where the gross column is real."""
+    by_name: dict[str, set[str]] = {}
+    for c in candidates:
+        by_name.setdefault(normalize(c.name), set()).add(_measure(c.tag))
+    return tuple(
+        c
+        for c in candidates
+        if not (
+            _measure(c.tag) == "gross" and "net" in by_name.get(normalize(c.name), set())
+        )
+    )
+
+
 _PARENTHETICAL = re.compile(r"\s*\([^)]*\)\s*$")
 
 
@@ -476,6 +524,11 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
     nothing else here, and a label key would let the second overwrite the
     first exactly as it did before this table was rekeyed."""
     out: dict[str, Resolution] = {}
+    # Computed ONCE, not per row: identical for every row of a unit, and it
+    # walks the whole candidate set.
+    available = (
+        drop_gross_twins(unit.candidates) if unit.kind == "face" else unit.candidates
+    )
     for index, row_id in enumerate(row_ids(unit)):
         label = unit.labels[index]
         kind = unit.kinds[index] if index < len(unit.kinds) else "unknown"
@@ -484,7 +537,7 @@ def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
         section = unit.sections[index] if index < len(unit.sections) else ()
         section_qualifier = _qualifier(" ".join(section))
         candidate, method, score = _match_with_section(
-            label, unit.candidates, section_qualifier
+            label, available, section_qualifier
         )
         if candidate is not None and score >= LEXICAL_FLOOR:
             out[row_id] = Resolution(label, candidate.tag, f"lexical:{method}", score)
