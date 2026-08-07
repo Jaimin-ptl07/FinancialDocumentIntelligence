@@ -15,6 +15,25 @@ import type {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** A failed API call, carrying its HTTP status as DATA rather than only as
+ *  text inside the message.
+ *
+ *  Callers have to branch on it. A 404 from `getArtifact` means "this stage has
+ *  not run for this filing" — a normal state for a filing mid-ingest, and one
+ *  that no amount of retrying can change. Deciding that from a regex over the
+ *  message would make the retry policy depend on the wording of an error
+ *  string, which is exactly the kind of coupling that breaks silently when
+ *  someone improves the wording. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 /** Every failure surfaces the method, path, status, and the backend's own
  *  `detail` string. An error an analyst can act on beats a stack trace. */
 async function request<T>(
@@ -31,7 +50,10 @@ async function request<T>(
     } catch {
       /* body was not JSON; the status text stands */
     }
-    throw new Error(`${method} ${path} failed (${response.status}): ${detail}`);
+    throw new ApiError(
+      `${method} ${path} failed (${response.status}): ${detail}`,
+      response.status,
+    );
   }
   return (await response.json()) as T;
 }
