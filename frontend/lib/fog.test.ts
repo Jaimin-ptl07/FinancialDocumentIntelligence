@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseBasis, readFacts } from "./fog";
+import { chooseBasis, readContested, readFacts, readHealth, readUnmapped } from "./fog";
 
 // Shapes copied from out/fog-run-llm-p6b/TCS/*.json, trimmed.
 const reason = {
@@ -89,5 +89,108 @@ describe("readFacts", () => {
     expect(readFacts(null, null, null, "consolidated")).toEqual([]);
     expect(readFacts({ bases: "no" }, {}, {}, "consolidated")).toEqual([]);
     expect(readFacts(reason, mapping, fog, "absent")).toEqual([]);
+  });
+});
+
+const attention = {
+  bases: {
+    consolidated: {
+      facts: {},
+      contested: [
+        { tag: "SMALL", claimants: 2, spread: 0,
+          winner: "li:1", winner_label: "Agrees", winner_value: 11027,
+          losers: [{ label: "Also agrees", value: 11027 }] },
+        { tag: "BIG", claimants: 3, spread: 11136,
+          winner: "li:2", winner_label: "Right-of-use assets", winner_value: 11027,
+          losers: [{ label: "Payment for acquiring right-of-use assets", value: -109 }] },
+      ],
+      checks: [{ rule_id: "identity_balance_sheet", severity: "warn", passed: false, delta: 10 }],
+      coverage: { totals: { expected: 4, found_extracted: 3 } },
+    },
+  },
+};
+
+describe("readContested", () => {
+  it("puts the widest disagreement first — that is where a human should look", () => {
+    expect(readContested(attention, "consolidated").map((c) => c.tag)).toEqual(["BIG", "SMALL"]);
+  });
+
+  it("carries the losers, because a winner alone cannot be judged", () => {
+    const big = readContested(attention, "consolidated")[0];
+    expect(big.winnerLabel).toBe("Right-of-use assets");
+    expect(big.losers[0].value).toBe(-109);
+  });
+
+  it("never throws", () => {
+    expect(readContested(null, "consolidated")).toEqual([]);
+    expect(readContested({ bases: { consolidated: { contested: "no" } } }, "consolidated")).toEqual([]);
+  });
+});
+
+describe("readUnmapped", () => {
+  const mapping = {
+    bases: {
+      consolidated: {
+        unmapped: [
+          { label: "Facility expenses", reason: "model_said_unmapped" },
+          { label: "Travel", reason: "model_call_failed" },
+          { label: "Other", reason: "model_said_unmapped" },
+        ],
+      },
+    },
+  };
+
+  it("groups by reason so an outage never reads as an honest refusal", () => {
+    const groups = readUnmapped(mapping, "consolidated");
+    const failed = groups.find((g) => g.reason === "model_call_failed");
+    const refused = groups.find((g) => g.reason === "model_said_unmapped");
+    expect(failed?.labels).toEqual(["Travel"]);
+    expect(refused?.labels).toEqual(["Facility expenses", "Other"]);
+  });
+
+  it("never throws", () => {
+    expect(readUnmapped(null, "consolidated")).toEqual([]);
+  });
+});
+
+describe("readHealth", () => {
+  const fog = {
+    bases: {
+      consolidated: {
+        statements: [
+          { statement: "profit_and_loss",
+            footing: { passed: true, checked: true, rule: "income - expenses = pbt" } },
+          { statement: "cash_flow", footing: { passed: null, checked: false, rule: "" } },
+        ],
+        line_items: [], notes: [], edges: [],
+      },
+    },
+  };
+  const mapping = {
+    schema: { usable: true, face_concepts: 577 },
+    bases: { consolidated: { unmapped: [] } },
+    diagnostics: { consolidated: { by_lexical: 375, by_llm: 84, llm_calls: 35 } },
+  };
+
+  it("keeps could-not-check distinct from failed", () => {
+    const footing = readHealth(attention, mapping, fog, "consolidated").footing;
+    expect(footing.find((f) => f.statement === "profit_and_loss")?.passed).toBe(true);
+    expect(footing.find((f) => f.statement === "cash_flow")?.passed).toBeNull();
+  });
+
+  it("surfaces schema usability — an unusable schema maps nothing, silently", () => {
+    expect(readHealth(attention, mapping, fog, "consolidated").schemaUsable).toBe(true);
+    expect(readHealth(attention, { schema: { usable: false } }, fog, "consolidated").schemaUsable)
+      .toBe(false);
+  });
+
+  it("carries the mapping diagnostics for the basis shown", () => {
+    expect(readHealth(attention, mapping, fog, "consolidated").mapping.llm_calls).toBe(35);
+  });
+
+  it("never throws", () => {
+    const empty = readHealth(null, null, null, "consolidated");
+    expect(empty.footing).toEqual([]);
+    expect(empty.schemaUsable).toBeNull();
   });
 });

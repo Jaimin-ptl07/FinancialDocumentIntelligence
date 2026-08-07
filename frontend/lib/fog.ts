@@ -91,3 +91,112 @@ export function readFacts(
   out.sort((a, b) => a.tag.localeCompare(b.tag));
   return out;
 }
+
+export type Contested = {
+  tag: string;
+  /** Highest claim minus lowest. 0 means the sources corroborate; large means
+   *  one of them is wrong. Null when no claimant carried a value. */
+  spread: number | null;
+  winnerLabel: string;
+  winnerValue: number | null;
+  losers: { label: string; value: number | null }[];
+};
+
+export type Unmapped = { reason: string; labels: string[] };
+
+export type Health = {
+  footing: { statement: string; passed: boolean | null; rule: string }[];
+  checks: Record<string, unknown>[];
+  coverage: Record<string, unknown>;
+  mapping: Record<string, unknown>;
+  schemaUsable: boolean | null;
+};
+
+const num = (v: unknown): number | null => (isNumber(v) ? v : null);
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/** Contested tags, WIDEST DISAGREEMENT FIRST.
+ *
+ *  Corroboration and mis-mapping are indistinguishable from a fact map alone:
+ *  a face row and its note agreeing on 11,027 looks exactly like a face row
+ *  losing 11,027 to an unrelated -109. The spread is what separates them, so it
+ *  is what the list is ordered by. */
+export function readContested(reason: unknown, basis: Basis): Contested[] {
+  const out: Contested[] = [];
+  for (const raw of arr(region(reason, basis).contested)) {
+    if (!isRecord(raw) || typeof raw.tag !== "string") continue;
+    out.push({
+      tag: raw.tag,
+      spread: num(raw.spread),
+      winnerLabel: str(raw.winner_label),
+      winnerValue: num(raw.winner_value),
+      losers: arr(raw.losers)
+        .filter(isRecord)
+        .map((l) => ({ label: str(l.label), value: num(l.value) })),
+    });
+  }
+  out.sort((a, b) => (b.spread ?? -1) - (a.spread ?? -1) || a.tag.localeCompare(b.tag));
+  return out;
+}
+
+/** Unmapped labels GROUPED BY REASON.
+ *
+ *  The grouping is the point. "model_call_failed" is a swallowed outage and
+ *  "model_said_unmapped" is the model honestly declining to guess; before the
+ *  backend recorded a reason these produced byte-identical output, and a dead
+ *  endpoint read exactly like a clean refusal. */
+export function readUnmapped(mapping: unknown, basis: Basis): Unmapped[] {
+  const groups = new Map<string, string[]>();
+  for (const raw of arr(region(mapping, basis).unmapped)) {
+    if (!isRecord(raw)) continue;
+    const reason = str(raw.reason) || "unknown";
+    const label = str(raw.label);
+    if (!label) continue;
+    const bucket = groups.get(reason);
+    if (bucket) bucket.push(label);
+    else groups.set(reason, [label]);
+  }
+  return [...groups.entries()]
+    .map(([reason, labels]) => ({ reason, labels: labels.sort() }))
+    .sort((a, b) => a.reason.localeCompare(b.reason));
+}
+
+/** Footing verdicts, validation checks, coverage, mapping diagnostics and
+ *  schema usability for one basis.
+ *
+ *  `passed` stays THREE-VALUED. `checked: false` means a needed line was absent
+ *  or the statement has no rule, which is not a failure and must not render as
+ *  one -- discarding a correct face because it labels one line unusually is
+ *  worse than not checking it. */
+export function readHealth(
+  reason: unknown,
+  mapping: unknown,
+  fog: unknown,
+  basis: Basis,
+): Health {
+  const footing: Health["footing"] = [];
+  for (const raw of arr(region(fog, basis).statements)) {
+    if (!isRecord(raw)) continue;
+    const f = isRecord(raw.footing) ? raw.footing : {};
+    footing.push({
+      statement: str(raw.statement),
+      passed: f.checked === true && typeof f.passed === "boolean" ? f.passed : null,
+      rule: str(f.rule),
+    });
+  }
+  footing.sort((a, b) => a.statement.localeCompare(b.statement));
+
+  const schema = isRecord(mapping) && isRecord(mapping.schema) ? mapping.schema : {};
+  const diagnostics =
+    isRecord(mapping) && isRecord(mapping.diagnostics) ? mapping.diagnostics : {};
+  const forBasis = isRecord(diagnostics[basis]) ? diagnostics[basis] : {};
+  const coverage = region(reason, basis).coverage;
+
+  return {
+    footing,
+    checks: arr(region(reason, basis).checks).filter(isRecord),
+    coverage: isRecord(coverage) ? coverage : {},
+    mapping: forBasis as Record<string, unknown>,
+    schemaUsable: typeof schema.usable === "boolean" ? schema.usable : null,
+  };
+}
