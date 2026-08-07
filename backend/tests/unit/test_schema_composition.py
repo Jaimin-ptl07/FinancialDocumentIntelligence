@@ -176,3 +176,63 @@ def test_the_renamed_buyers_credit_concept_keeps_the_customers_code():
     assert len(found) == 1
     assert found[0]["taxonomy_tag"] == "WCL"
     assert "Buyers Credit" in found[0]["field_name"]
+
+
+# --- PUT /schema must be able to install the schema the FOG consumes ---------
+
+def test_a_v4_3_concept_schema_is_accepted():
+    """MEASURED: PUT /schema -- the only runtime way to install a schema --
+    rejected the merged v4.3 document with hundreds of '"extraction_prompt" must
+    be a non-empty string'. v4.3 DELETED that field deliberately. The seed then
+    stayed at v3.2.0, which carries ZERO tags, and every basis mapped nothing:
+    839 labels unmapped, 0 facts, no failure anywhere."""
+    from fdi.core.schema import validate_extraction_schema
+
+    doc = {
+        "version": "4.3.0-merged",
+        "modules": [{
+            "key": "m", "name": "P&L", "statement": "profit_and_loss",
+            "retrieval_units": [{"unit_id": "PL", "fields": [
+                {"tag": "RFOGRS", "field_name": "Gross revenue", "origin": "derived"},
+                {"tag": "PBTR", "field_name": "Profit before tax", "origin": "extracted"},
+            ]}],
+        }],
+    }
+    assert validate_extraction_schema(doc) == []
+
+
+def test_a_concept_schema_with_no_tags_is_still_refused():
+    """The gate's PURPOSE is unchanged: refuse a schema that parses to nothing
+    usable. For a concept schema that means no tagged concept."""
+    from fdi.core.schema import validate_extraction_schema
+
+    doc = {"version": "4.3.0", "modules": [{"key": "m", "name": "n",
+           "retrieval_units": [{"unit_id": "U", "fields": [{"field_name": "x"}]}]}]}
+    errors = validate_extraction_schema(doc)
+    assert errors and any("extraction_prompt" in e for e in errors)
+
+
+def test_a_duplicate_tag_is_refused():
+    """Whichever loads second is unreachable -- the taxonomy already shipped one
+    (WCL used at two different sr_no)."""
+    from fdi.core.schema import validate_extraction_schema
+
+    doc = {
+        "version": "4.3.0",
+        "modules": [{"key": "m", "name": "n", "retrieval_units": [{"unit_id": "U", "fields": [
+            {"tag": "WCL", "field_name": "Working capital loans"},
+            {"tag": "WCL", "field_name": "Buyers credit"},
+        ]}]}],
+    }
+    assert any("duplicate tag" in e for e in validate_extraction_schema(doc))
+
+
+def test_the_v3_2_seed_shape_is_still_validated_the_old_way():
+    """A document with NO tags is the superseded shape and must still be gated
+    on extraction_prompt/retrieval_query, or the old path silently no-ops."""
+    from fdi.core.schema import validate_extraction_schema
+
+    doc = {"version": "3.2.0", "modules": [{"key": "m", "name": "n",
+           "retrieval_units": [{"unit_id": "U", "retrieval_query": "q", "fields": [
+               {"field_name": "x", "data_type": "number"}]}]}]}
+    assert any("extraction_prompt" in e for e in validate_extraction_schema(doc))

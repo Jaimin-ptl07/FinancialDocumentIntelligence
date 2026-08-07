@@ -164,11 +164,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "RFOGRS",
           "weight": 1
          },
          {
-          "tag": "TOTTAX",
           "weight": -1
          }
         ]
@@ -221,11 +219,9 @@
           "method": "sum",
           "inputs": [
            {
-            "tag": "RFCC",
             "weight": 1
            },
            {
-            "tag": "TOTTAX",
             "weight": -1
            }
           ]
@@ -1632,11 +1628,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTRNOTINR",
           "weight": 1
          },
          {
-          "tag": "TOTEXPR",
           "weight": -1
          }
         ]
@@ -1696,7 +1690,6 @@
          },
          "fields": [
           {
-           "tag": "AUTOPL010",
            "field_name": "Exceptional items - Income - Cash",
            "sr_no": "8.2.3",
            "origin": "derived",
@@ -1771,7 +1764,6 @@
            ]
           },
           {
-           "tag": "AUTOPL011",
            "field_name": "Exceptional items - Income - Non Cash",
            "sr_no": "8.2.4",
            "origin": "derived",
@@ -1823,7 +1815,6 @@
            ]
           },
           {
-           "tag": "AUTOPL012",
            "field_name": "Exceptional items - Expense - Cash",
            "sr_no": "8.2.2",
            "origin": "derived",
@@ -1910,7 +1901,6 @@
            ]
           },
           {
-           "tag": "AUTOPL013",
            "field_name": "Exceptional items - Expense - Non Cash",
            "sr_no": "8.2.1",
            "origin": "derived",
@@ -2020,7 +2010,6 @@
          },
          "fields": [
           {
-           "tag": "AUTOPL014",
            "field_name": "Extraordinary items - Income - Cash",
            "origin": "derived",
            "synthetic_tag": true,
@@ -2091,7 +2080,6 @@
            ]
           },
           {
-           "tag": "AUTOPL015",
            "field_name": "Extraordinary items - Income - Non Cash",
            "origin": "derived",
            "synthetic_tag": true,
@@ -2138,7 +2126,6 @@
            ]
           },
           {
-           "tag": "AUTOPL016",
            "field_name": "Extraordinary items - Expense - Cash",
            "origin": "derived",
            "synthetic_tag": true,
@@ -2217,7 +2204,6 @@
            ]
           },
           {
-           "tag": "AUTOPL017",
            "field_name": "Extraordinary items - Expense - Non Cash",
            "origin": "derived",
            "synthetic_tag": true,
@@ -2304,11 +2290,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "PB3NTAX",
           "weight": 1
          },
          {
-          "tag": "TOT3",
           "weight": 1
          }
         ]
@@ -2414,11 +2398,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "PBTR",
           "weight": 1
          },
          {
-          "tag": "TOTTAXEXP",
           "weight": -1
          }
         ]
@@ -2529,15 +2511,12 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "PATR",
           "weight": 1
          },
          {
-          "tag": "OTCI",
           "weight": 1
          },
          {
-          "tag": "TOTPNLDOP",
           "weight": 1
          }
         ]
@@ -2576,15 +2555,12 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "PBMI",
           "weight": 1
          },
          {
-          "tag": "TOTMI",
           "weight": -1
          },
          {
-          "tag": "DIFP",
           "weight": 1
          }
         ]
@@ -2829,11 +2805,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "GRSTOTTA",
           "weight": 1
          },
          {
-          "tag": "NETTOTTA",
           "weight": -1
          }
         ]
@@ -3042,11 +3016,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "GRSTOTIA",
           "weight": 1
          },
          {
-          "tag": "NETTOTIA",
           "weight": -1
          }
         ]
@@ -3080,14 +3052,12 @@
        },
        "fields": [
         {
-         "tag": "GRSRGHTUA",
          "field_name": "Right of use assets (Gross)",
          "sr_no": "1.8",
          "origin": "extracted",
          "data_type": "decimal"
         },
         {
-         "tag": "DEPRGHTUAR",
          "field_name": "Right of use assets (Depreciation)",
          "sr_no": "1.9",
          "origin": "extracted",
@@ -3152,14 +3122,12 @@
        },
        "fields": [
         {
-         "tag": "GRSINVPRP",
          "field_name": "Investment Property - Gross",
          "sr_no": "1.15",
          "origin": "extracted",
          "data_type": "decimal"
         },
         {
-         "tag": "DEPINVPRPR",
          "field_name": "Investment Property - Depreciation",
          "sr_no": "1.16",
          "origin": "extracted",
@@ -3290,47 +3258,36 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "NETTOTTA",
           "weight": 1
          },
          {
-          "tag": "NETTOTIA",
           "weight": 1
          },
          {
-          "tag": "RGHTUA",
           "weight": 1
          },
          {
-          "tag": "CWIP",
           "weight": 1
          },
          {
-          "tag": "INTAUD",
           "weight": 1
          },
          {
-          "tag": "NETINVPRP",
           "weight": 1
          },
          {
-          "tag": "TOTNCINV",
           "weight": 1
          },
          {
-          "tag": "NETDTA",
           "weight": 1
          },
          {
-          "tag": "NCTR",
           "weight": 1
          },
          {
-          "tag": "NCINVT",
           "weight": 1
          },
          {
-          "tag": "NCABA",
           "weight": 1
          }
         ]
@@ -3500,11 +3457,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTNCAO",
           "weight": 1
          },
          {
-          "tag": "FINA",
           "weight": 1
          }
         ]
@@ -3933,19 +3888,15 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTINVT",
           "weight": 1
          },
          {
-          "tag": "CINV",
           "weight": 1
          },
          {
-          "tag": "NETCTR",
           "weight": 1
          },
          {
-          "tag": "CNBK",
           "weight": 1
          }
         ]
@@ -4091,11 +4042,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTCAO",
           "weight": 1
          },
          {
-          "tag": "TOTOCA",
           "weight": 1
          }
         ]
@@ -4126,15 +4075,12 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTNCA",
           "weight": 1
          },
          {
-          "tag": "TOTA",
           "weight": 1
          },
          {
-          "tag": "ASALE",
           "weight": 1
          }
         ]
@@ -4153,7 +4099,6 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTNCA",
           "weight": 1
          }
         ]
@@ -4173,7 +4118,6 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTA",
           "weight": 1
          }
         ]
@@ -4188,11 +4132,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "FINA",
           "weight": 1
          },
          {
-          "tag": "CFINAOT",
           "weight": 1
          }
         ]
@@ -4701,55 +4643,42 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TL",
           "weight": 1
          },
          {
-          "tag": "WCL",
           "weight": 1
          },
          {
-          "tag": "WCL2",
           "weight": 1
          },
          {
-          "tag": "STBP",
           "weight": 1
          },
          {
-          "tag": "LROD",
           "weight": 1
          },
          {
-          "tag": "ICBOR",
           "weight": 1
          },
          {
-          "tag": "BORFIA",
           "weight": 1
          },
          {
-          "tag": "BCP",
           "weight": 1
          },
          {
-          "tag": "DPL",
           "weight": 1
          },
          {
-          "tag": "BSD",
           "weight": 1
          },
          {
-          "tag": "BLNARPT",
           "weight": 1
          },
          {
-          "tag": "BND",
           "weight": 1
          },
          {
-          "tag": "BOTLNA",
           "weight": 1
          }
         ]
@@ -5342,35 +5271,27 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTBOR",
           "weight": 1
          },
          {
-          "tag": "NETDTL",
           "weight": 1
          },
          {
-          "tag": "LL",
           "weight": 1
          },
          {
-          "tag": "TRP",
           "weight": 1
          },
          {
-          "tag": "TOTOL",
           "weight": 1
          },
          {
-          "tag": "TOTPRV",
           "weight": 1
          },
          {
-          "tag": "TAXL",
           "weight": 1
          },
          {
-          "tag": "LAHS",
           "weight": 1
          }
         ]
@@ -5744,35 +5665,27 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "GR",
           "weight": 1
          },
          {
-          "tag": "CR",
           "weight": 1
          },
          {
-          "tag": "CRR",
           "weight": 1
          },
          {
-          "tag": "FCTR",
           "weight": 1
          },
          {
-          "tag": "CFHR",
           "weight": 1
          },
          {
-          "tag": "MINT",
           "weight": 1
          },
          {
-          "tag": "EQQ",
           "weight": 1
          },
          {
-          "tag": "RR",
           "weight": 1
          }
         ]
@@ -5931,11 +5844,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "AUTOEQ001",
           "weight": 1
          },
          {
-          "tag": "TOTAPP",
           "weight": -1
          }
         ]
@@ -5957,19 +5868,15 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTEQ",
           "weight": 1
          },
          {
-          "tag": "TOTOTEQ",
           "weight": 1
          },
          {
-          "tag": "RESV",
           "weight": 1
          },
          {
-          "tag": "TOTRE/SOPL",
           "weight": 1
          }
         ]
@@ -5988,7 +5895,6 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "TOTRE/SOPL",
           "weight": 1
          }
         ]
@@ -6026,7 +5932,6 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "PBTR",
           "weight": 1
          }
         ]
@@ -6175,11 +6080,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "CFPBT",
           "weight": 1
          },
          {
-          "tag": "CFADJ",
           "weight": 1
          }
         ]
@@ -6279,11 +6182,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "CFOPWC",
           "weight": 1
          },
          {
-          "tag": "CFWC",
           "weight": 1
          }
         ]
@@ -6320,11 +6221,9 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "CFGEN",
           "weight": 1
          },
          {
-          "tag": "CFTAX",
           "weight": -1
          }
         ]
@@ -6558,15 +6457,12 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "CFO",
           "weight": 1
          },
          {
-          "tag": "CFI",
           "weight": 1
          },
          {
-          "tag": "CFF",
           "weight": 1
          }
         ]
@@ -6609,15 +6505,12 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "CFNET",
           "weight": 1
          },
          {
-          "tag": "CFOPEN",
           "weight": 1
          },
          {
-          "tag": "CFFXCASH",
           "weight": 1
          }
         ]
@@ -6636,7 +6529,6 @@
         "method": "sum",
         "inputs": [
          {
-          "tag": "CFCLOSE",
           "weight": 1
          }
         ]

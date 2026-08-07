@@ -39,7 +39,14 @@ def test_v41_schema_present_and_valid():
         return  # generated artifact; skip if not built
     schema = json.loads(_V41.read_text("utf-8"))
     assert schema["version"].startswith("4.1")
-    assert validate_extraction_schema(schema) == []
+    # v4.1 carries ONE known, real defect the validator can now see: `WCL` is
+    # used twice in liabilities -- working-capital loans at sr 1.2 and Buyers
+    # Credit at sr 1.3 -- so whichever loads second is unreachable. That is a
+    # taxonomy decision, not a schema edit, and it is recorded in the
+    # note-driven design. Asserting "no errors" here only held while the gate
+    # was blind to tags; asserting the EXACT known defect keeps the test honest
+    # and fails loudly if a SECOND one ever appears.
+    assert validate_extraction_schema(schema) == ["duplicate tag 'WCL'"]
     assert len(schema["modules"]) == 4
     specs = parse_field_specs(schema)
     assert len(specs) >= 380  # ~400 extracted fields

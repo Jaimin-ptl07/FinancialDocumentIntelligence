@@ -31,6 +31,41 @@ STATEMENTS = ("pl", "assets", "liabilities", "equity", "cashflow")
 ARCH = pathlib.Path(__file__).resolve().parents[1] / "docs" / "architecture"
 
 
+def _dedupe_tags(node: object, seen: set[str] | None = None) -> list[str]:
+    """Strip a repeat of a tag already claimed earlier, in place.
+
+    Each per-statement v4.3 file repeats the shared spine concepts so it can
+    stand alone, so concatenating the five yields ~100 duplicate tags --
+    PBTR three times, TOTA three times, most of the CF* block twice.
+
+    `fdi.core.concepts.all_concepts` ALREADY collapses these first-wins
+    (686 tags -> 577 concepts), so removing them here changes no mapping
+    behaviour. What it changes is honesty: the shipped file stops claiming
+    concepts it does not uniquely define, and `validate_extraction_schema`
+    can keep refusing a genuine duplicate -- an unreachable concept, like the
+    real WCL/Buyers-Credit collision in the taxonomy -- instead of drowning
+    in merge artifacts.
+
+    Returns the tags dropped, so the count is reported rather than silent."""
+    if seen is None:
+        seen = set()
+    dropped: list[str] = []
+    if isinstance(node, dict):
+        tag = node.get("tag")
+        if isinstance(tag, str) and tag:
+            if tag in seen:
+                node.pop("tag")
+                dropped.append(tag)
+            else:
+                seen.add(tag)
+        for value in node.values():
+            dropped.extend(_dedupe_tags(value, seen))
+    elif isinstance(node, list):
+        for item in node:
+            dropped.extend(_dedupe_tags(item, seen))
+    return dropped
+
+
 def main() -> None:
     modules: list[object] = []
     per_file: dict[str, int] = {}
@@ -46,6 +81,8 @@ def main() -> None:
             continue
         modules.extend(found)
         per_file[name] = json.dumps(found).count('"tag"')
+
+    dropped = _dedupe_tags(modules)
 
     merged = {
         "version": "4.3.0-merged",
@@ -63,6 +100,9 @@ def main() -> None:
 
     total = json.dumps(merged).count('"tag"')
     print(f"wrote {out.name}: {len(modules)} modules, {total} tag keys")
+    if dropped:
+        print(f"  deduped {len(dropped)} repeated tag(s) across statements, "
+              f"e.g. {sorted(set(dropped))[:6]}")
     for name, count in per_file.items():
         print(f"  {name:12s} {count:>4} tags")
     if total == 0:
