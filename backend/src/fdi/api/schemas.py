@@ -640,3 +640,25 @@ class AnalyticsView(BaseModel):
     documents_failed: int
     chunk_count: int
     total_cost_inr: float
+
+
+class LoginRequest(BaseModel):
+    """POST /auth/login. The email is canonicalised (lowercase) server-side,
+    so the caller's casing is never the reason a login fails."""
+
+    # str, not EmailStr: EmailStr would add the email-validator dependency
+    # to validate format at an endpoint no stranger ever reaches -- accounts
+    # are created by the admin CLI, which is where format belongs. The route
+    # canonicalises casing; the account's existence is the real check.
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1)
+
+
+class TokenView(BaseModel):
+    """The answer to login and refresh: one short-lived access token. The
+    refresh half of the session never appears in a body -- it lives only in
+    the httpOnly cookie, which is the point of httpOnly."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int

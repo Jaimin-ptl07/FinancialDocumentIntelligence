@@ -226,12 +226,24 @@ class Settings(BaseSettings):
     llm_output_cost_per_mtok_usd: float = 10.0
     usd_to_inr_rate: float = 95.0
 
+    # Authentication (ADR-0002: app-level JWT gate, Gated demo). The access
+    # token is a signed JWT (~15 min); the refresh token is an opaque server-
+    # side-remembered secret in an httpOnly cookie (~30 days, rotated on each
+    # use). auth_secret signs the access token and MUST be injected at runtime
+    # -- REQUIRED with no default because a default would be a signing secret
+    # baked into the image, the exact thing ADR-0002 forbids. Lifetimes are
+    # policy, so they are settings: a demo can shorten them without a rebuild.
+    auth_secret: str
+    auth_access_ttl_seconds: int = 900
+    auth_refresh_ttl_seconds: int = 2_592_000
+
     # Sentry error monitoring (productionization T8, Gated demo). None/empty =
     # monitoring OFF, cleanly: fdi.platform.obs.sentry returns before the SDK
     # initialises, so boot and behaviour are unchanged. The DSN identifies a
     # project's ingest endpoint and is set per deployment, not per image --
     # like every FDI_ var it is injected at runtime and never baked in.
     sentry_dsn: str | None = None
+
     @classmethod
     def settings_customise_sources(
         cls,

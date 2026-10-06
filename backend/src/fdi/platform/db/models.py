@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -175,6 +176,55 @@ class LlmUsageEvent(Base):
     input_tokens: Mapped[int] = mapped_column(nullable=False)
     output_tokens: Mapped[int] = mapped_column(nullable=False)
     duration_ms: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AppUser(Base):
+    """An Invitee's account (ADR-0002). `app_user`, not `user`: USER is a
+    reserved word in PostgreSQL, and quoting it forever to keep a prettier
+    name buys nothing. There is no self-signup and no role column yet --
+    accounts exist only because an admin CLI created them, and roles are the
+    product path ADR-0002 deliberately defers.
+
+    `password_hash` is an argon2id string (fdi.platform.security); it is
+    never the password, and no view ever serialises this row."""
+
+    __tablename__ = "app_user"
+    __table_args__ = (UniqueConstraint("email", name="uq_app_user_email"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # RFC 5321's forward-mailbox ceiling (64 local + @ + 255 domain), not
+    # the folklore 254, so no legal address is rejected by the column.
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(nullable=False, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class RefreshToken(Base):
+    """One live refresh-token session row (ADR-0002).
+
+    The cookie carries the raw token; this row stores only its SHA-256.
+    Rotation is `revoked_at IS NULL -> revoked_at = now()` plus a fresh row,
+    so replaying a rotated-or-logged-out token finds `revoked_at` set and
+    fails. Rows are per-LOGIN, not per-user: the same Invitee may hold
+    several concurrent sessions (laptop + phone), each dying independently."""
+
+    __tablename__ = "refresh_token"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_user.id"), index=True, nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

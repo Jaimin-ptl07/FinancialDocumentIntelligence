@@ -1,18 +1,21 @@
 """FastAPI application factory."""
 
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+import structlog
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 from pydantic import ValidationError
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
 
+from fdi.api.auth import auth_router, require_access_token
 from fdi.api.errors import install_error_handlers
 from fdi.api.middleware import CorrelationIdMiddleware
-from fdi.api.routes import router
+from fdi.api.routes import public_router, router
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.platform.agent import AzureOpenAIAgentClient
@@ -25,6 +28,8 @@ from fdi.platform.obs.logging import configure_logging
 from fdi.platform.obs.sentry import init_sentry
 from fdi.platform.storage.artifact_store import ArtifactStore
 from fdi.platform.vectorstore import MilvusVectorStore
+
+log = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -82,7 +87,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # environment (bucket never created), any OTHER route hit first raised
     # minio.error.S3Error: NoSuchBucket instead of the app just working.
     # Doing it here means the bucket exists before the app can serve traffic.
-    await app.state.artifact_store.ensure_bucket()
+    #
+    # But an UNREACHABLE object store must not keep the app from BOOTING: the
+    # process can come up degraded and let /ready say so -- the same
+    # restart-loop reasoning as /health-vs-/ready (a backend outage is not a
+    # reason to kill or refuse to start the API). Warning, not exception, and
+    # the same suppress-if-logging-itself-breaks idiom as /ready's _probe.
+    # When the store IS reachable this changes nothing: the bucket is ensured
+    # exactly as before.
+    try:
+        await app.state.artifact_store.ensure_bucket()
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            log.warning(
+                "startup.bucket_ensure_failed",
+                bucket=settings.s3_bucket,
+                error=repr(exc),
+            )
     app.state.embedder = BgeEmbeddingClient.from_settings(settings)
     app.state.vector_store = MilvusVectorStore.from_settings(settings)
     app.state.graph_store = Neo4jGraphStore.from_settings(settings)
@@ -225,7 +246,14 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(router)
+    # Public by design (ADR-0002): the three /auth session routes, plus /health
+    # and /ready for infrastructure probes. Everything else -- the `router`
+    # include below -- requires a valid access token; the dependency rides the
+    # include, not each route, so a route added to `router` later is gated by
+    # default and has to opt OUT (public_router) to be reachable anonymously.
+    app.include_router(auth_router)
+    app.include_router(public_router)
+    app.include_router(router, dependencies=[Depends(require_access_token)])
     return app
 
 

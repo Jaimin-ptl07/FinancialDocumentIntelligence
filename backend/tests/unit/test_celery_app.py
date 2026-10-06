@@ -18,6 +18,7 @@ REQUIRED_ENV = {
     "FDI_S3_ENDPOINT": "h:9000",
     "FDI_S3_ACCESS_KEY": "ak",
     "FDI_S3_SECRET_KEY": "sk",
+    "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
 }
 
 

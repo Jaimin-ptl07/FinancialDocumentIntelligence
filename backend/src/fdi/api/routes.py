@@ -125,10 +125,19 @@ from fdi.platform.db.repository import (
 )
 
 log = structlog.get_logger(__name__)
+
+# TWO routers, one gate. Everything on `router` is protected: app.py includes
+# it with the access-token dependency, so "every route except /health, /ready
+# and /auth/* needs a token" (ADR-0002) is enforced at the include site, not
+# by each route remembering. /health and /ready live on `public_router`
+# because infrastructure probes must never depend on credentials -- an
+# unauthenticated kubelet restarting the API is worse than any hole the probe
+# could leak.
 router = APIRouter()
+public_router = APIRouter()
 
 
-@router.get("/health")
+@public_router.get("/health")
 async def health() -> dict[str, str]:
     """Liveness only. Must never touch a backend, or a DB blip restarts the API.
 
@@ -165,7 +174,7 @@ async def _probe(name: str, check: Callable[[], Awaitable[object]]) -> bool:
         return False
 
 
-@router.get("/ready", response_model=ReadyView)
+@public_router.get("/ready", response_model=ReadyView)
 async def ready(session: SessionDep, store: StoreDep, response: Response) -> ReadyView:
     """Readiness: can this instance actually serve traffic?
 

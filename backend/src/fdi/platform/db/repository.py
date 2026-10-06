@@ -13,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
 from fdi.platform.db.models import (
+    AppUser,
     Document,
     EvalCaseResult,
     EvalRun,
     LlmUsageEvent,
     OcrUsageEvent,
+    RefreshToken,
     StageRun,
 )
 
@@ -970,3 +972,74 @@ class DocumentRepository:
         if version is not None:
             stmt = stmt.where(Document.version == version)
         return list((await self._s.execute(stmt)).scalars().all())
+
+
+class UserRepository:
+    """app_user + refresh_token persistence (ADR-0002). The caller owns the
+    transaction -- commit is theirs, not ours.
+
+    Emails are normalised (strip + lowercase) HERE, at the only write and read
+    edges, so an Invitee created as ``Mentor@Example.ORG`` logs in as
+    ``mentor@example.org`` and the unique constraint is on the canonical form.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    @staticmethod
+    def _canonical(email: str) -> str:
+        return email.strip().lower()
+
+    async def create(self, *, email: str, password_hash: str, active: bool = True) -> AppUser:
+        user = AppUser(
+            id=str(uuid.uuid4()),
+            email=self._canonical(email),
+            password_hash=password_hash,
+            active=active,
+        )
+        self._s.add(user)
+        await self._s.flush()
+        return user
+
+    async def get_by_email(self, email: str) -> AppUser | None:
+        stmt = select(AppUser).where(AppUser.email == self._canonical(email))
+        return (await self._s.execute(stmt)).scalar_one_or_none()
+
+    async def get(self, user_id: str) -> AppUser | None:
+        return await self._s.get(AppUser, user_id)
+
+    async def set_active(self, user_id: str, *, active: bool) -> AppUser | None:
+        user = await self._s.get(AppUser, user_id)
+        if user is None:
+            return None
+        user.active = active
+        await self._s.flush()
+        return user
+
+    async def list(self) -> list[AppUser]:
+        stmt = select(AppUser).order_by(AppUser.created_at)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def store_refresh_token(
+        self, *, user_id: str, token_hash: str, expires_at: datetime
+    ) -> None:
+        self._s.add(
+            RefreshToken(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+            )
+        )
+        await self._s.flush()
+
+    async def find_refresh_token(self, token_hash: str) -> RefreshToken | None:
+        return (
+            await self._s.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+        ).scalar_one_or_none()
+
+    async def revoke_refresh_token(self, token_id: str) -> None:
+        token = await self._s.get(RefreshToken, token_id)
+        assert token is not None
+        token.revoked_at = func.now()
+        await self._s.flush()

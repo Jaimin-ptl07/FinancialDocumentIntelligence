@@ -17,6 +17,7 @@ wrong server. Mark deselection happens before fixture setup, so a fixture probes
 only when an e2e test is genuinely about to run; `-m "not e2e"` opens no socket.
 """
 
+import os
 import time
 
 import httpx
@@ -47,6 +48,34 @@ def stack() -> str:
     return API
 
 
+@pytest.fixture(scope="session")
+def auth(stack: str) -> dict[str, str]:
+    """Bearer headers for one logged-in Invitee, or skip.
+
+    T3 turned the API into a gated surface: /ping-job and /jobs/{id} need an
+    access token, so the e2e suite logs in like any real client. Credentials
+    come from the environment (seed one with
+    `docker compose exec api fdi-admin create-user --email ...` and export
+    FDI_E2E_EMAIL/FDI_E2E_PASSWORD) -- never from a committed file, which
+    would be an account baked into the repo.
+
+    Session-scoped on purpose: one login, one token, every test. The access
+    TTL (default 15 min) comfortably covers this suite's ~60 s of polling.
+    """
+    email = os.environ.get("FDI_E2E_EMAIL", "")
+    password = os.environ.get("FDI_E2E_PASSWORD", "")
+    if not (email and password):
+        pytest.skip(
+            "no e2e credentials: seed an Invitee (fdi-admin create-user) and "
+            "export FDI_E2E_EMAIL / FDI_E2E_PASSWORD"
+        )
+    r = httpx.post(
+        f"{stack}/auth/login", json={"email": email, "password": password}, timeout=5.0
+    )
+    r.raise_for_status()
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
 def test_ready_reports_all_backends(stack: str) -> None:
     """/ready sees every backend it needs to actually serve /ping-job."""
     body = httpx.get(f"{stack}/ready", timeout=5.0).json()
@@ -54,16 +83,16 @@ def test_ready_reports_all_backends(stack: str) -> None:
     assert body["s3"] is True
 
 
-def test_full_round_trip(stack: str) -> None:
+def test_full_round_trip(stack: str, auth: dict[str, str]) -> None:
     """POST a job, poll until terminal, then fetch and verify its artifact."""
-    accepted = httpx.post(f"{stack}/ping-job", timeout=5.0)
+    accepted = httpx.post(f"{stack}/ping-job", headers=auth, timeout=5.0)
     assert accepted.status_code == 202
     job_id = accepted.json()["job_id"]
 
     deadline = time.monotonic() + 60.0
     view: dict[str, object] | None = None
     while time.monotonic() < deadline:
-        view = httpx.get(f"{stack}/jobs/{job_id}", timeout=5.0).json()
+        view = httpx.get(f"{stack}/jobs/{job_id}", headers=auth, timeout=5.0).json()
         if view["status"] in {"done", "failed"}:
             break
         time.sleep(1.0)
@@ -82,9 +111,11 @@ def test_full_round_trip(stack: str) -> None:
     assert artifact.json() == {"kind": "ping", "schema_version": 1}
 
 
-def test_correlation_id_is_echoed(stack: str) -> None:
+def test_correlation_id_is_echoed(stack: str, auth: dict[str, str]) -> None:
     """A caller-supplied X-Request-ID comes back as the job's correlation_id."""
     accepted = httpx.post(
-        f"{stack}/ping-job", headers={"X-Request-ID": "e2e-fixed-id"}, timeout=5.0
+        f"{stack}/ping-job",
+        headers={**auth, "X-Request-ID": "e2e-fixed-id"},
+        timeout=5.0,
     )
     assert accepted.json()["correlation_id"] == "e2e-fixed-id"

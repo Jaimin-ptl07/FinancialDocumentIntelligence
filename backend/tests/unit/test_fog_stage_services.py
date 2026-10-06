@@ -4,7 +4,6 @@ architecture exists to eliminate."""
 
 import pytest
 
-import fdi.workers.tasks as tasks_mod
 from fdi.pipeline.stages.fog_mapping import build_mapping
 from fdi.platform.config import get_settings
 
@@ -82,11 +81,21 @@ async def test_services_carry_schema_and_extractor_when_available(
         "FDI_S3_ENDPOINT": "localhost:9000",
         "FDI_S3_ACCESS_KEY": "minioadmin",
         "FDI_S3_SECRET_KEY": "minioadmin",
+        "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
         "FDI_GPT_ENDPOINT": "https://example.invalid",
         "FDI_GPT_KEY": "key",
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
+
+    # Imported HERE, after the env above exists, not at module level. The
+    # module-level import this replaces only ever worked by accident: it
+    # builds Settings inside fdi.workers.app's module body, and the one thing
+    # that satisfied Settings at COLLECTION time was pymilvus's import-time
+    # load_dotenv() picking up the developer's repo-root .env -- absent on CI,
+    # and insufficient the moment auth_secret became required. Same pattern
+    # tests/integration/conftest.py's stub_fdi_env documents.
+    import fdi.workers.tasks as tasks_mod
 
     monkeypatch.setattr(tasks_mod, "make_engine", lambda url: _FakeEngine())
     monkeypatch.setattr(tasks_mod, "make_session_factory", lambda engine: object())

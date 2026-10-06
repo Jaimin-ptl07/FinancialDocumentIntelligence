@@ -14,12 +14,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from fdi.platform.config import get_settings
+from tests.integration.conftest import authenticate
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
+async def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch, invitee):
     @asynccontextmanager
     async def _make():
         env = {
@@ -29,6 +30,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
             "FDI_S3_ENDPOINT": minio_endpoint,
             "FDI_S3_ACCESS_KEY": "minioadmin",
             "FDI_S3_SECRET_KEY": "minioadmin",
+            "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
         }
         for key, value in env.items():
             monkeypatch.setenv(key, value)
@@ -40,6 +42,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
         async with app.router.lifespan_context(app):
             transport = ASGITransport(app=app, raise_app_exceptions=True)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
+                await authenticate(client, invitee)
                 yield client
 
     return _make

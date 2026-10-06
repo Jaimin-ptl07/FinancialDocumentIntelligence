@@ -104,3 +104,21 @@ async def test_chunk_table_is_gone(migrated_engine: AsyncEngine) -> None:
     async with migrated_engine.connect() as conn:
         result = await conn.execute(sqlalchemy.text("SELECT to_regclass('chunk')"))
         assert result.scalar_one() is None
+
+
+async def test_identity_tables_exist(migrated_engine: AsyncEngine) -> None:
+    """Migration 0010 (T3, ADR-0002) adds the gate's two tables: app_user
+    (Invitee accounts) and refresh_token (the server-side half of the
+    rotating cookie). The unique email bites -- a second row for the same
+    address would be a duplicate Invitee, not a second identity."""
+    async with migrated_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text(
+            "INSERT INTO app_user (id, email, password_hash) "
+            "VALUES ('u-t3-1', 'first@example.test', '$argon2id$stub')"
+        ))
+    with pytest.raises(sqlalchemy.exc.IntegrityError, match="uq_app_user_email"):
+        async with migrated_engine.begin() as conn:
+            await conn.execute(sqlalchemy.text(
+                "INSERT INTO app_user (id, email, password_hash) "
+                "VALUES ('u-t3-2', 'first@example.test', '$argon2id$stub')"
+            ))
