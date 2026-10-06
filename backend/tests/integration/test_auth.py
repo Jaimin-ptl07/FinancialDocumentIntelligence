@@ -19,15 +19,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 pytestmark = pytest.mark.integration
 
 PASSWORD = "correct-horse-battery-staple"
-
-# 32+ bytes: pyjwt warns on short HS256 keys (RFC 7518 s3.2), and the warning
-# is correct -- production secrets are generated at least this long, so the
-# test environment should not normalize anything shorter.
-SIGNING_SECRET = "test-signing-secret-0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture
@@ -43,7 +39,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
             "FDI_S3_ENDPOINT": minio_endpoint,
             "FDI_S3_ACCESS_KEY": "minioadmin",
             "FDI_S3_SECRET_KEY": "minioadmin",
-            "FDI_AUTH_SECRET": SIGNING_SECRET,
+            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
         }
         env.update(overrides)
         for key, value in env.items():
@@ -93,7 +89,7 @@ def cli_env(postgres_url, _alembic_applied, monkeypatch):
         "FDI_S3_ENDPOINT": "localhost:9000",
         "FDI_S3_ACCESS_KEY": "minioadmin",
         "FDI_S3_SECRET_KEY": "minioadmin",
-        "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+        "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
@@ -469,4 +465,55 @@ async def test_no_signup_endpoint_exists(client: AsyncClient, _alembic_applied) 
     absent-mindedly add, on the paths a caller would actually try."""
     for path in ("/auth/signup", "/auth/register", "/auth/users", "/users", "/signup"):
         r = await client.post(path, json={"email": "someone@example.test", "password": "x"})
+        assert r.status_code == 404, path
+
+
+async def test_a_refused_refresh_burns_its_cookie_even_after_reactivation(
+    client: AsyncClient, session_factory, _alembic_applied
+) -> None:
+    """The burn-on-failure contract, pinned against its worst case.
+
+    A refresh refused because the account was deactivated must not resurrect
+    when the admin re-activates (re-invites) the account: the row is revoked
+    at refusal time, not at next success. Otherwise a cookie stolen while the
+    account was live -- or while it was deactivated -- is a standing 30-day
+    path back in that survives the deactivation that was meant to kill it.
+    """
+    from fdi.platform.db.repository import UserRepository
+
+    email = f"burn-{uuid.uuid4().hex}@example.test"
+    await _create_invitee(session_factory, email)
+    await _login(client, email)
+    cookie = client.cookies.get("fdi_refresh")
+    assert cookie
+
+    async def _set_active(active: bool) -> None:
+        async with session_factory() as s:
+            user = await UserRepository(s).get_by_email(email)
+            assert user is not None
+            await UserRepository(s).set_active(user.id, active=active)
+            await s.commit()
+
+    await _set_active(False)
+    refused = await client.post("/auth/refresh", headers={"Cookie": f"fdi_refresh={cookie}"})
+    assert refused.status_code == 401
+
+    await _set_active(True)
+    # The account itself is fine again -- a fresh login works...
+    assert (await _login(client, email)).status_code == 200
+    # ...but the OLD cookie did not come back with it.
+    revived = await client.post("/auth/refresh", headers={"Cookie": f"fdi_refresh={cookie}"})
+    assert revived.status_code == 401
+
+
+async def test_api_documentation_endpoints_are_not_anonymous(
+    client: AsyncClient, _alembic_applied
+) -> None:
+    """OpenAPI/Swagger are a complete inventory of every protected route with
+    request schemas; on a gated demo they are reconnaissance, not
+    documentation. They mount on the APP, not either router, so the gate
+    never covered them -- disabled outright rather than gated: the route
+    table is the one thing nobody needs Swagger to read."""
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        r = await client.get(path)
         assert r.status_code == 404, path

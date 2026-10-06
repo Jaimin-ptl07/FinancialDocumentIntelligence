@@ -16,6 +16,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
 from tests.integration.conftest import authenticate
 
 pytestmark = pytest.mark.integration
@@ -36,7 +37,7 @@ async def make_client(
             "FDI_S3_ENDPOINT": minio_endpoint,
             "FDI_S3_ACCESS_KEY": "minioadmin",
             "FDI_S3_SECRET_KEY": "minioadmin",
-            "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
             # A per-test bucket, so one test's PUT cannot leak into another's
             # GET through the shared session-scoped MinIO container.
             "FDI_S3_BUCKET": f"schema-{uuid.uuid4().hex[:12]}",

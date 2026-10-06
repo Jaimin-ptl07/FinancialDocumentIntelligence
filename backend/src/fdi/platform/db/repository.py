@@ -1033,6 +1033,26 @@ class UserRepository:
         )
         await self._s.flush()
 
+    async def purge_expired_refresh_tokens(self, *, now: datetime) -> int:
+        """Delete rows whose TTL has passed, returning the count.
+
+        Refresh rows are never touched again after revocation, so nothing else
+        ever removes them -- without this, every login leaks one row forever.
+        Called opportunistically by each session issue (login + refresh),
+        which bounds the table at ~one TTL's worth of live sessions with no
+        cron to forget. Revoked-but-unexpired rows are deliberately kept: the
+        burn-on-refuse path in the refresh route still needs to distinguish
+        "revoked" from "unknown" until the TTL would have ended them anyway.
+        """
+        result = await self._s.execute(
+            sqlalchemy.delete(RefreshToken).where(RefreshToken.expires_at < now)
+        )
+        # CursorResult.rowcount is typed only on the sync flavor; asyncpg's
+        # driver-level result reaches us as Result. The count is advisory (it
+        # feeds nothing but logs/debug), so the runtime attribute is fine and
+        # getattr keeps mypy --strict honest about it.
+        return int(getattr(result, "rowcount", 0))
+
     async def find_refresh_token(self, token_hash: str) -> RefreshToken | None:
         return (
             await self._s.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from fdi.platform.config import Settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 REQUIRED = {
     "FDI_DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/db",
@@ -14,7 +15,7 @@ REQUIRED = {
     "FDI_S3_SECRET_KEY": "sk",
     # Required with no default: a default signing secret would be a secret
     # baked into the image, which ADR-0002 forbids.
-    "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+    "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
 }
 
 

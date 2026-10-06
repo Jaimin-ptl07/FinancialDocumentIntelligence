@@ -11,6 +11,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from tests.conftest import TEST_SIGNING_SECRET
+
 REQUIRED_ENV = {
     "FDI_DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/db",
     "FDI_BROKER_URL": "amqp://guest:guest@h:5672/%2F",
@@ -18,7 +20,7 @@ REQUIRED_ENV = {
     "FDI_S3_ENDPOINT": "h:9000",
     "FDI_S3_ACCESS_KEY": "ak",
     "FDI_S3_SECRET_KEY": "sk",
-    "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+    "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
 }
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from fdi.pipeline.stages.fog_mapping import build_mapping
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 _FOG = {
     "doc_id": "d",
@@ -81,7 +82,7 @@ async def test_services_carry_schema_and_extractor_when_available(
         "FDI_S3_ENDPOINT": "localhost:9000",
         "FDI_S3_ACCESS_KEY": "minioadmin",
         "FDI_S3_SECRET_KEY": "minioadmin",
-        "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+        "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
         "FDI_GPT_ENDPOINT": "https://example.invalid",
         "FDI_GPT_KEY": "key",
     }.items():

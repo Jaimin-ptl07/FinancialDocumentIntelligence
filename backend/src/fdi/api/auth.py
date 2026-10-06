@@ -25,6 +25,7 @@ No silent path back in exists.
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.api.deps import SessionDep
@@ -80,6 +81,11 @@ async def _issue_session(
         token_hash=token_hash,
         expires_at=datetime.now(UTC) + timedelta(seconds=settings.auth_refresh_ttl_seconds),
     )
+    # Opportunistic housekeeping, same transaction: refresh rows outlive their
+    # usefulness on expiry and nothing else deletes them. Each session issue
+    # sweeps whatever the last TTL window has retired, so the table tracks
+    # live sessions instead of growing with every login ever made.
+    await repo.purge_expired_refresh_tokens(now=datetime.now(UTC))
     response.set_cookie(
         REFRESH_COOKIE,
         raw,
@@ -101,14 +107,22 @@ async def _issue_session(
 async def login(
     payload: LoginRequest, session: SessionDep, response: Response
 ) -> TokenView:
-    """Exchange email + password for an access token and a refresh cookie."""
+    """Exchange email + password for an access token and a refresh cookie.
+
+    verify_password runs in the threadpool, not on the loop: argon2 is
+    ~100ms of deliberate CPU, and there is no rate limit in front of this
+    route -- a synchronous call would let a trivial failed-login loop stall
+    every concurrent request (health probes included) behind hashing work.
+    """
     repo = UserRepository(session)
     user = await repo.get_by_email(payload.email)
     if user is None:
-        # Equal-work path for unknown emails -- see _DUMMY_HASH.
-        verify_password(_DUMMY_HASH, payload.password)
+        # Equal-work path for unknown emails -- see _DUMMY_HASH. Also in the
+        # threadpool, so the equal cost does not equal the loop stall.
+        await run_in_threadpool(verify_password, _DUMMY_HASH, payload.password)
         raise _unauthorized()
-    if not verify_password(user.password_hash, payload.password) or not user.active:
+    verified = await run_in_threadpool(verify_password, user.password_hash, payload.password)
+    if not verified or not user.active:
         # One message for both: which half failed is not the caller's business.
         raise _unauthorized()
     view = await _issue_session(user_id=user.id, session=session, response=response)
@@ -120,9 +134,11 @@ async def login(
 async def refresh(request: Request, session: SessionDep, response: Response) -> TokenView:
     """Rotate the refresh cookie into a fresh access token + cookie.
 
-    The presented token dies here, whatever happens next: it is revoked BEFORE
-    the new session is minted, so even the failure paths (expired token,
-    deactivated account) burn the cookie they were handed.
+    The presented token dies here, whatever happens next: it is revoked and
+    COMMITTED before any check that might refuse, so the failure paths
+    (expired token, deactivated account) burn the cookie they were handed --
+    a refresh refused during a deactivation cannot resurrect if the account
+    is later re-activated.
     """
     raw = request.cookies.get(REFRESH_COOKIE)
     if not raw:
@@ -134,6 +150,11 @@ async def refresh(request: Request, session: SessionDep, response: Response) -> 
         raise _unauthorized("The refresh token is not recognised.")
     if row.revoked_at is not None:
         raise _unauthorized("The refresh token has been revoked.")
+    # Burn FIRST, durably -- see the docstring. The commit is not optional:
+    # the 401 paths below raise before the success-path commit, and without
+    # one the revoke would roll back with the request.
+    await repo.revoke_refresh_token(row.id)
+    await session.commit()
     if row.expires_at <= now:
         raise _unauthorized("The refresh token has expired.")
     user = await repo.get(row.user_id)
@@ -146,7 +167,6 @@ async def refresh(request: Request, session: SessionDep, response: Response) -> 
     # both rotate. The window is one request, the attacker already holds the
     # cookie, and the demo has one operator -- locking the row here would buy
     # a guarantee nothing in the threat model asks for.
-    await repo.revoke_refresh_token(row.id)
     view = await _issue_session(user_id=user.id, session=session, response=response)
     await session.commit()
     return view

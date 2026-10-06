@@ -229,7 +229,21 @@ def create_app() -> FastAPI:
     # Starlette.__call__, and a DSN-less deployment must initialise nothing at
     # all (obs/sentry.py's no-op contract).
     init_sentry(_sentry_dsn(), FastApiIntegration(), StarletteIntegration())
-    app = FastAPI(title="Financial Document Intelligence", version="0.1.0", lifespan=lifespan)
+    # docs_url/redoc_url/openapi_url None: FastAPI mounts these on the APP,
+    # not either router, so the auth gate below never covers them -- and an
+    # anonymous /openapi.json is a complete inventory of every protected
+    # route with request schemas, i.e. exactly the reconnaissance the gate
+    # exists to prevent. Disabled outright rather than moved behind the gate:
+    # the one thing nobody needs Swagger UI to read is the route table. The
+    # HTTP suite is this API's contract; there is no Swagger to lose.
+    app = FastAPI(
+        title="Financial Document Intelligence",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     install_error_handlers(app)
     # Must sit INSIDE ServerErrorMiddleware (which is always outermost) so that
     # the id is still bound when `errors._unhandled` renders a 500 and reaches

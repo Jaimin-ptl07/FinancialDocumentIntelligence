@@ -4,6 +4,7 @@ import pytest
 
 from fdi.platform import ocr
 from fdi.platform.config import Settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 
 class _Result:
@@ -62,7 +63,7 @@ def test_from_settings_returns_none_without_endpoint_or_key(
         "FDI_S3_ENDPOINT": "h:9000",
         "FDI_S3_ACCESS_KEY": "ak",
         "FDI_S3_SECRET_KEY": "sk",
-        "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+        "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
     }.items():
         monkeypatch.setenv(k, v)
     settings = Settings()
@@ -79,7 +80,7 @@ def test_from_settings_returns_client_when_configured(monkeypatch: pytest.Monkey
         "FDI_S3_ENDPOINT": "h:9000",
         "FDI_S3_ACCESS_KEY": "ak",
         "FDI_S3_SECRET_KEY": "sk",
-        "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+        "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
         "FDI_AZURE_DI_ENDPOINT": "https://example.cognitiveservices.azure.com",
         "FDI_AZURE_DI_KEY": "secret-key",
     }.items():

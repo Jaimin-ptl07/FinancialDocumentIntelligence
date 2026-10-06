@@ -12,6 +12,14 @@ import structlog
 
 from fdi.platform.config import get_settings
 
+# 32+ bytes: pyjwt warns on short HS256 keys (RFC 7518 s3.2), and the warning
+# is correct -- production secrets are generated at least this long, so the
+# test environment should not normalize anything shorter. ONE constant, not a
+# literal per file: it already lives in 15+ env stubs and a drift would mean
+# some suites signing with a key others reject. Here (not the integration
+# conftest) so the unit suite can import it without testcontainers.
+TEST_SIGNING_SECRET = "test-signing-secret-0123456789abcdef0123456789abcdef"
+
 
 @pytest.fixture(autouse=True)
 def _isolate_contextvars() -> Iterator[None]:

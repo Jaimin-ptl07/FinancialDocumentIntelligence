@@ -29,6 +29,7 @@ from testcontainers.rabbitmq import RabbitMqContainer
 from testcontainers.redis import RedisContainer
 
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -103,7 +104,7 @@ _SETTINGS_STUBS = {
     "FDI_S3_ENDPOINT": "localhost:9000",
     "FDI_S3_ACCESS_KEY": "minioadmin",
     "FDI_S3_SECRET_KEY": "minioadmin",
-    "FDI_AUTH_SECRET": "test-signing-secret-0123456789abcdef0123456789abcdef",
+    "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
 }
 
 # Deliberately unroutable (port 1). Nothing should ever CONNECT to this: tests

@@ -45,6 +45,7 @@ from fdi.platform.obs.sentry import (
     tag_celery_correlation_ids,
     tag_correlation_id,
 )
+from tests.conftest import TEST_SIGNING_SECRET
 
 # RFC 2606: the .invalid TLD can never resolve, so a wiring test that gets a
 # real transport can at worst attempt (and swallow) a DNS failure. No test
@@ -67,16 +68,10 @@ _REQUIRED = {
 def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in _REQUIRED.items():
         monkeypatch.setenv(key, value)
-    # FDI_AUTH_SECRET is required only while the concurrent T3 (auth) work is
-    # in the tree -- it is not part of this commit. Set it only when the
-    # installed Settings knows the field: blindly setting it would be rejected
-    # as an unknown FDI_ variable on a tree without auth (the strict-settings
-    # contract), and leaving it out would starve Settings on a tree with it.
-    auth = Settings.model_fields.get("auth_secret")
-    if auth is not None and auth.is_required():
-        monkeypatch.setenv(
-            "FDI_AUTH_SECRET", "test-signing-secret-0123456789abcdef0123456789abcdef"
-        )
+    # T3's auth gate made FDI_AUTH_SECRET required (it is in this tree --
+    # the conditional shim that guarded against a pre-auth tree is gone).
+    # The shared test constant, not a local literal.
+    monkeypatch.setenv("FDI_AUTH_SECRET", TEST_SIGNING_SECRET)
 
 
 class _CaptureTransport(Transport):

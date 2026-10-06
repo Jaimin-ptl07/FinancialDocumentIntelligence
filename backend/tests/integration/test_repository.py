@@ -57,3 +57,66 @@ async def test_failed_run_is_recorded(
         assert run is not None
         assert run.status == "failed" and run.error == "boom"
         assert await repo.runs_for_document(doc) == {}  # only DONE runs are facts
+
+
+async def test_purge_expired_refresh_tokens_removes_only_the_dead(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """UserRepository.purge_expired_refresh_tokens: expired rows go, live and
+    revoked-but-unexpired rows stay. Repository seam (like everything else in
+    this file) because the purge is invisible at the HTTP one by design --
+    it is housekeeping, not behavior."""
+    from datetime import UTC, datetime, timedelta
+
+    import sqlalchemy
+
+    from fdi.platform.db.models import AppUser, RefreshToken
+    from fdi.platform.db.repository import UserRepository
+    from fdi.platform.security import hash_password
+
+    now = datetime.now(UTC)
+    async with session_factory() as s:
+        user = AppUser(
+            id=str(uuid.uuid4()),
+            email=f"purge-{uuid.uuid4().hex}@example.test",
+            password_hash=hash_password("x"),
+        )
+        s.add(user)
+        rows = {
+            "expired": RefreshToken(
+                id=str(uuid.uuid4()), user_id=user.id, token_hash=uuid.uuid4().hex,
+                expires_at=now - timedelta(days=1),
+            ),
+            "revoked-not-yet-expired": RefreshToken(
+                id=str(uuid.uuid4()), user_id=user.id, token_hash=uuid.uuid4().hex,
+                expires_at=now + timedelta(days=1), revoked_at=now - timedelta(hours=1),
+            ),
+            "live": RefreshToken(
+                id=str(uuid.uuid4()), user_id=user.id, token_hash=uuid.uuid4().hex,
+                expires_at=now + timedelta(days=1),
+            ),
+        }
+        s.add_all(rows.values())
+        await s.commit()
+
+        # >= 1, not == 1: the Postgres container is session-scoped across the
+        # whole suite, so another file's born-expired rows (test_auth's
+        # negative-TTL test) may also be swept by this call. The precise
+        # invariant is per-user, asserted below.
+        purged = await UserRepository(s).purge_expired_refresh_tokens(now=now)
+        await s.commit()
+        assert purged >= 1
+
+        remaining_for_user = set(
+            (
+                await s.execute(
+                    sqlalchemy.select(RefreshToken.token_hash).where(
+                        RefreshToken.user_id == user.id
+                    )
+                )
+            ).scalars()
+        )
+        assert remaining_for_user == {
+            rows["live"].token_hash,
+            rows["revoked-not-yet-expired"].token_hash,
+        }
