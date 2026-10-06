@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 from pydantic import ValidationError
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from fdi.api.errors import install_error_handlers
 from fdi.api.middleware import CorrelationIdMiddleware
@@ -20,6 +22,7 @@ from fdi.platform.embeddings import BgeEmbeddingClient
 from fdi.platform.extractor import AzureOpenAIExtractorClient
 from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import configure_logging
+from fdi.platform.obs.sentry import init_sentry
 from fdi.platform.storage.artifact_store import ArtifactStore
 from fdi.platform.vectorstore import MilvusVectorStore
 
@@ -187,7 +190,24 @@ def _cors_origins() -> list[str]:
         return list(_DEFAULT_CORS_ORIGINS)
 
 
+def _sentry_dsn() -> str | None:
+    """`FDI_SENTRY_DSN`, or None when Settings cannot be built.
+
+    Same narrow guard as `_cors_origins`, same reason: create_app runs at
+    import time under pytest collection with every FDI_ variable cleared, and
+    monitoring must fall back to "off", never take collection down.
+    """
+    try:
+        return get_settings().sentry_dsn
+    except ValidationError:
+        return None
+
+
 def create_app() -> FastAPI:
+    # Before the app is built: the Starlette integration instruments
+    # Starlette.__call__, and a DSN-less deployment must initialise nothing at
+    # all (obs/sentry.py's no-op contract).
+    init_sentry(_sentry_dsn(), FastApiIntegration(), StarletteIntegration())
     app = FastAPI(title="Financial Document Intelligence", version="0.1.0", lifespan=lifespan)
     install_error_handlers(app)
     # Must sit INSIDE ServerErrorMiddleware (which is always outermost) so that

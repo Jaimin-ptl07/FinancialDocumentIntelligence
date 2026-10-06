@@ -226,6 +226,12 @@ class Settings(BaseSettings):
     llm_output_cost_per_mtok_usd: float = 10.0
     usd_to_inr_rate: float = 95.0
 
+    # Sentry error monitoring (productionization T8, Gated demo). None/empty =
+    # monitoring OFF, cleanly: fdi.platform.obs.sentry returns before the SDK
+    # initialises, so boot and behaviour are unchanged. The DSN identifies a
+    # project's ingest endpoint and is set per deployment, not per image --
+    # like every FDI_ var it is injected at runtime and never baked in.
+    sentry_dsn: str | None = None
     @classmethod
     def settings_customise_sources(
         cls,

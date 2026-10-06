@@ -16,12 +16,20 @@ and make it a lie.
 """
 
 from celery import Celery
+from sentry_sdk.integrations.celery import CeleryIntegration
 
 from fdi.platform.config import get_settings
+from fdi.platform.obs.sentry import init_sentry, tag_celery_correlation_ids
 
 
 def create_celery_app() -> Celery:
     settings = get_settings()
+    # Worker-side error monitoring before anything can fail: the Celery
+    # integration wraps the task tracer, and the prerun tagging is what carries
+    # each task's correlation_id kwarg onto its events (see obs/sentry.py for
+    # why the kwarg, not the contextvar). Both inert when the DSN is unset.
+    if init_sentry(settings.sentry_dsn, CeleryIntegration()):
+        tag_celery_correlation_ids()
     app = Celery("fdi")
     app.conf.update(
         broker_url=settings.broker_url,

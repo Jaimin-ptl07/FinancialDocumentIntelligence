@@ -27,6 +27,9 @@ dependencies = [
     "neo4j>=5.26",
     "pymilvus>=2.6",
     "fastembed>=0.8.0",
+    "sentry-sdk>=2.19",
+    "pyjwt>=2.10",
+    "argon2-cffi>=25.1",
 ]
 
 [dependency-groups]
@@ -43,6 +46,12 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+# The Invitee admin CLI (ADR-0002): the only account-creation surface. Ships
+# with the package so the deployed image has it -- `docker compose exec api
+# fdi-admin ...`.
+fdi-admin = "fdi.platform.admin_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fdi"]
