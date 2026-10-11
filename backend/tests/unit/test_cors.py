@@ -115,3 +115,21 @@ async def test_an_unconfigured_environment_still_grants_the_dev_origin() -> None
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/health", headers={"Origin": DEV_ORIGIN})
     assert r.headers["access-control-allow-origin"] == DEV_ORIGIN
+
+
+async def test_the_ui_origin_may_send_and_receive_the_refresh_cookie(
+    client: AsyncClient,
+) -> None:
+    """The dev UI calls /auth/* cross-origin with `credentials: "include"`; the
+    browser withholds the response -- and drops its Set-Cookie -- unless the
+    grant says credentials are allowed. Without this, login "succeeds" and the
+    refresh cookie never lands, so every reload is a logout (T4)."""
+    preflight = await client.options(
+        "/auth/refresh",
+        headers={"Origin": DEV_ORIGIN, "Access-Control-Request-Method": "POST"},
+    )
+    simple = await client.get("/health", headers={"Origin": DEV_ORIGIN})
+    assert preflight.headers["access-control-allow-credentials"] == "true"
+    assert simple.headers["access-control-allow-credentials"] == "true"
+    # Credentialed grants must name the origin; a wildcard would be refused.
+    assert simple.headers["access-control-allow-origin"] == DEV_ORIGIN

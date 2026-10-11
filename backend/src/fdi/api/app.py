@@ -257,6 +257,10 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
+        # The dev UI calls /auth/* cross-origin with credentials so the
+        # httpOnly refresh cookie can be set and sent (T4). Safe only because
+        # the origins are an explicit allowlist -- never "*".
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -14,16 +14,27 @@ export function setPathname(next: string) {
   pathname = next;
 }
 
+/** Likewise the query string, for pages that read `useSearchParams`. */
+let searchParams = new URLSearchParams();
+export function setSearchParams(next: string) {
+  searchParams = new URLSearchParams(next);
+}
+
+/** One router for the whole test, so a test can assert where a component
+ *  navigated (`expect(router.replace).toHaveBeenCalledWith(...)`). Its spies
+ *  are reset after each test. */
+export const router = {
+  push: vi.fn(),
+  replace: vi.fn(),
+  back: vi.fn(),
+  refresh: vi.fn(),
+  prefetch: vi.fn(),
+};
+
 vi.mock("next/navigation", () => ({
   usePathname: () => pathname,
-  useRouter: () => ({
-    push: vi.fn(),
-    replace: vi.fn(),
-    back: vi.fn(),
-    refresh: vi.fn(),
-    prefetch: vi.fn(),
-  }),
-  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => router,
+  useSearchParams: () => searchParams,
   useParams: () => ({}),
 }));
 
@@ -49,5 +60,7 @@ afterEach(() => {
   server.resetHandlers();
   cleanup();
   pathname = "/";
+  searchParams = new URLSearchParams();
+  Object.values(router).forEach((spy) => spy.mockReset());
 });
 afterAll(() => server.close());

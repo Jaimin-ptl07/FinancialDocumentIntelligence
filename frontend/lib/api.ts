@@ -12,46 +12,24 @@ import type {
   StagesView,
 } from "./types";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE } from "./apiBase";
+import { ApiError, authorizedFetch, detailOf } from "./auth";
 
-/** A failed API call, carrying its HTTP status as DATA rather than only as
- *  text inside the message.
- *
- *  Callers have to branch on it. A 404 from `getArtifact` means "this stage has
- *  not run for this filing" — a normal state for a filing mid-ingest, and one
- *  that no amount of retrying can change. Deciding that from a regex over the
- *  message would make the retry policy depend on the wording of an error
- *  string, which is exactly the kind of coupling that breaks silently when
- *  someone improves the wording. */
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+export { API_BASE, ApiError };
 
 /** Every failure surfaces the method, path, status, and the backend's own
- *  `detail` string. An error an analyst can act on beats a stack trace. */
+ *  `detail` string. An error an analyst can act on beats a stack trace.
+ *  Every call rides the session (lib/auth): bearer attached, one silent
+ *  refresh on a 401. */
 async function request<T>(
   path: string,
   init?: RequestInit & { method?: string },
 ): Promise<T> {
   const method = init?.method ?? "GET";
-  const response = await fetch(`${API_BASE}${path}`, init);
+  const response = await authorizedFetch(path, init);
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = (await response.json()) as { detail?: unknown };
-      if (typeof body.detail === "string") detail = body.detail;
-    } catch {
-      /* body was not JSON; the status text stands */
-    }
     throw new ApiError(
-      `${method} ${path} failed (${response.status}): ${detail}`,
+      `${method} ${path} failed (${response.status}): ${await detailOf(response)}`,
       response.status,
     );
   }
@@ -68,18 +46,14 @@ export const getDocument = (docId: string) =>
  *  `request<T>` (which always awaits `response.json()`) and does its own
  *  fetch + error handling instead. */
 export async function deleteDocument(docId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/documents/${docId}`, {
+  const response = await authorizedFetch(`/documents/${docId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = (await response.json()) as { detail?: unknown };
-      if (typeof body.detail === "string") detail = body.detail;
-    } catch {
-      /* body was not JSON; the status text stands */
-    }
-    throw new Error(`DELETE /documents/${docId} failed (${response.status}): ${detail}`);
+    throw new ApiError(
+      `DELETE /documents/${docId} failed (${response.status}): ${await detailOf(response)}`,
+      response.status,
+    );
   }
 }
 

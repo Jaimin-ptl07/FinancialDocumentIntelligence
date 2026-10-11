@@ -236,6 +236,12 @@ class Settings(BaseSettings):
     auth_secret: str
     auth_access_ttl_seconds: int = 900
     auth_refresh_ttl_seconds: int = 2_592_000
+    # The refresh cookie's Path: the PUBLIC path of the /auth routes as the
+    # browser sees them. "/auth" when the browser talks to the API directly
+    # (dev compose); "/api/auth" behind the same-origin edge, which strips
+    # /api before the request arrives -- a cookie scoped to the backend's
+    # internal path would never be sent back by the browser (T4).
+    auth_cookie_path: str = "/auth"
 
     # Sentry error monitoring (productionization T8, Gated demo). None/empty =
     # monitoring OFF, cleanly: fdi.platform.obs.sentry returns before the SDK

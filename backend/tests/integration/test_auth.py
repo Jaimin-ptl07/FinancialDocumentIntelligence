@@ -319,6 +319,23 @@ async def test_logout_revokes_the_refresh_token(
     assert replay.status_code == 401
 
 
+async def test_the_cookie_path_follows_the_edge_prefix(
+    make_client, session_factory, _alembic_applied
+) -> None:
+    """Behind the same-origin edge the browser calls /api/auth/*, and a cookie
+    scoped Path=/auth would never be sent back -- every reload a logout (T4).
+    FDI_AUTH_COOKIE_PATH scopes it to the PUBLIC path; the backend's own
+    routes keep their shapes. Set and cleared on the same path, or the clear
+    would miss the cookie it means to delete."""
+    email = f"invitee-{uuid.uuid4().hex}@example.test"
+    await _create_invitee(session_factory, email)
+    async with make_client(FDI_AUTH_COOKIE_PATH="/api/auth") as client:
+        login = await client.post("/auth/login", json={"email": email, "password": PASSWORD})
+        logout = await client.post("/auth/logout")
+    assert "Path=/api/auth" in login.headers["set-cookie"]
+    assert "Path=/api/auth" in logout.headers["set-cookie"]
+
+
 async def test_logout_without_a_cookie_is_still_204(client: AsyncClient, _alembic_applied) -> None:
     """Idempotent by design: a second logout (or a logged-out tab's) is not
     an error condition worth a 401."""

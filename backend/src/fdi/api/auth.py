@@ -12,7 +12,7 @@ Token model (ADR-0002):
   re-check `active` would couple every route to the users table for a window
   (one access TTL) that revocation-by-deactivation is already bounded by.
 - REFRESH: opaque 256-bit value in an httpOnly/Secure/SameSite=Lax cookie
-  scoped to Path=/auth, remembered server-side as its SHA-256
+  scoped to the /auth path (FDI_AUTH_COOKIE_PATH), remembered server-side as its SHA-256
   (fdi.platform.security). Rotation invalidates the predecessor; logout
   revokes; deactivation is noticed at the next refresh.
 
@@ -93,12 +93,13 @@ async def _issue_session(
         # The cookie contract, attribute by attribute (asserted at the HTTP
         # seam in test_auth.py): httpOnly keeps page JS from reading the
         # token; Secure keeps it off plain HTTP; SameSite=Lax survives
-        # top-level navigations without opening cross-site POSTs; Path=/auth
-        # means the cookie is not even SENT anywhere else.
+        # top-level navigations without opening cross-site POSTs; the path
+        # (FDI_AUTH_COOKIE_PATH, the public path of /auth) means the cookie
+        # is not even SENT anywhere else.
         httponly=True,
         secure=True,
         samesite="lax",
-        path="/auth",
+        path=settings.auth_cookie_path,
     )
     return token_view
 
@@ -186,7 +187,7 @@ async def logout(request: Request, session: SessionDep, response: Response) -> N
         if row is not None and row.revoked_at is None:
             await repo.revoke_refresh_token(row.id)
             await session.commit()
-    response.delete_cookie(REFRESH_COOKIE, path="/auth")
+    response.delete_cookie(REFRESH_COOKIE, path=get_settings().auth_cookie_path)
 
 
 def require_access_token(request: Request) -> str:

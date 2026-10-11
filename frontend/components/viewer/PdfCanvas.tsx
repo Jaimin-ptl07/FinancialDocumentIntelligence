@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { freshAuthHeaders } from "@/lib/auth";
 import type { BoundingRegion, BoundingRegionsView } from "@/lib/types";
 
 const MIN_SCALE = 0.6;
@@ -60,7 +61,12 @@ export function PdfCanvas({
           import.meta.url,
         ).toString();
 
-        const doc = await pdfjs.getDocument(url).promise;
+        // The file route is behind the auth gate, and pdf.js fetches it
+        // itself -- outside the API client's 401 retry -- so it is handed a
+        // bearer renewed up front instead.
+        const httpHeaders = await freshAuthHeaders();
+        if (cancelled) return;
+        const doc = await pdfjs.getDocument({ url, httpHeaders }).promise;
         if (cancelled) return;
         onPageCount?.(doc.numPages);
 

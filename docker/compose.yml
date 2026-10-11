@@ -60,6 +60,9 @@ x-backend-env: &backend-env
   FDI_AUTH_SECRET: ${FDI_AUTH_SECRET}
   FDI_AUTH_ACCESS_TTL_SECONDS: ${FDI_AUTH_ACCESS_TTL_SECONDS}
   FDI_AUTH_REFRESH_TTL_SECONDS: ${FDI_AUTH_REFRESH_TTL_SECONDS}
+  # The refresh cookie's public path: unset = /auth (dev, browser talks to
+  # the API directly); /api/auth behind the same-origin edge (T2/T4).
+  FDI_AUTH_COOKIE_PATH: ${FDI_AUTH_COOKIE_PATH}
   # Sentry error monitoring (T8). Optional: unset/empty expands to "" and
   # the app's empty-is-unset env source reads it as monitoring OFF; nothing
   # at boot changes without a DSN. Set per deployment, never baked in.

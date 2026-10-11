@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Archivo, IBM_Plex_Mono, Public_Sans } from "next/font/google";
 import "./globals.css";
-import { Spine } from "@/components/shell/Spine";
+import { Suspense } from "react";
+import { AuthGate } from "@/components/shell/AuthGate";
 import { Providers } from "./providers";
 
 const archivo = Archivo({
@@ -49,10 +50,11 @@ export default function RootLayout({
       </head>
       <body className="min-h-full">
         <Providers>
-          <div className="app-shell">
-            <Spine />
-            <main className="flex-1 min-w-0">{children}</main>
-          </div>
+          {/* AuthGate reads useSearchParams (the return address), which
+              needs a Suspense boundary to keep pages prerenderable. */}
+          <Suspense>
+            <AuthGate>{children}</AuthGate>
+          </Suspense>
         </Providers>
       </body>
     </html>
