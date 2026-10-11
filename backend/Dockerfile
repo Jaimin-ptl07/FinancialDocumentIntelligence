@@ -19,6 +19,23 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=backend/pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-install-project --no-dev --no-editable
 
+# Phase 1.5: bake the BGE embedding weights. Constructing TextEmbedding is
+# what downloads the model (see embeddings.py's laziness note); the one-word
+# warmup embed additionally loads the ONNX session, so a truncated download
+# fails the BUILD instead of the first pipeline run. FASTEMBED_CACHE_PATH is
+# fastembed's own env seam (define_cache_dir) -- the runtime stage sets the
+# same var, so the first embed in a fresh container resolves the baked copy
+# instead of re-downloading ~130 MB per recreation.
+# Sits between the two sync phases deliberately: its only inputs are the
+# lockfile-frozen venv and the ARG, so source edits below don't invalidate the
+# 130 MB layer. Compose's x-backend-build passes FDI_EMBED_MODEL from the same
+# .env the runtime reads, so the baked model tracks the configured one; this
+# default only serves a bare `docker build` and must match
+# Settings.embed_model's default.
+ARG FDI_EMBED_MODEL=BAAI/bge-small-en-v1.5
+ENV FASTEMBED_CACHE_PATH=/opt/fdi/fastembed-cache
+RUN /app/.venv/bin/python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${FDI_EMBED_MODEL}').embed(['warmup'])"
+
 # Phase 2: the project itself.
 COPY backend/ /app/
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -37,9 +54,15 @@ COPY --from=builder --chown=fdi:fdi /app/.venv /app/.venv
 COPY --from=builder --chown=fdi:fdi /app/alembic /app/alembic
 COPY --from=builder --chown=fdi:fdi /app/alembic.ini /app/alembic.ini
 COPY --chown=fdi:fdi docs/architecture/field-extraction-schema.json /app/docs/architecture/field-extraction-schema.json
+# The baked embedding weights, at the path the builder's FASTEMBED_CACHE_PATH
+# downloaded them to. chown'd, not left root-owned: huggingface_hub resolves
+# the snapshot on every construction and rewrites ref/lock files in-place, so
+# the cache must stay writable by fdi.
+COPY --from=builder --chown=fdi:fdi /opt/fdi/fastembed-cache /opt/fdi/fastembed-cache
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    FASTEMBED_CACHE_PATH=/opt/fdi/fastembed-cache
 
 WORKDIR /app
 USER fdi

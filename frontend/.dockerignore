@@ -1,0 +1,11 @@
+# The image installs its own deps (pnpm install --frozen-lockfile); shipping
+# the host's node_modules bloats the context to ~1 GB and pnpm's symlink layout
+# breaks BuildKit ("invalid file request").
+node_modules
+.next
+tsconfig.tsbuildinfo
+# `next build` reads .env* files from the context and inlines their
+# NEXT_PUBLIC_* values into the bundle; a developer's local env must never
+# reach a published image. The API base comes from the build arg only.
+.env*
+coverage
