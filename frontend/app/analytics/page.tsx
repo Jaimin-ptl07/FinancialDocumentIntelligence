@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { extractDocument, getAnalytics, listDocuments } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { getAnalytics, listDocuments } from "@/lib/api";
+import { submitExtract } from "@/lib/jobs";
+import type { ExtractDocumentView } from "@/lib/types";
+import { useJob } from "@/lib/useJob";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { LedgerTotals } from "@/components/analytics/LedgerTotals";
 import { StageThroughput } from "@/components/analytics/StageThroughput";
@@ -25,12 +28,15 @@ export default function Analytics() {
   // Extraction is a synchronous on-demand call and nothing persists its
   // results, so quality figures cannot be served from the corpus — they have
   // to be read now, for one filing at a time. The screen says so rather than
-  // implying a number it does not have.
-  const read = useMutation({
-    mutationFn: (key: string) => extractDocument(key),
+  // implying a number it does not have. The read is an API job (T5); its
+  // one slot means coming back to this screen finds the last read -- still
+  // running, or settled -- rather than an empty panel.
+  const read = useJob<ExtractDocumentView, [string]>({
+    slot: "quality:extract",
+    submit: (key) => submitExtract(key),
   });
 
-  const fields = read.data?.fields ?? [];
+  const fields = read.result?.fields ?? [];
   const found = fields.filter((f) => f.value !== null && f.value !== undefined);
   const soft = found.filter((f) => f.confidence < 0.5);
 
@@ -151,17 +157,15 @@ export default function Analytics() {
             <button
               type="button"
               className="btn btn-primary"
-              disabled={!docKey || read.isPending}
-              onClick={() => read.mutate(docKey)}
+              disabled={!docKey || read.busy}
+              onClick={() => read.start(docKey)}
             >
-              {read.isPending ? "Reading" : "Read figures"}
+              {read.phase === "queued" ? "Queued" : read.busy ? "Reading" : "Read figures"}
             </button>
           </div>
 
-          {read.error ? (
-            <p style={{ fontSize: "var(--text-sm)" }}>
-              {(read.error as Error).message}
-            </p>
+          {read.problem ? (
+            <p style={{ fontSize: "var(--text-sm)" }}>{read.problem}</p>
           ) : fields.length === 0 ? (
             <p style={{ color: "var(--ink-faint)", fontSize: "var(--text-sm)" }}>
               Pick a filing to see how much of the schema it answered.
@@ -175,7 +179,14 @@ export default function Analytics() {
                 alignItems: "start",
               }}
             >
-              <ConfidenceHistogram fields={fields} />
+              <div>
+                {/* The select resets on return, but the last read is kept:
+                    say which filing these figures belong to. */}
+                <p className="eyebrow" style={{ marginBottom: "var(--sp-3)" }}>
+                  Read from {read.result?.doc_key}
+                </p>
+                <ConfidenceHistogram fields={fields} />
+              </div>
               <LedgerTotals
                 items={[
                   {

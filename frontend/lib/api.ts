@@ -5,7 +5,6 @@ import type {
   DocumentListView,
   DocumentUsageEventsView,
   DocumentView,
-  ExtractDocumentView,
   ExtractionSchema,
   SchemaValidationView,
   SchemaView,
@@ -21,7 +20,7 @@ export { API_BASE, ApiError };
  *  `detail` string. An error an analyst can act on beats a stack trace.
  *  Every call rides the session (lib/auth): bearer attached, one silent
  *  refresh on a 401. */
-async function request<T>(
+export async function request<T>(
   path: string,
   init?: RequestInit & { method?: string },
 ): Promise<T> {
@@ -33,7 +32,10 @@ async function request<T>(
       response.status,
     );
   }
-  return (await response.json()) as T;
+  // An XBRL factsheet's job result is application/xml, not JSON.
+  const type = response.headers.get("content-type") ?? "";
+  const isText = type.includes("xml") || type.startsWith("text/");
+  return (isText ? await response.text() : await response.json()) as T;
 }
 
 export const listDocuments = (limit = 50, offset = 0) =>
@@ -43,7 +45,7 @@ export const getDocument = (docId: string) =>
   request<DocumentView>(`/documents/${docId}`);
 
 /** 204 No Content on success -- nothing to parse, so this bypasses
- *  `request<T>` (which always awaits `response.json()`) and does its own
+ *  `request<T>` (which always parses a body) and does its own
  *  fetch + error handling instead. */
 export async function deleteDocument(docId: string): Promise<void> {
   const response = await authorizedFetch(`/documents/${docId}`, {
@@ -72,13 +74,6 @@ export const getArtifact = (docId: string, stage: string) =>
 export const startStage = (docId: string, stage: string) =>
   request<{ doc_id: string; stage: string }>(`/documents/${docId}/${stage}`, {
     method: "POST",
-  });
-
-export const extractDocument = (docKey: string, module?: string, force?: boolean) =>
-  request<ExtractDocumentView>("/extract/document", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ doc_key: docKey, module: module ?? null, force: force ?? false }),
   });
 
 export const getSchema = () => request<SchemaView>("/schema");

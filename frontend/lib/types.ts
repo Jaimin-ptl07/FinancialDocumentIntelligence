@@ -142,8 +142,8 @@ export interface SchemaValidationView {
 }
 
 /** `GET /analytics` — corpus and pipeline figures aggregated over stage_run.
- *  Extraction quality is NOT in here: extraction is an on-demand synchronous
- *  call and nothing persists its results, so the analytics screen derives
+ *  Extraction quality is NOT in here: extraction runs on demand as a job
+ *  and nothing persists its results, so the analytics screen derives
  *  quality from the filings it has actually read, and says so. */
 export interface StageThroughputView {
   name: string;
