@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
 from fdi.platform.db.models import (
+    ApiJob,
     AppUser,
     Document,
     EvalCaseResult,
@@ -1062,4 +1063,72 @@ class UserRepository:
         token = await self._s.get(RefreshToken, token_id)
         assert token is not None
         token.revoked_at = func.now()
+        await self._s.flush()
+
+
+class JobRepository:
+    """api_job persistence (T5). The caller owns the transaction -- commit is
+    theirs, not ours.
+
+    Every read a ROUTE makes goes through an `_for_user` method: ownership is
+    part of the lookup, not a check after it, so a route cannot fetch a job
+    and forget to compare owners. `get` (unscoped) exists for the worker,
+    which has no user and runs whatever it was handed.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def create(
+        self,
+        *,
+        job_id: str,
+        user_id: str,
+        kind: str,
+        params: dict[str, object],
+        correlation_id: str,
+    ) -> ApiJob:
+        job = ApiJob(
+            id=job_id,
+            user_id=user_id,
+            kind=kind,
+            status="queued",
+            params=params,
+            correlation_id=correlation_id,
+        )
+        self._s.add(job)
+        await self._s.flush()
+        return job
+
+    async def get(self, job_id: str) -> ApiJob | None:
+        return await self._s.get(ApiJob, job_id)
+
+    async def get_for_user(self, job_id: str, user_id: str) -> ApiJob | None:
+        stmt = select(ApiJob).where(ApiJob.id == job_id, ApiJob.user_id == user_id)
+        return (await self._s.execute(stmt)).scalar_one_or_none()
+
+    async def list_for_user(
+        self, user_id: str, *, kind: str | None = None, limit: int = 50
+    ) -> list[ApiJob]:
+        stmt = select(ApiJob).where(ApiJob.user_id == user_id)
+        if kind is not None:
+            stmt = stmt.where(ApiJob.kind == kind)
+        stmt = stmt.order_by(ApiJob.created_at.desc(), ApiJob.id).limit(limit)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def mark_running(self, job_id: str) -> None:
+        await self._set(job_id, status="running")
+
+    async def mark_succeeded(self, job_id: str, result: object) -> None:
+        await self._set(job_id, status="succeeded", result=result, error=None)
+
+    async def mark_failed(self, job_id: str, error: str) -> None:
+        await self._set(job_id, status="failed", error=error)
+
+    async def _set(self, job_id: str, **values: object) -> None:
+        job = await self._s.get(ApiJob, job_id)
+        if job is None:
+            raise LookupError(f"job {job_id} not found")
+        for name, value in values.items():
+            setattr(job, name, value)
         await self._s.flush()

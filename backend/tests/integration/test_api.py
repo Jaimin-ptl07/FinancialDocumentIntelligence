@@ -23,7 +23,7 @@ from httpx import ASGITransport, AsyncClient
 
 from fdi.platform.config import get_settings
 from tests.conftest import TEST_SIGNING_SECRET
-from tests.integration.conftest import authenticate
+from tests.integration.conftest import authenticate, job_services
 
 pytestmark = pytest.mark.integration
 
@@ -122,6 +122,16 @@ async def store(minio_client):
     s = ArtifactStore(minio_client, bucket="artifacts")
     await s.ensure_bucket()
     return s
+
+
+async def run_job(client: AsyncClient, job_id: str, session_factory, store, **clients):
+    """Play the worker (T5): run the submitted job eagerly against `clients`
+    -- the same fakes the route was served -- and return its result response.
+    No Celery worker consumes the test broker."""
+    from fdi.pipeline.jobs import execute_job
+
+    await execute_job(job_id, job_services(session_factory, store, **clients))
+    return await client.get(f"/jobs/{job_id}/result")
 
 
 # --------------------------------------------------------------------------
@@ -512,7 +522,7 @@ async def test_reprocess_unknown_document_is_404(
 
 
 async def test_eval_endpoint_runs_and_ranks(
-    client: AsyncClient, minio_client, _alembic_applied
+    client: AsyncClient, minio_client, session_factory, _alembic_applied
 ) -> None:
     """Seed the toy dataset into the APP's bucket -- not the test `store` fixture's.
 
@@ -533,6 +543,8 @@ async def test_eval_endpoint_runs_and_ranks(
     r = await client.post(
         "/eval", json={"candidate": "uppercase", "dataset": "toy", "dataset_version": 1}
     )
+    assert r.status_code == 202, r.text
+    r = await run_job(client, r.json()["job_id"], session_factory, seed_store)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["aggregate"] == 1.0
@@ -1688,6 +1700,11 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
         }
     ) as client:
         r = await client.post("/ask", json={"question": f"total assets, marker {marker}?"})
+        assert r.status_code == 202
+        r = await run_job(
+            client, r.json()["job_id"], session_factory, store, agent_client=fake,
+            embedder=fake_embedder, vector_store=fake_vector_store,
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["answer"] == f"Total Assets were 100 (see {doc.id}:s0)."
@@ -1888,6 +1905,27 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
         }
     ) as client:
         r = await client.post("/extract/document", json={"doc_key": f"acme-{marker}"})
+        assert r.status_code == 202
+        r = await run_job(
+            client, r.json()["job_id"], session_factory, store, extractor_client=fake,
+            extraction_schema_path=str(schema_path), embedder=fake_embedder,
+            vector_store=fake_vector_store,
+        )
+        # The factsheet job over the same (doc, schema) is served from the
+        # persisted extraction record -- no second scripted LLM response --
+        # and its XBRL result keeps the media type the inline route had.
+        fs = await client.post(
+            "/factsheet/document?format=xbrl", json={"doc_key": f"acme-{marker}"}
+        )
+        assert fs.status_code == 202
+        fs = await run_job(
+            client, fs.json()["job_id"], session_factory, store, extractor_client=fake,
+            extraction_schema_path=str(schema_path), embedder=fake_embedder,
+            vector_store=fake_vector_store,
+        )
+        assert fs.status_code == 200
+        assert fs.headers["content-type"].startswith("application/xml")
+        assert fs.text.lstrip().startswith("<")
     assert r.status_code == 200
     body = r.json()
     assert body["doc_key"] == f"acme-{marker}"

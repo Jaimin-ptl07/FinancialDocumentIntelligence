@@ -3,13 +3,25 @@
 import contextlib
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from typing import cast
+from typing import Annotated, cast
 from urllib.parse import quote
 
 import sqlalchemy
 import structlog
-from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.api.auth import require_access_token
 from fdi.api.deps import (
     AgentClientDep,
     CandidatesDep,
@@ -20,6 +32,7 @@ from fdi.api.deps import (
     ExtractionSchemaPathDep,
     ExtractorClientDep,
     GraphStoreDep,
+    JobDispatcherDep,
     ResolverDep,
     SessionDep,
     SessionFactoryDep,
@@ -48,8 +61,8 @@ from fdi.api.schemas import (
     EntitiesView,
     EntityResolveRequest,
     EntityTimelineView,
-    EvalAccepted,
     EvalRequest,
+    EvalResultView,
     ExtractDocumentView,
     ExtractRequest,
     GraphLoadTriggerView,
@@ -59,6 +72,7 @@ from fdi.api.schemas import (
     HybridSearchResultsView,
     HybridSearchResultView,
     JobAccepted,
+    JobListView,
     JobView,
     KeywordHitView,
     KeywordSearchRequest,
@@ -88,17 +102,11 @@ from fdi.api.schemas import (
     VectorSearchResultView,
 )
 from fdi.core.extractor import parse_field_specs
-from fdi.core.factsheet import document_factsheet
 from fdi.core.ontology import CanonicalConcept
 from fdi.core.pricing import llm_cost_inr, ocr_cost_inr
 from fdi.core.schema import bump_patch_version, validate_extraction_schema
-from fdi.core.xbrl import calculation_arcs, export_instance
-from fdi.pipeline.agent_tools import AgentContext
-from fdi.pipeline.ask import answer_question
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.entities import compare_concept_across_versions, entity_timeline
-from fdi.pipeline.eval_service import run_evaluation
-from fdi.pipeline.extractor import ExtractContext, extract_document
 from fdi.pipeline.graphquery import (
     document_structure as document_structure_query,
 )
@@ -110,16 +118,24 @@ from fdi.pipeline.graphquery import (
 )
 from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.intake import document_key, intake_document
+from fdi.pipeline.jobs import (
+    DocumentNotFound,
+    DocumentNotIndexed,
+    JobDispatcher,
+    JobKind,
+    indexed_document,
+)
 from fdi.pipeline.retrieval import bm25_search, hybrid_search, vector_search
 from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
 from fdi.platform.config import Settings, get_settings
-from fdi.platform.db.models import Document
+from fdi.platform.db.models import ApiJob, Document
 from fdi.platform.db.repository import (
     CostBySource,
     DocumentRepository,
     EvalRepository,
+    JobRepository,
     RegistryRepository,
     UsageEventRecord,
 )
@@ -135,6 +151,11 @@ log = structlog.get_logger(__name__)
 # could leak.
 router = APIRouter()
 public_router = APIRouter()
+
+# The caller's id, for routes that need identity (job ownership). FastAPI
+# caches a dependency per request, so this is the same decode the include-
+# level gate already did -- not a second verification.
+CurrentUserDep = Annotated[str, Depends(require_access_token)]
 
 
 @public_router.get("/health")
@@ -227,8 +248,42 @@ async def create_ping_job(
     return JobAccepted(job_id=doc_id, correlation_id=correlation_id, status="queued")
 
 
+@router.get("/jobs", response_model=JobListView)
+async def list_jobs(
+    session: SessionDep,
+    user_id: CurrentUserDep,
+    kind: JobKind | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> JobListView:
+    """The caller's own API jobs, newest first -- what a UI reloads to
+    recover a job it lost track of. Never anyone else's."""
+    jobs = await JobRepository(session).list_for_user(user_id, kind=kind, limit=limit)
+    return JobListView(jobs=[_api_job_view(job) for job in jobs])
+
+
+def _api_job_view(job: ApiJob) -> JobView:
+    return JobView(
+        job_id=job.id,
+        status=job.status,
+        kind=job.kind,
+        correlation_id=job.correlation_id,
+        error=job.error,
+    )
+
+
 @router.get("/jobs/{job_id}", response_model=JobView)
-async def get_job(job_id: str, session: SessionDep, store: StoreDep) -> JobView:
+async def get_job(
+    job_id: str, session: SessionDep, store: StoreDep, user_id: CurrentUserDep
+) -> JobView:
+    """An API job (T5) if the caller owns one with this id, else a ping job.
+
+    Ownership is part of the lookup (`get_for_user`): someone else's job is
+    a plain 404 -- the same answer as no job at all, so ids do not leak.
+    """
+    api_job = await JobRepository(session).get_for_user(job_id, user_id)
+    if api_job is not None:
+        return _api_job_view(api_job)
+
     repo = RegistryRepository(session)
     if await repo.get_document(job_id) is None:
         raise HTTPException(status_code=404, detail=f"job {job_id} not found")
@@ -255,6 +310,71 @@ async def get_job(job_id: str, session: SessionDep, store: StoreDep) -> JobView:
         artifact_url=artifact_url,
         error=run.error,
     )
+
+
+@router.get("/jobs/{job_id}/result", response_model=None)
+async def get_job_result(job_id: str, session: SessionDep, user_id: CurrentUserDep) -> object:
+    """A succeeded API job's body -- exactly what its route used to return
+    inline, re-validated through the same view so the shape is unchanged.
+    409 until the job has succeeded (poll GET /jobs/{id} for why not)."""
+    job = await JobRepository(session).get_for_user(job_id, user_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    if job.status != "succeeded":
+        raise HTTPException(
+            status_code=409, detail=f"job {job_id} has no result: it is {job.status}"
+        )
+    if job.kind == "ask":
+        return AskResponse.model_validate(job.result)
+    if job.kind == "extract":
+        return ExtractDocumentView.model_validate(job.result)
+    if job.kind == "eval":
+        return EvalResultView.model_validate(job.result)
+    if job.params.get("format") == "xbrl":
+        return Response(content=str(job.result), media_type="application/xml")
+    return job.result
+
+
+async def _submit_job(
+    session: AsyncSession,
+    dispatcher: JobDispatcher,
+    *,
+    user_id: str,
+    kind: str,
+    params: dict[str, object],
+    correlation_id: str,
+) -> JobAccepted:
+    """Persist the job, THEN publish: a worker that wins the race must find
+    the row. The submitting request's correlation id becomes the job's, so
+    the 202 the caller holds names every log line the worker writes."""
+    job_id = str(uuid.uuid4())
+    await JobRepository(session).create(
+        job_id=job_id, user_id=user_id, kind=kind, params=params,
+        correlation_id=correlation_id,
+    )
+    await session.commit()
+    try:
+        dispatcher.dispatch(job_id, correlation_id)
+    except Exception:
+        # No message means no worker will ever touch this row: fail it now,
+        # or it sits `queued` in the caller's job list forever. The publish
+        # error itself still propagates as the 500.
+        await JobRepository(session).mark_failed(job_id, "the job could not be queued")
+        await session.commit()
+        raise
+    log.info("job.queued", job_id=job_id, kind=kind)
+    return JobAccepted(job_id=job_id, correlation_id=correlation_id, status="queued")
+
+
+async def _require_indexed(session: AsyncSession, doc_key: str) -> None:
+    """Submit-time 404/409, so a request that can never succeed is refused
+    now instead of queueing a job that will only fail."""
+    try:
+        await indexed_document(session, doc_key)
+    except DocumentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DocumentNotIndexed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/docs/{doc_id}/stale", response_model=StaleView)
@@ -291,37 +411,24 @@ async def reprocess(
     return ReprocessView(dispatched=[from_])
 
 
-@router.post("/eval", response_model=EvalAccepted)
+@router.post("/eval", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
 async def run_eval_endpoint(
     body: EvalRequest,
-    session_factory: SessionFactoryDep,
-    store: StoreDep,
+    session: SessionDep,
     candidates: CandidatesDep,
-) -> EvalAccepted:
-    """Run one candidate against one dataset version, then persist + return it.
-
-    A missing dataset is not special-cased here: `run_evaluation` calls
-    `get_dataset` before it looks up the candidate, and a missing artifact
-    surfaces as whatever `ArtifactStore.get_json` raises -- left to become a
-    500 for this thin slice, since there is no dataset-upload endpoint yet to
-    make a 404 for "no such dataset" meaningfully actionable.
-    """
-    run_id = str(uuid.uuid4())
-    try:
-        aggregate = await run_evaluation(
-            run_id=run_id,
-            candidate_name=body.candidate,
-            dataset_name=body.dataset,
-            dataset_version=body.dataset_version,
-            session_factory=session_factory,
-            store=store,
-            candidates=candidates,
-        )
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=404, detail=f"candidate {body.candidate!r} not found"
-        ) from exc
-    return EvalAccepted(run_id=run_id, aggregate=aggregate)
+    dispatcher: JobDispatcherDep,
+    user_id: CurrentUserDep,
+    correlation_id: CorrelationIdDep,
+) -> JobAccepted:
+    """Queue one candidate against one dataset version (T5); the job's
+    result is `{run_id, aggregate}`. An unknown candidate is refused here;
+    a missing dataset surfaces as the failed job's error."""
+    if body.candidate not in candidates.all():
+        raise HTTPException(status_code=404, detail=f"candidate {body.candidate!r} not found")
+    return await _submit_job(
+        session, dispatcher, user_id=user_id, kind="eval",
+        params=body.model_dump(), correlation_id=correlation_id,
+    )
 
 
 @router.get("/datasets/{name}/leaderboard", response_model=LeaderboardView)
@@ -998,39 +1105,25 @@ async def reading_order_route(
 # --------------------------------------------------------------------------
 
 
-@router.post("/ask", response_model=AskResponse)
+@router.post("/ask", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
 async def ask(
     body: AskRequest,
     session: SessionDep,
-    store: StoreDep,
-    embedder: EmbedderDep,
-    vector_store: VectorStoreDep,
-    graph_store: GraphStoreDep,
-    entity_threshold: EntityThresholdDep,
     agent_client: AgentClientDep,
+    dispatcher: JobDispatcherDep,
+    user_id: CurrentUserDep,
     correlation_id: CorrelationIdDep,
-) -> AskResponse:
+) -> JobAccepted:
+    """Queue the agent loop (T5); poll GET /jobs/{id}, read /result."""
     if agent_client is None:
         raise HTTPException(
             status_code=503,
             detail="ask is not configured: missing agent_client (set FDI_GPT_ENDPOINT/FDI_GPT_KEY)",
         )
-    ctx = AgentContext(
-        session=session, store=store, embedder=embedder, vector_store=vector_store,
-        graph_store=graph_store, default_entity_threshold=entity_threshold,
-        correlation_id=correlation_id,
+    return await _submit_job(
+        session, dispatcher, user_id=user_id, kind="ask",
+        params=body.model_dump(), correlation_id=correlation_id,
     )
-    max_rounds = body.max_rounds if body.max_rounds is not None else 5
-    result = await answer_question(
-        question=body.question, ctx=ctx, agent_client=agent_client, max_rounds=max_rounds,
-    )
-    # answer_question may have written llm_usage_event rows via ctx.session
-    # (costing feature) -- this route previously never wrote anything, so
-    # it never needed to commit. RegistryRepository.record_llm_usage only
-    # flushes; the caller owns the commit, same convention as every other
-    # write path in this codebase.
-    await session.commit()
-    return AskResponse.model_validate(result)
 
 
 # --------------------------------------------------------------------------
@@ -1049,17 +1142,20 @@ async def ask(
 # --------------------------------------------------------------------------
 
 
-@router.post("/extract/document", response_model=ExtractDocumentView)
+@router.post(
+    "/extract/document", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted
+)
 async def extract_document_route(
     body: ExtractRequest,
     session: SessionDep,
-    store: StoreDep,
-    embedder: EmbedderDep,
-    vector_store: VectorStoreDep,
     extractor_client: ExtractorClientDep,
-    schema_path: ExtractionSchemaPathDep,
+    dispatcher: JobDispatcherDep,
+    user_id: CurrentUserDep,
     correlation_id: CorrelationIdDep,
-) -> ExtractDocumentView:
+) -> JobAccepted:
+    """Queue schema-driven extraction (T5). 503/404/409 are still answered
+    synchronously -- unconfigured client, unknown doc_key, pipeline not yet
+    indexed -- so only work that can succeed becomes a job."""
     if extractor_client is None:
         raise HTTPException(
             status_code=503,
@@ -1068,59 +1164,10 @@ async def extract_document_route(
                 "(set FDI_GPT_ENDPOINT/FDI_GPT_KEY)"
             ),
         )
-    versions = await DocumentRepository(session).list_by_doc_key(body.doc_key)
-    if not versions:
-        raise HTTPException(status_code=404, detail=f"no documents for doc_key {body.doc_key!r}")
-    doc = versions[-1]  # list_by_doc_key orders by version ascending -> last is latest
-    version = doc.version
-    if version is None:
-        # Document.version is nullable at the column level (early intake
-        # rows), but list_by_doc_key only ever returns rows created through
-        # intake_document, which always sets a real version -- this is an
-        # unexpected-state guard, not a normal 404/503 path.
-        raise HTTPException(
-            status_code=500, detail=f"document {doc.id} has no version"
-        )
-
-    # `index` is the pipeline's terminal stage (same rule document_outcome_
-    # counts uses to call a document "complete") -- until it is `done`,
-    # Milvus has no searchable chunks for this doc yet, so every retrieval
-    # unit's hybrid_search legitimately returns nothing and extraction would
-    # silently produce well-formed null records for every field (decision
-    # 10's "never raise" degrades a failed search, not an absent one; there
-    # is nothing here to distinguish the two without this check). A 409
-    # tells the caller to wait and retry, rather than looking like a
-    # document with no readable figures.
-    index_run = await RegistryRepository(session).latest_run(doc.id, "index")
-    if index_run is None or index_run.status != "done":
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "this document's pipeline has not finished indexing yet -- "
-                "retrieval would find nothing. Wait for all stages to "
-                "complete, then try again"
-            ),
-        )
-
-    schema, _source = await load_schema(store=store, seed_path=schema_path)
-    fields = parse_field_specs(schema, body.module)
-
-    ctx = ExtractContext(
-        session=session, store=store, embedder=embedder, vector_store=vector_store,
-        doc_id=doc.id, doc_key=body.doc_key, version=version,
-        correlation_id=correlation_id,
-    )
-    result = await extract_document(
-        ctx=ctx, fields=fields, client=extractor_client, force=body.force
-    )
-    # extract_document may have written llm_usage_event rows via ctx.session
-    # (costing feature) -- the extraction RECORD itself persists to the
-    # artifact store (_persist_extraction), not Postgres, so this route
-    # never needed to commit before. RegistryRepository.record_llm_usage
-    # only flushes; the caller owns the commit.
-    await session.commit()
-    return ExtractDocumentView.model_validate(
-        {"doc_key": body.doc_key, "module": body.module, **result}
+    await _require_indexed(session, body.doc_key)
+    return await _submit_job(
+        session, dispatcher, user_id=user_id, kind="extract",
+        params=body.model_dump(), correlation_id=correlation_id,
     )
 
 
@@ -1134,60 +1181,30 @@ async def extract_document_route(
 # --------------------------------------------------------------------------
 
 
-@router.post("/factsheet/document", response_model=None)
+@router.post(
+    "/factsheet/document", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted
+)
 async def factsheet_document_route(
     body: ExtractRequest,
     session: SessionDep,
-    store: StoreDep,
-    embedder: EmbedderDep,
-    vector_store: VectorStoreDep,
     extractor_client: ExtractorClientDep,
-    schema_path: ExtractionSchemaPathDep,
+    dispatcher: JobDispatcherDep,
+    user_id: CurrentUserDep,
+    correlation_id: CorrelationIdDep,
     fmt: str = Query(default="json", alias="format"),
-) -> object:
+) -> JobAccepted:
+    """Queue a factsheet (T5). `format` is fixed at submit: the result is the
+    JSON bundle, or -- for "xbrl" -- the instance document as application/xml."""
     if extractor_client is None:
         raise HTTPException(
             status_code=503,
             detail="factsheet is not configured: missing extractor_client",
         )
-    versions = await DocumentRepository(session).list_by_doc_key(body.doc_key)
-    if not versions:
-        raise HTTPException(status_code=404, detail=f"no documents for doc_key {body.doc_key!r}")
-    doc = versions[-1]
-    if doc.version is None:
-        raise HTTPException(status_code=500, detail=f"document {doc.id} has no version")
-
-    index_run = await RegistryRepository(session).latest_run(doc.id, "index")
-    if index_run is None or index_run.status != "done":
-        raise HTTPException(
-            status_code=409,
-            detail="this document's pipeline has not finished indexing yet -- retry later",
-        )
-
-    schema, _source = await load_schema(store=store, seed_path=schema_path)
-    fields = parse_field_specs(schema)  # whole schema: the factsheet spans all modules
-    ctx = ExtractContext(
-        session=session, store=store, embedder=embedder, vector_store=vector_store,
-        doc_id=doc.id, doc_key=body.doc_key, version=doc.version,
+    await _require_indexed(session, body.doc_key)
+    return await _submit_job(
+        session, dispatcher, user_id=user_id, kind="factsheet",
+        params={**body.model_dump(), "format": fmt}, correlation_id=correlation_id,
     )
-    result = await extract_document(
-        ctx=ctx, fields=fields, client=extractor_client, force=body.force
-    )
-    records = result.get("fields") if isinstance(result, dict) else None
-    records = records if isinstance(records, list) else []
-
-    bundle = document_factsheet(schema, records)
-
-    if fmt == "xbrl":
-        facts = bundle.get("facts")
-        facts_map = facts if isinstance(facts, dict) else {}
-        xml = export_instance(facts_map, entity=f"urn:fdi:{body.doc_key}")
-        return Response(content=xml, media_type="application/xml")
-
-    derived = bundle.get("derived")
-    bundle["calculation_arcs"] = calculation_arcs(derived if isinstance(derived, dict) else {})
-    bundle["doc_key"] = body.doc_key
-    return bundle
 
 
 # --------------------------------------------------------------------------

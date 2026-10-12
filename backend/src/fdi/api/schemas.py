@@ -12,11 +12,24 @@ class JobAccepted(BaseModel):
 
 
 class JobView(BaseModel):
+    """One job's status. Two sources share this view: a ping job (a stage
+    run -- `artifact_*` set, `kind` None, status in the stage vocabulary)
+    and an API job (T5 -- `kind` set, status queued/running/succeeded/
+    failed). An API job's body is at GET /jobs/{id}/result once it
+    succeeds; a failed one carries `error` and the `correlation_id` to
+    report it with."""
+
     job_id: str
     status: str
+    kind: str | None = None
+    correlation_id: str | None = None
     artifact_key: str | None = None
     artifact_url: str | None = None
     error: str | None = None
+
+
+class JobListView(BaseModel):
+    jobs: list[JobView]
 
 
 class ReadyView(BaseModel):
@@ -60,7 +73,9 @@ class EvalRequest(BaseModel):
     metric: str | None = None
 
 
-class EvalAccepted(BaseModel):
+class EvalResultView(BaseModel):
+    """The body of a succeeded eval job (formerly /eval's inline response)."""
+
     run_id: str
     aggregate: float
 

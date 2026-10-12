@@ -245,3 +245,25 @@ async def authenticate(client: AsyncClient, creds: tuple[str, str]) -> None:
     r.raise_for_status()
     token = r.json()["access_token"]
     client.headers["Authorization"] = f"Bearer {token}"
+
+
+def job_services(session_factory, store, **overrides):
+    """`JobServices` for playing the worker eagerly (T5): every client off
+    unless a test passes the fake its route was served."""
+    from fdi.pipeline.evaluation import CANDIDATES
+    from fdi.pipeline.jobs import JobServices
+
+    fields = {
+        "session_factory": session_factory,
+        "store": store,
+        "embedder": None,
+        "vector_store": None,
+        "graph_store": None,
+        "agent_client": None,
+        "extractor_client": None,
+        "entity_threshold": 0.85,
+        "extraction_schema_path": "",
+        "candidates": CANDIDATES,
+    }
+    fields.update(overrides)
+    return JobServices(**fields)

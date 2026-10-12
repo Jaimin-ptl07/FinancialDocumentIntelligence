@@ -40,11 +40,15 @@ import uuid
 import structlog
 from minio import Minio
 
+from fdi.pipeline import candidates as _candidates  # noqa: F401 - registers eval candidates
 from fdi.pipeline import stages as _stages  # noqa: F401 - registers built-in stages
+from fdi.pipeline.evaluation import CANDIDATES
+from fdi.pipeline.jobs import JobServices, execute_job
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.schema_store import load_schema
+from fdi.platform.agent import AzureOpenAIAgentClient
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
 from fdi.platform.embeddings import BgeEmbeddingClient
@@ -166,5 +170,45 @@ def run_stage_task(doc_id: str, stage_name: str, correlation_id: str = "") -> No
         successors = asyncio.run(_run_stage_async(doc_id, stage_name, run_id, corr))
         for nxt in successors:
             run_stage_task.apply_async(args=[doc_id, nxt], kwargs={"correlation_id": corr})
+    finally:
+        clear_correlation_id()
+
+
+async def _run_job_async(job_id: str, *, db_url: str | None = None) -> None:
+    """One API job (T5) on one event loop -- rule 4: the engine lives and dies
+    inside it. Clients are built exactly as the API builds them in lifespan,
+    so a job sees the same configuration its route validated against."""
+    settings = get_settings()
+    engine = make_engine(db_url or settings.database_url)
+    try:
+        store = ArtifactStore(_make_client(settings), bucket=settings.s3_bucket)
+        await store.ensure_bucket()
+        services = JobServices(
+            session_factory=make_session_factory(engine),
+            store=store,
+            embedder=BgeEmbeddingClient.from_settings(settings),
+            vector_store=MilvusVectorStore.from_settings(settings),
+            graph_store=Neo4jGraphStore.from_settings(settings),
+            agent_client=AzureOpenAIAgentClient.from_settings(settings),
+            extractor_client=AzureOpenAIExtractorClient.from_settings(settings),
+            entity_threshold=settings.entity_sim_threshold,
+            extraction_schema_path=settings.extraction_schema_path,
+            candidates=CANDIDATES,
+        )
+        await execute_job(job_id, services)
+    finally:
+        await engine.dispose()
+
+
+# Same `type: ignore` as run_stage_task, same reason (Celery is untyped).
+@app.task(name="fdi.run_job", bind=False)  # type: ignore[untyped-decorator]
+def run_job_task(job_id: str, correlation_id: str = "") -> None:
+    """Sync wrapper for an API job: rules 1-3 exactly as run_stage_task -- bind
+    the submitting request's correlation id before asyncio.run, unconditionally,
+    and clear it in finally, so the job's log lines carry the id the caller
+    got in its 202."""
+    bind_correlation_id(correlation_id or new_correlation_id())
+    try:
+        asyncio.run(_run_job_async(job_id))
     finally:
         clear_correlation_id()

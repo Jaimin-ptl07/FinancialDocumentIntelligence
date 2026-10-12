@@ -16,6 +16,7 @@ from sqlalchemy import (
     func,
     true,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -202,6 +203,42 @@ class AppUser(Base):
     active: Mapped[bool] = mapped_column(nullable=False, server_default=true())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ApiJob(Base):
+    """One polled request to an expensive route (T5): `/ask`, document
+    extraction, factsheet generation or an eval run.
+
+    `params` is the validated request the route accepted; `result` is the
+    body the route used to return inline -- JSON, or, for an XBRL factsheet,
+    the XML document as a JSON string. Status is its own vocabulary, not
+    `StageStatus`: a job SUCCEEDS (the caller's request was answered), a
+    stage is DONE (an artifact exists); conflating them would make the jobs
+    endpoint say `done` for ping runs and `succeeded` for these."""
+
+    __tablename__ = "api_job"
+    __table_args__ = (
+        CheckConstraint("kind IN ('ask','extract','factsheet','eval')", name="ck_api_job_kind"),
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed')", name="ck_api_job_status"
+        ),
+        Index("ix_api_job_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    params: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    result: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

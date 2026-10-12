@@ -31,6 +31,8 @@ assert "fdi.run_stage" not in app.tasks, (
 )
 app.loader.import_default_modules()
 print("REGISTERED" if "fdi.run_stage" in app.tasks else "MISSING")
+# T5: the API-job task rides the same module, so the same discovery must find it.
+print("JOB-REGISTERED" if "fdi.run_job" in app.tasks else "JOB-MISSING")
 """
 
 
@@ -84,6 +86,10 @@ def test_run_stage_task_is_registered_by_worker_boot_discovery(stub_fdi_env: Non
         "fdi.run_stage is NOT registered after the worker's own boot-time discovery "
         f"path ran. Every message the API dispatches would be rejected with "
         f"'Received unregistered task of type fdi.run_stage'.\n{detail}"
+    )
+    assert "JOB-REGISTERED" in result.stdout, (
+        "fdi.run_job is NOT registered by worker boot discovery -- every job "
+        f"the expensive routes queue would be rejected.\n{detail}"
     )
 
 
