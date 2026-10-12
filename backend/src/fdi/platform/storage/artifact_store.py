@@ -17,6 +17,37 @@ from typing import Any
 from minio import Minio
 
 from fdi.core.serialization import canonical_json
+from fdi.platform.config import Settings
+
+
+def build_presign_client(settings: Settings) -> Minio:
+    """A client built for the host-reachable endpoint, used ONLY to sign download URLs.
+
+    presigned_get_object embeds whatever endpoint and scheme its client was built
+    with, and the store client holds the in-network `minio:9000` -- a name a browser
+    cannot resolve. Endpoint falls back to s3_endpoint and scheme to s3_secure, so
+    where the in-network address IS client-reachable (tests) this changes nothing.
+    Behind the production edge it signs `https://<domain>/<bucket>/<key>`; SigV4
+    binds Host and path but not scheme, so the edge's plain-http hop to MinIO with
+    the Host header preserved still verifies.
+
+    region is REQUIRED, not cosmetic: presigned_get_object first calls _get_region,
+    which -- absent a constructor region -- issues a live GetBucketLocation to this
+    client's endpoint. That endpoint is the browser's view, deliberately NOT
+    reachable from inside the container, so the lookup would fail and turn every
+    /jobs/{id} with an artifact into a 500. A constructor region makes signing
+    touch no network. us-east-1 is MinIO's default and MUST match the server's
+    region or the signature is rejected; a non-MinIO S3 behind the public endpoint
+    in another region would need this made configurable.
+    """
+    public_secure = settings.s3_public_secure
+    return Minio(
+        settings.s3_public_endpoint or settings.s3_endpoint,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure if public_secure is None else public_secure,
+        region="us-east-1",
+    )
 
 
 class ArtifactStore:

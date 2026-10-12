@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     # to None: where the in-network address IS reachable by clients (single-host prod,
     # tests), presigning falls back to s3_endpoint and this is a no-op.
     s3_public_endpoint: str | None = None
+    # Scheme of presigned URLs, distinct from s3_secure (the in-network hop). Behind
+    # the production same-origin edge the store is reached over plain http at
+    # minio:9000, but the browser fetches `https://<domain>/<bucket>/...` -- an http
+    # link there is mixed content. None = follow s3_secure (dev, tests).
+    s3_public_secure: bool | None = None
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str = "artifacts"

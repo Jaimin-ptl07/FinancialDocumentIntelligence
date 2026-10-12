@@ -1,0 +1,218 @@
+# Production topology for the Gated demo -- a SEPARATE file, not an overlay:
+#
+#   docker compose -f docker/compose.prod.yml --env-file .env --profile graph up -d
+#
+# The only published ports are the edge's 80/443. The UI is served at / and the
+# API same-origin at /api/* (docker/Caddyfile), so the browser never crosses
+# origins. Every backend and infra service extends its dev definition in
+# compose.yml so the image
+# pins (MinIO's digest, ADR-0001), healthchecks and -- above all -- the
+# x-backend-env allowlist stay single-sourced; a second copy of that allowlist
+# would be the silent-drift trap compose.yml's header warns about. `!reset`
+# drops each dev service's host port publishes.
+#
+# Compose-only variables here are deliberately NOT FDI_-prefixed (see
+# .env.example): EDGE_DOMAIN (required), IMAGE_TAG (default latest).
+
+name: fdi
+
+x-logging: &logging
+  # Size-capped json-file rotation: at most 5 x 10 MB per container, so a chatty
+  # service cannot fill the host disk. `docker logs` keeps working.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-service: &service
+  <<: *logging
+  restart: unless-stopped
+
+# Topology-bound backend settings: fixed by this file's routing, not operator
+# choices, so they are pinned here rather than read from .env. Map-merged over
+# the inherited x-backend-env, which carries every other Settings field.
+x-edge-env: &edge-env
+  # Presigned artifact URLs are fetched from the public origin over HTTPS and
+  # forwarded by the edge to minio:9000 (docker/Caddyfile).
+  # A bare hostname (no scheme, no port): it is signed into every URL, so it must
+  # be exactly the Host the browser sends to the edge.
+  FDI_S3_PUBLIC_ENDPOINT: &edge-domain ${EDGE_DOMAIN:?EDGE_DOMAIN is required (the public hostname)}
+  FDI_S3_PUBLIC_SECURE: "true"
+  # The refresh cookie must be scoped to the PUBLIC path; the edge strips /api.
+  FDI_AUTH_COOKIE_PATH: /api/auth
+  # Same-origin: the browser never sends a cross-origin request, so this list
+  # is inert. Pinned to the public origin rather than dev's localhost:3000.
+  FDI_CORS_ORIGINS: '["https://${EDGE_DOMAIN}"]'
+
+x-backend-image: &backend-image
+  # What CI publishes (T9). `build:` is inherited from compose.yml, so a host
+  # without registry access can still build; deploy day is `pull`, not build.
+  image: ghcr.io/jaimin-ptl07/fdi-backend:${IMAGE_TAG:-latest}
+
+services:
+  edge:
+    <<: *service
+    image: caddy:2.10.2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      EDGE_DOMAIN: *edge-domain
+      EDGE_ARTIFACT_BUCKET: ${FDI_S3_BUCKET:-artifacts}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account: losing these on recreate would re-issue
+      # on every boot and hit the CA's rate limits.
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      api: {condition: service_healthy}
+      frontend: {condition: service_started}
+      minio: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  postgres:
+    <<: *service
+    extends: {file: compose.yml, service: postgres}
+    ports: !reset []
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1G}
+
+  minio:
+    <<: *service
+    extends: {file: compose.yml, service: minio}
+    # No console in production: nothing could reach it, so do not run it.
+    command: server /data
+    # ADR-0001's CVE acceptance assumes exactly this: no published ports. The
+    # edge forwards signed GETs on the artifact bucket and nothing else.
+    ports: !reset []
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  redis:
+    <<: *service
+    extends: {file: compose.yml, service: redis}
+    ports: !reset []
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  rabbitmq:
+    <<: *service
+    extends: {file: compose.yml, service: rabbitmq}
+    ports: !reset []
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  migrate:
+    # One-shot: no restart policy, it exits 0 and the api/worker gate on that.
+    <<: [*logging, *backend-image]
+    extends: {file: compose.yml, service: migrate}
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: [*service, *backend-image]
+    extends: {file: compose.yml, service: api}
+    ports: !reset []
+    environment: *edge-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        # BGE embeddings run in-process.
+        limits: {cpus: "1.5", memory: 2G}
+
+  worker:
+    <<: [*service, *backend-image]
+    extends: {file: compose.yml, service: worker}
+    environment: *edge-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 3G}
+
+  frontend:
+    <<: *service
+    image: ghcr.io/jaimin-ptl07/fdi-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend.prod.Dockerfile
+      # Inlined into the client bundle at build time: the API is same-origin.
+      args:
+        NEXT_PUBLIC_API_URL: /api
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  # ---- graph/vector tier: `--profile graph`. It is the demo's headline, but
+  # behind a profile so a trimmed deployment stays possible.
+
+  neo4j:
+    <<: *service
+    extends: {file: compose.yml, service: neo4j}
+    profiles: [graph]
+    ports: !reset []
+    environment:
+      # Explicit memory, or Neo4j sizes itself from HOST RAM and blows through
+      # the container limit below.
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 2G}
+
+  etcd:
+    <<: *service
+    extends: {file: compose.yml, service: etcd}
+    profiles: [graph]
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  milvus:
+    <<: *service
+    extends: {file: compose.yml, service: milvus}
+    profiles: [graph]
+    ports: !reset []
+    environment:
+      # Milvus otherwise logs into MinIO as minioadmin/minioadmin -- which only
+      # works in dev because dev .env happens to use those. Production root
+      # credentials are real secrets.
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    depends_on:
+      etcd: {condition: service_started}
+      minio: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 3G}
+
+# Plain named volumes on the VM's disk -- dev's bind-to-COMPOSE_DATA_ROOT
+# arrangement is a Docker Desktop workaround, not a production need.
+volumes:
+  pgdata:
+  miniodata:
+  redisdata:
+  rabbitdata:
+  neo4jdata:
+  etcddata:
+  milvusdata:
+  caddydata:
+  caddyconfig:

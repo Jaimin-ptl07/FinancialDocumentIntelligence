@@ -16,6 +16,9 @@ x-backend-env: &backend-env
   # artifact_url signed with it is dead in the address bar. This signs URLs a host
   # can fetch. A Settings field, so it MUST live in this allowlist.
   FDI_S3_PUBLIC_ENDPOINT: ${FDI_S3_PUBLIC_ENDPOINT}
+  # Scheme of those URLs, independent of FDI_S3_SECURE (the in-network hop).
+  # Unset = follow FDI_S3_SECURE; compose.prod.yml pins it true for the edge.
+  FDI_S3_PUBLIC_SECURE: ${FDI_S3_PUBLIC_SECURE}
   FDI_S3_ACCESS_KEY: ${FDI_S3_ACCESS_KEY}
   FDI_S3_SECRET_KEY: ${FDI_S3_SECRET_KEY}
   FDI_S3_BUCKET: ${FDI_S3_BUCKET}
