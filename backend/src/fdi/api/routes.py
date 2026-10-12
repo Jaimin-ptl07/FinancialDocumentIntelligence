@@ -21,6 +21,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.api import limits as ratelimit
 from fdi.api.auth import require_access_token
 from fdi.api.deps import (
     AgentClientDep,
@@ -33,6 +34,7 @@ from fdi.api.deps import (
     ExtractorClientDep,
     GraphStoreDep,
     JobDispatcherDep,
+    RateLimitsDep,
     ResolverDep,
     SessionDep,
     SessionFactoryDep,
@@ -338,31 +340,44 @@ async def get_job_result(job_id: str, session: SessionDep, user_id: CurrentUserD
 async def _submit_job(
     session: AsyncSession,
     dispatcher: JobDispatcher,
+    limits: ratelimit.RateLimits,
+    response: Response,
     *,
     user_id: str,
     kind: str,
     params: dict[str, object],
     correlation_id: str,
 ) -> JobAccepted:
-    """Persist the job, THEN publish: a worker that wins the race must find
-    the row. The submitting request's correlation id becomes the job's, so
-    the 202 the caller holds names every log line the worker writes."""
+    """Admit (T7), persist, THEN publish: a worker that wins the race must
+    find the row. The submitting request's correlation id becomes the job's,
+    so the 202 the caller holds names every log line the worker writes.
+
+    Admission holds the caller's submission lock until the commit below, so
+    the row is visible before the next submission counts jobs in flight."""
+    quota = await ratelimit.admit_job(session, limits, user_id)
     job_id = str(uuid.uuid4())
-    await JobRepository(session).create(
-        job_id=job_id, user_id=user_id, kind=kind, params=params,
-        correlation_id=correlation_id,
-    )
-    await session.commit()
     try:
-        dispatcher.dispatch(job_id, correlation_id)
-    except Exception:
-        # No message means no worker will ever touch this row: fail it now,
-        # or it sits `queued` in the caller's job list forever. The publish
-        # error itself still propagates as the 500.
-        await JobRepository(session).mark_failed(job_id, "the job could not be queued")
+        await JobRepository(session).create(
+            job_id=job_id, user_id=user_id, kind=kind, params=params,
+            correlation_id=correlation_id,
+        )
         await session.commit()
+        try:
+            dispatcher.dispatch(job_id, correlation_id)
+        except Exception:
+            # No message means no worker will ever touch this row: fail it
+            # now, or it sits `queued` in the caller's job list forever (and
+            # holds their concurrency slot). The publish error itself still
+            # propagates as the 500.
+            await JobRepository(session).mark_failed(job_id, "the job could not be queued")
+            await session.commit()
+            raise
+    except Exception:
+        # Admitted but never queued: nothing will be spent, so charge nothing.
+        await ratelimit.refund(limits, ratelimit.JOBS, user_id)
         raise
     log.info("job.queued", job_id=job_id, kind=kind)
+    ratelimit.set_quota_headers(response, quota)
     return JobAccepted(job_id=job_id, correlation_id=correlation_id, status="queued")
 
 
@@ -417,6 +432,8 @@ async def run_eval_endpoint(
     session: SessionDep,
     candidates: CandidatesDep,
     dispatcher: JobDispatcherDep,
+    limits: RateLimitsDep,
+    response: Response,
     user_id: CurrentUserDep,
     correlation_id: CorrelationIdDep,
 ) -> JobAccepted:
@@ -426,7 +443,7 @@ async def run_eval_endpoint(
     if body.candidate not in candidates.all():
         raise HTTPException(status_code=404, detail=f"candidate {body.candidate!r} not found")
     return await _submit_job(
-        session, dispatcher, user_id=user_id, kind="eval",
+        session, dispatcher, limits, response, user_id=user_id, kind="eval",
         params=body.model_dump(), correlation_id=correlation_id,
     )
 
@@ -464,6 +481,9 @@ def _view(doc: Document) -> DocumentView:
 async def upload_document(
     session_factory: SessionFactoryDep,
     store: StoreDep,
+    limits: RateLimitsDep,
+    response: Response,
+    user_id: CurrentUserDep,
     file: UploadFile = File(...),
     doc_key: str | None = Form(default=None),
 ) -> DocumentView:
@@ -475,14 +495,21 @@ async def upload_document(
         raise HTTPException(
             status_code=413, detail=f"file exceeds {get_settings().max_upload_mb} MB"
         )
-    doc = await intake_document(
-        pdf=data,
-        filename=file.filename or "upload.pdf",
-        doc_key=doc_key or file.filename or "upload.pdf",
-        content_type="application/pdf",
-        session_factory=session_factory,
-        store=store,
-    )
+    # Metered only once the upload is acceptable (T7): a 415/413 costs nothing.
+    quota = await ratelimit.admit_upload(limits, user_id)
+    try:
+        doc = await intake_document(
+            pdf=data,
+            filename=file.filename or "upload.pdf",
+            doc_key=doc_key or file.filename or "upload.pdf",
+            content_type="application/pdf",
+            session_factory=session_factory,
+            store=store,
+        )
+    except Exception:
+        await ratelimit.refund(limits, ratelimit.UPLOADS, user_id)
+        raise
+    ratelimit.set_quota_headers(response, quota)
     return _view(doc)
 
 
@@ -1111,6 +1138,8 @@ async def ask(
     session: SessionDep,
     agent_client: AgentClientDep,
     dispatcher: JobDispatcherDep,
+    limits: RateLimitsDep,
+    response: Response,
     user_id: CurrentUserDep,
     correlation_id: CorrelationIdDep,
 ) -> JobAccepted:
@@ -1121,7 +1150,7 @@ async def ask(
             detail="ask is not configured: missing agent_client (set FDI_GPT_ENDPOINT/FDI_GPT_KEY)",
         )
     return await _submit_job(
-        session, dispatcher, user_id=user_id, kind="ask",
+        session, dispatcher, limits, response, user_id=user_id, kind="ask",
         params=body.model_dump(), correlation_id=correlation_id,
     )
 
@@ -1150,6 +1179,8 @@ async def extract_document_route(
     session: SessionDep,
     extractor_client: ExtractorClientDep,
     dispatcher: JobDispatcherDep,
+    limits: RateLimitsDep,
+    response: Response,
     user_id: CurrentUserDep,
     correlation_id: CorrelationIdDep,
 ) -> JobAccepted:
@@ -1166,7 +1197,7 @@ async def extract_document_route(
         )
     await _require_indexed(session, body.doc_key)
     return await _submit_job(
-        session, dispatcher, user_id=user_id, kind="extract",
+        session, dispatcher, limits, response, user_id=user_id, kind="extract",
         params=body.model_dump(), correlation_id=correlation_id,
     )
 
@@ -1189,6 +1220,8 @@ async def factsheet_document_route(
     session: SessionDep,
     extractor_client: ExtractorClientDep,
     dispatcher: JobDispatcherDep,
+    limits: RateLimitsDep,
+    response: Response,
     user_id: CurrentUserDep,
     correlation_id: CorrelationIdDep,
     fmt: str = Query(default="json", alias="format"),
@@ -1202,7 +1235,7 @@ async def factsheet_document_route(
         )
     await _require_indexed(session, body.doc_key)
     return await _submit_job(
-        session, dispatcher, user_id=user_id, kind="factsheet",
+        session, dispatcher, limits, response, user_id=user_id, kind="factsheet",
         params={**body.model_dump(), "format": fmt}, correlation_id=correlation_id,
     )
 

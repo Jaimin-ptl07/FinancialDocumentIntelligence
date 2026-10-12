@@ -70,6 +70,15 @@ x-backend-env: &backend-env
   # the app's empty-is-unset env source reads it as monitoring OFF; nothing
   # at boot changes without a DSN. Set per deployment, never baked in.
   FDI_SENTRY_DSN: ${FDI_SENTRY_DSN}
+  # Per-Invitee rate limits (T7). All optional: unset = the code defaults
+  # (50 expensive jobs/day, 20 uploads/day, 1 job in flight, a UTC-day
+  # window, Redis = FDI_RESULT_BACKEND's).
+  FDI_RATE_LIMIT_REDIS_URL: ${FDI_RATE_LIMIT_REDIS_URL}
+  FDI_RATE_LIMIT_JOBS_PER_DAY: ${FDI_RATE_LIMIT_JOBS_PER_DAY}
+  FDI_RATE_LIMIT_UPLOADS_PER_DAY: ${FDI_RATE_LIMIT_UPLOADS_PER_DAY}
+  FDI_RATE_LIMIT_MAX_CONCURRENT_JOBS: ${FDI_RATE_LIMIT_MAX_CONCURRENT_JOBS}
+  FDI_RATE_LIMIT_WINDOW_SECONDS: ${FDI_RATE_LIMIT_WINDOW_SECONDS}
+  FDI_RATE_LIMIT_STALE_JOB_SECONDS: ${FDI_RATE_LIMIT_STALE_JOB_SECONDS}
 
 x-backend-build: &backend-build
   build:

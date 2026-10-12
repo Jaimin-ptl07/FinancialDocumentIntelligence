@@ -9,11 +9,13 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 from pydantic import ValidationError
+from redis.asyncio import Redis
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from fdi.api.auth import auth_router, require_access_token
 from fdi.api.errors import install_error_handlers
+from fdi.api.limits import EXPOSED_HEADERS, RateLimits
 from fdi.api.middleware import CorrelationIdMiddleware
 from fdi.api.routes import public_router, router
 from fdi.pipeline.registry import REGISTRY
@@ -26,6 +28,7 @@ from fdi.platform.extractor import AzureOpenAIExtractorClient
 from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import configure_logging
 from fdi.platform.obs.sentry import init_sentry
+from fdi.platform.ratelimit import DailyQuota
 from fdi.platform.storage.artifact_store import ArtifactStore, build_presign_client
 from fdi.platform.vectorstore import MilvusVectorStore
 
@@ -157,9 +160,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from fdi.pipeline.evaluation import CANDIDATES
 
     app.state.candidates = CANDIDATES
+
+    # T7: per-Invitee limits. A lazy client -- no connection until the first
+    # metered request -- so an unreachable Redis does not stop boot, matching
+    # the bucket reasoning above; a metered request then fails loudly (500)
+    # rather than admitting work it cannot count.
+    redis = Redis.from_url(settings.rate_limit_redis_url or settings.result_backend)
+    app.state.rate_limits = RateLimits(
+        quota=DailyQuota(redis, window_seconds=settings.rate_limit_window_seconds),
+        jobs_per_day=settings.rate_limit_jobs_per_day,
+        uploads_per_day=settings.rate_limit_uploads_per_day,
+        max_concurrent_jobs=settings.rate_limit_max_concurrent_jobs,
+        stale_job_seconds=settings.rate_limit_stale_job_seconds,
+    )
     try:
         yield
     finally:
+        await redis.aclose()
         await engine.dispose()
 
 
@@ -246,6 +263,8 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Without this a cross-origin script cannot read quota headers (T7).
+        expose_headers=EXPOSED_HEADERS,
     )
     # Public by design (ADR-0002): the three /auth session routes, plus /health
     # and /ready for infrastructure probes. Everything else -- the `router`

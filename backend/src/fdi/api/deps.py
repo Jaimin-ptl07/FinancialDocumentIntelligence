@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fdi.api.limits import RateLimits
 from fdi.pipeline.agent import AgentClient
 from fdi.pipeline.dispatch import StageDispatcher
 from fdi.pipeline.embeddings import EmbeddingClient
@@ -75,6 +76,12 @@ def get_job_dispatcher(request: Request) -> JobDispatcher:
     for the same reason: only the composition root may name the task."""
     job_dispatcher: JobDispatcher = request.app.state.job_dispatcher
     return job_dispatcher
+
+
+def get_rate_limits(request: Request) -> RateLimits:
+    """The per-Invitee limits (T7), built in lifespan around one Redis client."""
+    limits: RateLimits = request.app.state.rate_limits
+    return limits
 
 
 def get_resolver(request: Request) -> DagResolver:
@@ -147,6 +154,7 @@ StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
 DispatcherDep = Annotated[StageDispatcher, Depends(get_dispatcher)]
 JobDispatcherDep = Annotated[JobDispatcher, Depends(get_job_dispatcher)]
+RateLimitsDep = Annotated[RateLimits, Depends(get_rate_limits)]
 ResolverDep = Annotated[DagResolver, Depends(get_resolver)]
 SessionFactoryDep = Annotated["async_sessionmaker[AsyncSession]", Depends(get_session_factory)]
 CandidatesDep = Annotated[CandidateRegistry, Depends(get_candidates)]

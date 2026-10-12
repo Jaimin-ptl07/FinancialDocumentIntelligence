@@ -3,7 +3,7 @@ theirs, not ours."""
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TypedDict
 
 import sqlalchemy
@@ -1114,6 +1114,33 @@ class JobRepository:
         if kind is not None:
             stmt = stmt.where(ApiJob.kind == kind)
         stmt = stmt.order_by(ApiJob.created_at.desc(), ApiJob.id).limit(limit)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def lock_submissions(self, user_id: str) -> None:
+        """Serialise this user's job submissions until the transaction ends
+        (T7). Without it, two parallel tabs both count zero jobs in flight
+        and both pass a cap of one. A transaction-scoped advisory lock: it is
+        released by the commit or rollback, so it cannot leak."""
+        await self._s.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"api_job:{user_id}", 0)))
+        )
+
+    async def in_flight_ids(self, user_id: str, *, stale_after_seconds: int) -> list[str]:
+        """Ids of this user's jobs still queued or running, oldest first --
+        ignoring any whose status has not moved for `stale_after_seconds`,
+        which a lost worker would otherwise hold forever."""
+        cutoff = func.now() - sqlalchemy.literal(
+            timedelta(seconds=stale_after_seconds), sqlalchemy.Interval
+        )
+        stmt = (
+            select(ApiJob.id)
+            .where(
+                ApiJob.user_id == user_id,
+                ApiJob.status.in_(("queued", "running")),
+                ApiJob.updated_at > cutoff,
+            )
+            .order_by(ApiJob.created_at, ApiJob.id)
+        )
         return list((await self._s.execute(stmt)).scalars().all())
 
     async def mark_running(self, job_id: str) -> None:

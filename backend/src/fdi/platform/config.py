@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import EnvSettingsSource, PydanticBaseSettingsSource
 
@@ -254,6 +254,25 @@ class Settings(BaseSettings):
     # project's ingest endpoint and is set per deployment, not per image --
     # like every FDI_ var it is injected at runtime and never baked in.
     sentry_dsn: str | None = None
+
+    # Per-Invitee rate limits (productionization T7): they bound what one
+    # Invitee can spend on Azure. Checked when a job is submitted
+    # (fdi.api.limits). Two daily quotas, kept as Redis counters in a fixed
+    # window aligned to the epoch (86400 s => resets at 00:00 UTC):
+    # submissions to the four expensive job routes (/ask, /extract/document,
+    # /factsheet/document, /eval share one quota), and uploads. Plus a cap on
+    # expensive jobs in flight (queued or running) at once, counted from
+    # api_job itself. A job that has not changed status for
+    # stale_job_seconds no longer counts, so a lost worker cannot lock an
+    # Invitee out for good -- the trade-off being that a job legitimately
+    # running longer than that stops holding its slot (workers set no task
+    # time limit to pair it with). redis_url None = FDI_RESULT_BACKEND's Redis.
+    rate_limit_redis_url: str | None = None
+    rate_limit_jobs_per_day: int = Field(default=50, ge=1)
+    rate_limit_uploads_per_day: int = Field(default=20, ge=1)
+    rate_limit_max_concurrent_jobs: int = Field(default=1, ge=1)
+    rate_limit_window_seconds: int = Field(default=86_400, ge=1)
+    rate_limit_stale_job_seconds: int = Field(default=7_200, ge=1)
 
     @classmethod
     def settings_customise_sources(
