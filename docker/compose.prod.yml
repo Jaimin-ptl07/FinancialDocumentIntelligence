@@ -20,13 +20,16 @@
 name: fdi
 
 x-logging: &logging
-  # Size-capped json-file rotation: at most 5 x 10 MB per container, so a chatty
-  # service cannot fill the host disk. `docker logs` keeps working.
+  # journald, not json-file: spec #3 (story 30) wants logs RETAINED 14-30 days,
+  # and json-file can only cap by size -- a chatty service would rotate away its
+  # own history within hours. The host journal enforces retention by time AND
+  # size (deploy-day runbook §1 owns the numbers), so the disk stays bounded too.
+  # `docker logs` keeps working (Docker's dual logging); `journalctl` reaches
+  # further back. The tag names each line by container (`journalctl -t fdi-api-1`).
   logging:
-    driver: json-file
+    driver: journald
     options:
-      max-size: "10m"
-      max-file: "5"
+      tag: "{{.Name}}"
 
 x-service: &service
   <<: *logging

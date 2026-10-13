@@ -97,6 +97,16 @@ jobs:
             echo "::error::services publishing host ports: ${published:-none} (expected only edge)"
             exit 1
           fi
+      # Log retention (spec #3, story 30) is enforced by the host journal
+      # (docs/operations/deploy-day-runbook.md §1);
+      # a service on any other driver escapes it -- json-file only caps by size.
+      - name: Every service logs to journald
+        run: |
+          stray=$(docker compose -f docker/compose.prod.yml --env-file .env.example --profile graph config --format json             | jq -r '.services | to_entries[] | select(.value.logging.driver != "journald") | .key')
+          if [ -n "$stray" ]; then
+            echo "::error::services not logging to journald: $stray"
+            exit 1
+          fi
 
   # ---- publish: main only, after every gate. Deploy day is a pull, not a build.
   #

@@ -80,6 +80,21 @@ but the constraint is the table above: **x86_64, ≥ 16 GB RAM, ≥ 80 GB disk, 
       curl -fsSL https://get.docker.com | sudo sh
       sudo docker compose version   # must print v2.24+ (compose.prod.yml uses !reset)
       ```
+- [ ] Set log retention. Every service logs to the host journal (`logging: journald` in
+      `docker/compose.prod.yml`), so retention is decided here — this step is the single source
+      of the numbers: **30 days, capped at 4 GB**, kept on disk across reboots, and **no rate
+      limit** (dockerd writes every container's lines as one journal client, so the default
+      10 000-lines/30 s budget would silently drop lines from a traceback storm — exactly the
+      incident you need to read later; the size cap is the disk protection):
+      ```bash
+      sudo mkdir -p /etc/systemd/journald.conf.d
+      printf '[Journal]\nStorage=persistent\nMaxRetentionSec=30day\nSystemMaxUse=4G\nRateLimitIntervalSec=0\n' |
+        sudo tee /etc/systemd/journald.conf.d/fdi.conf
+      sudo systemctl restart systemd-journald
+      sudo systemd-analyze cat-config systemd/journald.conf | grep -E 'MaxRetentionSec|SystemMaxUse|RateLimit'
+      ```
+      The size cap wins if a service gets very chatty; if `journalctl --disk-usage` sits near
+      4 GB with well under 14 days kept, raise `SystemMaxUse` (the 80 GB disk has room).
 - [ ] Nothing else gets installed on the VM: every tool below runs inside a stack container
       (`pg_restore` in `postgres`, `mc` in the mirrored MinIO image, `fdi-admin` / `fdi-mirror`
       in `api`).
@@ -395,6 +410,8 @@ Run it as an **Invitee** would, in a private browser window, after everything ab
       refresh). **Sign out** returns to the login page, and reloading any page asks for login again.
 - [ ] `dc logs --since 30m api worker | grep -i error` shows nothing unexpected; Sentry (if
       configured) has no new issues.
+- [ ] Logs reach the host journal (retention depends on it, §1):
+      `sudo journalctl CONTAINER_NAME=fdi-api-1 -n 3` prints recent api lines.
 
 When every box is ticked, send the invitations.
 
@@ -405,7 +422,8 @@ When every box is ticked, send the invitations.
 | Task | Command |
 |---|---|
 | Status | `dc ps` |
-| Logs (rotated 5×10 MB per container) | `dc logs -f --since 1h api worker` |
+| Logs (host journal, retention per §1) | Recent: `dc logs -f --since 1h api worker` (Docker's local cache — small, and lost on recreate). Anything older: `journalctl CONTAINER_NAME=fdi-worker-1 --since -7d` |
+| Log retention depth | `journalctl --disk-usage`; oldest kept line: `journalctl -o short-iso \| head -1` — should reach ≥ 14 days back once the box is that old |
 | Upgrade to a new commit | `git fetch && git checkout <sha>`, set `IMAGE_TAG=sha-<short>` in `.env`, `dc pull && dc up -d` |
 | Revoke an Invitee | `dc exec api fdi-admin deactivate-user --email <x>` (refresh refused at once; access token expires ≤ 15 min) |
 | Re-verify storage | `dc exec api fdi-mirror check` |
