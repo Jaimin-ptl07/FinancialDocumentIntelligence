@@ -300,6 +300,19 @@ class RegistryRepository:
             )
         ).scalars().first()
 
+    async def completed_runs(self) -> list[StageRun]:
+        """Every run, corpus-wide, that recorded an artifact -- the set of
+        objects the store must hold for this database to be consistent with it
+        (`fdi-mirror check`). Ordered for a deterministic report."""
+        rows = (
+            await self._s.execute(
+                sqlalchemy.select(StageRun)
+                .where(StageRun.status == "done", StageRun.artifact_key.is_not(None))
+                .order_by(StageRun.doc_id, StageRun.stage_name, StageRun.created_at)
+            )
+        ).scalars().all()
+        return list(rows)
+
     async def list_documents(self) -> list[Document]:
         """Every document in the corpus, ordered by id (deterministic).
 

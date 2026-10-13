@@ -133,6 +133,10 @@ class ArtifactStore:
 
         return await asyncio.to_thread(_stat)
 
+    async def delete(self, key: str) -> None:
+        """Delete one object. S3 DELETE is idempotent: an absent key is not an error."""
+        await asyncio.to_thread(self._client.remove_object, self._bucket, key)
+
     async def delete_prefix(self, prefix: str) -> None:
         """Delete every object under `prefix`. `remove_objects` takes a lazy
         iterable of `DeleteObject`s and returns a lazy iterable of errors --

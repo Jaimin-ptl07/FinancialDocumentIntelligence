@@ -52,6 +52,8 @@ build-backend = "hatchling.build"
 # with the package so the deployed image has it -- `docker compose exec api
 # fdi-admin ...`.
 fdi-admin = "fdi.platform.admin_cli:main"
+# The deploy-day data-mirror check and graph/vector replay (T10 runbook).
+fdi-mirror = "fdi.workers.mirror_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fdi"]

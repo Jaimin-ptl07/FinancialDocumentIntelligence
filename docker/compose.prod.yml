@@ -2,6 +2,9 @@
 #
 #   docker compose -f docker/compose.prod.yml --env-file .env --profile graph up -d
 #
+# Standing it up on a fresh VM (sizing, DNS, secrets, data mirror, smoke test)
+# is docs/operations/deploy-day-runbook.md.
+#
 # The only published ports are the edge's 80/443. The UI is served at / and the
 # API same-origin at /api/* (docker/Caddyfile), so the browser never crosses
 # origins. Every backend and infra service extends its dev definition in
