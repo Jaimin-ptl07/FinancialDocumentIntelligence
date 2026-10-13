@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege by default; only the publish jobs widen it (packages: write).
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -43,11 +47,11 @@ jobs:
       # (see Task 21). CI covers source correctness (lint/type/contract/unit) and
       # the testcontainers-backed integration layer; the full walking-skeleton
       # round-trip and the browser check are proven at build time against a live
-      # stack, not in this workflow. Neither does this workflow BUILD the Docker
-      # images -- the backend gates run under uv, the frontend under pnpm -- so a
-      # green run does not by itself prove the deployable image. Wiring an image
-      # build + compose round-trip into CI is a follow-up for the first task that
-      # owns a deployment target.
+      # stack, not in this workflow. The gates run under uv/pnpm; the deployable
+      # images are built only on main, by `images` below, after these pass. That
+      # build bakes the BGE weights and runs a warmup embed, so a broken image
+      # fails there -- but nothing here boots the composed stack; that is the
+      # deploy-day runbook's smoke test (T10).
 
   frontend:
     runs-on: ubuntu-latest
@@ -66,3 +70,170 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run build
+
+  # Renders both compose files exactly as an operator would, with .env.example
+  # standing in for the deploy-day .env: a broken `extends`, a bad `!reset`, a
+  # required variable (`${EDGE_DOMAIN:?}`) the example no longer sets, or a
+  # malformed edit fails here instead of on the VM. Env-NAME drift (Settings vs
+  # x-backend-env vs .env.example) is a unit test, tests/unit/test_compose_env.py,
+  # run by the backend job -- compose cannot see it, since an unknown or missing
+  # FDI_ name renders as valid YAML.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dev compose renders
+        run: docker compose -f docker/compose.yml --env-file .env.example --profile graph --profile ui config --quiet
+      - name: Production compose renders
+        run: docker compose -f docker/compose.prod.yml --env-file .env.example --profile graph config --quiet
+      # ADR-0001's CVE acceptance assumes MinIO has no published port, and the
+      # whole Gated demo assumes nothing but the edge is reachable. `!reset`
+      # makes that true today; a new service extending a dev one would quietly
+      # inherit the dev publishes, and still render.
+      - name: Only the edge publishes ports
+        run: |
+          published=$(docker compose -f docker/compose.prod.yml --env-file .env.example --profile graph config --format json             | jq -r '.services | to_entries[] | select((.value.ports // []) | length > 0) | .key')
+          if [ "$published" != "edge" ]; then
+            echo "::error::services publishing host ports: ${published:-none} (expected only edge)"
+            exit 1
+          fi
+
+  # ---- publish: main only, after every gate. Deploy day is a pull, not a build.
+  #
+  # Each architecture builds on a NATIVE runner (the repo is public, so the arm64
+  # runner is free) rather than under QEMU: the backend build executes a warmup
+  # embed through onnxruntime, which emulation makes slow and less trustworthy.
+  # Each leg pushes a bare digest; `images-merge` stitches the digests into one
+  # multi-arch manifest and tags it. (docker docs: "Distribute build across
+  # multiple runners".)
+  images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, compose]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        image: [backend, frontend]
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          # `ref` must match the `image:` names in docker/compose.prod.yml --
+          # deploy day pulls exactly these (tests/unit/test_compose_env.py holds
+          # them together). Lowercase: GHCR refuses mixed-case repository names,
+          # and the GitHub owner is spelled `Jaimin-ptl07`.
+          - image: backend
+            ref: ghcr.io/jaimin-ptl07/fdi-backend
+            context: .
+            dockerfile: backend/Dockerfile
+            # Same default as compose.yml's x-backend-build arg.
+            build-args: FDI_EMBED_MODEL=BAAI/bge-small-en-v1.5
+          - image: frontend
+            ref: ghcr.io/jaimin-ptl07/fdi-frontend
+            context: frontend
+            dockerfile: docker/frontend.prod.Dockerfile
+            # Inlined into the client bundle: the API is same-origin behind the edge.
+            build-args: NEXT_PUBLIC_API_URL=/api
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # `backend-linux-arm64`: names this leg's cache scope and digest artifact.
+      - name: Leg slug
+        id: leg
+        run: |
+          platform='${{ matrix.platform }}'
+          echo "slug=${{ matrix.image }}-${platform//\//-}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ matrix.ref }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      # GITHUB_TOKEN is the repo's own Actions secret, scoped to this run by the
+      # `packages: write` grant above -- no registry credential lives in the repo.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ matrix.build-args }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ matrix.ref }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.leg.outputs.slug }}
+          cache-to: type=gha,mode=max,scope=${{ steps.leg.outputs.slug }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest='${{ steps.build.outputs.digest }}'
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.leg.outputs.slug }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  images-merge:
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: backend
+            ref: ghcr.io/jaimin-ptl07/fdi-backend
+          - image: frontend
+            ref: ghcr.io/jaimin-ptl07/fdi-frontend
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+
+      # Traceable tags: `sha-<short>` names the exact commit (pin IMAGE_TAG to it
+      # on deploy day); `latest` is compose.prod.yml's default.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ matrix.ref }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          mapfile -t tags < <(jq -r '.tags[] | "-t", .' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          sources=()
+          for digest in *; do sources+=("${{ matrix.ref }}@sha256:${digest}"); done
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+
+      - name: Inspect
+        run: docker buildx imagetools inspect '${{ matrix.ref }}:${{ steps.meta.outputs.version }}'
