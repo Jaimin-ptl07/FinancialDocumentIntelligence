@@ -40,6 +40,24 @@ _Avoid_: "document" when the Report is meant (a document is one uploaded PDF), "
 The reporting period a Report covers, written `FY2025-26` for the year ending 31 March 2026 (the Indian April–March year). Distinct from when the Report was published.
 _Avoid_: "FY26", "2025" (ambiguous between the year a period starts, ends or is published)
 
+## Extraction
+
+**Extraction schema**:
+A named list of Fields an Invitee wants read out of Reports. Published versions never change; editing produces the next version. FDI ships one standard Extraction schema; an Invitee's own schemas start empty or as a copy of it.
+_Avoid_: "template", "form", "the schema" (ambiguous with database schemas)
+
+**Field**:
+One thing to read from a Report — its name, meaning, data type, unit and instructions. A Field's identity survives across versions; its definition may change between them.
+_Avoid_: "column", "attribute", "tag" (a tag is the standard schema's code for a Field, e.g. `PATR`)
+
+**Extraction run**:
+One request to read a set of Fields from a set of Reports with one Extraction schema version. Only Fields whose result is missing or out of date cost anything.
+_Avoid_: "job" (a job is how any long request is queued, not what it does)
+
+**Extracted value**:
+What an Extraction run read for one Field in one Report, with its source location. An Invitee may correct it; the value as read is kept beside the correction.
+_Avoid_: "fact" (a financial fact is the canonical, cross-Report observation — S5)
+
 **Workspace**:
 An Invitee's working set of Companies — a view for focusing research, never an access boundary. Two Workspaces holding the same Company see the same reports and facts.
 _Avoid_: "tenant", "organization", "account"
