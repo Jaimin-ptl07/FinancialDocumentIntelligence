@@ -25,3 +25,13 @@ _Avoid_: using "production" to mean merely "runs in Docker"
 **Public filing**:
 The only class of document the Gated demo accepts — annual reports and filings published on public exchanges.
 _Avoid_: "client document", "private financials" (out of scope by decision, 2026-10-07)
+
+## Companies
+
+**Company**:
+The issuer behind a set of Public filings, identified by its corporate registration number (CIN) and known by many names (aliases, tickers). One Company publishes many reports across years. Shared by every Invitee — Public filings carry no per-user ownership.
+_Avoid_: "entity" (overloaded with cross-document entity clustering), "tenant", "client"
+
+**Workspace**:
+An Invitee's working set of Companies — a view for focusing research, never an access boundary. Two Workspaces holding the same Company see the same reports and facts.
+_Avoid_: "tenant", "organization", "account"
