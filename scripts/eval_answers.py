@@ -39,7 +39,13 @@ from pathlib import Path
 
 import httpx
 
-from fdi.core.answer_scoring import EndpointAnswer, EvalReport, KindSummary, score_run
+from fdi.core.answer_scoring import (
+    Citation,
+    EndpointAnswer,
+    EvalReport,
+    KindSummary,
+    score_run,
+)
 from fdi.core.benchmark import (
     Benchmark,
     BenchmarkError,
@@ -160,10 +166,35 @@ class AskJobAdapter:
         result = await self._client.get(f"/jobs/{job_id}/result")
         if result.status_code != 200:
             return failed(f"GET /jobs/{job_id}/result returned {result.status_code}")
-        answer = result.json().get("answer")
+        body = result.json()
+        answer = body.get("answer")
         if not isinstance(answer, str):
             return failed(f"job {job_id} result carries no answer text")
-        return EndpointAnswer(item_id=item.id, answer=answer)
+        raw = body.get("citations")
+        return EndpointAnswer(
+            item_id=item.id, answer=answer,
+            citations=tuple(_citation(c) for c in raw if isinstance(c, Mapping))
+            if isinstance(raw, list) else (),
+        )
+
+
+def _citation(raw: Mapping[str, object]) -> Citation:
+    """One `/ask` citation (AskCitationView: every key present, most null)
+    as a `Citation`. A value of the wrong type is dropped, never coerced: a
+    citation with a garbled page must not become valid by accident."""
+
+    def text(key: str) -> str | None:
+        value = raw.get(key)
+        return value if isinstance(value, str) else None
+
+    def integer(key: str) -> int | None:
+        value = raw.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    return Citation(
+        doc_key=text("doc_key"), page=integer("page"), doc_id=text("doc_id"),
+        table_index=integer("table_index"), row_label=text("row_label"),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -231,14 +262,22 @@ def report_json(
     report: EvalReport, stamp: Mapping[str, object], answers: Mapping[str, str | None]
 ) -> dict[str, object]:
     def summary(s: KindSummary) -> dict[str, object]:
-        return {**asdict(s), "accuracy": s.accuracy}
+        return {
+            **asdict(s), "accuracy": s.accuracy, "citation_validity": s.citation_validity,
+            "evidence_support_rate": s.evidence_support_rate,
+            "completion_rate": s.completion_rate,
+        }
 
     return {
         "stamp": dict(stamp),
         "benchmark_size": report.benchmark_size,
         "overall": summary(report.overall),
         "by_kind": {kind: summary(s) for kind, s in report.by_kind.items()},
-        "items": [{**asdict(i), "answer": answers.get(i.item_id)} for i in report.items],
+        "items": [
+            {**asdict(i), "citation_validity": i.citation_validity,
+             "answer": answers.get(i.item_id)}
+            for i in report.items
+        ],
     }
 
 
@@ -256,12 +295,36 @@ def render_markdown(report: EvalReport, stamp: Mapping[str, object]) -> str:
         f"| {kind} | {s.run} | {s.correct} | {s.wrong} | {s.failed} | {s.accuracy:.1%} |"
         for kind, s in rows
     ]
+    lines += [
+        "",
+        "## Task completion",
+        "",
+        "Completed = every gold value stated AND at least one citation on a gold "
+        "evidence page.",
+        "",
+        "| kind | run | completed | completion | supported | evidence support "
+        "| citations | valid | citation validity |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    lines += [
+        f"| {kind} | {s.run} | {s.completed} | {s.completion_rate:.1%} | {s.supported} "
+        f"| {s.evidence_support_rate:.1%} | {s.citations} | {s.valid_citations} "
+        f"| {s.citation_validity:.1%} |"
+        for kind, s in rows
+    ]
     misses = [i for i in report.items if i.status != "correct"]
     if misses:
         lines += ["", "## Not correct", "", "| item | status | reason |", "|---|---|---|"]
         lines += [
             f"| `{i.item_id}` | {i.status} | {i.reason.replace('|', '/')} |" for i in misses
         ]
+    unsupported = [i for i in report.items if i.status == "correct" and not i.completed]
+    if unsupported:
+        lines += ["", "## Correct but not completed", "",
+                  "No citation on a gold evidence page.", "",
+                  "| item | citations | valid |", "|---|---:|---:|"]
+        lines += [f"| `{i.item_id}` | {i.citations} | {i.valid_citations} |"
+                  for i in unsupported]
     return "\n".join(lines) + "\n"
 
 

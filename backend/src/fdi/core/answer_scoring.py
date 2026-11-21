@@ -37,6 +37,15 @@ the gold sign. An unsigned figure matches on magnitude: "current tax was
 ₹2,681.75 lakh" correctly answers a value REMC prints as (2,681.75), because
 the sign there is presentation, and the words carry the direction.
 
+CORRECT IS NOT COMPLETED
+------------------------
+A citation is valid only when its Report `doc_key` and page are one of the
+item's gold evidence locations. An item is completed only when it is
+correct AND at least one citation is valid (§16.2): a fluent, correct
+number that cites the wrong page, or nothing, is a failed task. Citation
+validity, evidence support and completion are reported beside accuracy,
+never blended into it.
+
 Pure (`fdi.core` law): no I/O, no LLM, deterministic.
 """
 
@@ -54,6 +63,19 @@ ItemStatus = Literal["correct", "wrong", "failed"]
 
 
 @dataclass(frozen=True)
+class Citation:
+    """One source an answer cites, in endpoint-neutral form. Only `doc_key`
+    and `page` decide validity; `doc_id`, `table_index` and `row_label` are
+    carried for the report reader when the endpoint supplies them."""
+
+    doc_key: str | None = None
+    page: int | None = None
+    doc_id: str | None = None
+    table_index: int | None = None
+    row_label: str | None = None
+
+
+@dataclass(frozen=True)
 class EndpointAnswer:
     """What the answering endpoint returned for one item, already normalised
     by its adapter so the scorer never sees a wire format. `error` is set
@@ -62,32 +84,68 @@ class EndpointAnswer:
     item_id: str
     answer: str | None
     error: str | None = None
+    citations: tuple[Citation, ...] = ()
 
 
 @dataclass(frozen=True)
 class ItemScore:
     """`status` is "failed" when the endpoint never gave an answer. `reason`
-    says why an item is not correct; empty when it is."""
+    says why an item is not correct; empty when it is.
+
+    A citation is VALID when its (`doc_key`, page) is one of the item's gold
+    evidence locations; "cited something" is not "cited the source". The
+    item is `supported` when at least one citation is valid, and `completed`
+    -- the task outcome (§16.2) -- when it is correct AND supported. A
+    correct number nobody can trace to its source is a failed task."""
 
     item_id: str
     kind: str
     status: ItemStatus
     reason: str
+    citations: int
+    valid_citations: int
+    supported: bool
+    completed: bool
+
+    @property
+    def citation_validity(self) -> float:
+        """Valid citations over citations given; 0.0 when none were given."""
+        return self.valid_citations / self.citations if self.citations else 0.0
 
 
 @dataclass(frozen=True)
 class KindSummary:
-    """Counts over a set of scored items: one kind's, or the whole run's."""
+    """Counts over a set of scored items: one kind's, or the whole run's.
+    Every rate is over items RUN, so a failed item counts against it."""
 
     run: int
     correct: int
     wrong: int
     failed: int
+    citations: int
+    valid_citations: int
+    supported: int
+    completed: int
 
     @property
     def accuracy(self) -> float:
         """Correct over items RUN: a failed item is a miss, never excused."""
         return self.correct / self.run if self.run else 0.0
+
+    @property
+    def citation_validity(self) -> float:
+        """Valid citations over ALL citations given across the items."""
+        return self.valid_citations / self.citations if self.citations else 0.0
+
+    @property
+    def evidence_support_rate(self) -> float:
+        """Items with at least one valid citation, over items run."""
+        return self.supported / self.run if self.run else 0.0
+
+    @property
+    def completion_rate(self) -> float:
+        """Completed tasks (correct AND supported) over items run."""
+        return self.completed / self.run if self.run else 0.0
 
 
 @dataclass(frozen=True)
@@ -228,12 +286,23 @@ def _summarise(scores: Sequence[ItemScore]) -> KindSummary:
     return KindSummary(
         run=len(statuses), correct=statuses.count("correct"),
         wrong=statuses.count("wrong"), failed=statuses.count("failed"),
+        citations=sum(s.citations for s in scores),
+        valid_citations=sum(s.valid_citations for s in scores),
+        supported=sum(s.supported for s in scores),
+        completed=sum(s.completed for s in scores),
     )
 
 
 def _score_item(item: BenchmarkItem, answer: EndpointAnswer) -> ItemScore:
+    gold_pages = {(e.doc_key, e.page) for e in item.gold.evidence}
+    valid = sum((c.doc_key, c.page) in gold_pages for c in answer.citations)
+
     def score(status: ItemStatus, reason: str = "") -> ItemScore:
-        return ItemScore(item_id=item.id, kind=item.kind, status=status, reason=reason)
+        return ItemScore(
+            item_id=item.id, kind=item.kind, status=status, reason=reason,
+            citations=len(answer.citations), valid_citations=valid,
+            supported=valid > 0, completed=status == "correct" and valid > 0,
+        )
 
     if answer.error is not None or answer.answer is None:
         return score("failed", answer.error or "no answer returned")

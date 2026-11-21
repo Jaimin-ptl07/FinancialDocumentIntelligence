@@ -2,8 +2,8 @@
 answering endpoint said, and what the score must be -- never how it is
 computed. Expected values are worked by hand from the printed figures."""
 
-from fdi.core.answer_scoring import EndpointAnswer, score_run
-from fdi.core.benchmark import parse_benchmark
+from fdi.core.answer_scoring import Citation, EndpointAnswer, ItemScore, score_run
+from fdi.core.benchmark import Benchmark, parse_benchmark
 
 
 def _bench(*values: tuple[float, str, float], kind: str = "fact_lookup", item_id: str = "q1"):
@@ -176,3 +176,142 @@ def test_aggregation_counts_per_kind_and_overall() -> None:
     assert kind.accuracy == 0.5
     assert report.overall == kind
     assert report.benchmark_size == 4
+
+
+# --------------------------------------------------------------------------
+# Citations and task completion: a correct number is not enough (§16.2).
+# --------------------------------------------------------------------------
+
+
+def _cited_bench(*values: tuple[float, str, float]) -> Benchmark:
+    """One item whose gold answer is printed on tcs-2025-26 page 362."""
+    return parse_benchmark({
+        "version": "v-test",
+        "items": [{
+            "id": "q1",
+            "kind": "fact_lookup",
+            "question": "What was revenue?",
+            "gold": {
+                "answerable": True,
+                "values": [{"value": v, "unit": u, "tolerance": t} for v, u, t in values],
+                "evidence": [{"doc_key": "tcs-2025-26", "page": 362}],
+            },
+        }],
+    })
+
+
+def _cited(
+    answer: str | None,
+    *citations: Citation,
+    values: tuple[tuple[float, str, float], ...] = (_REVENUE,),
+) -> ItemScore:
+    report = score_run(
+        _cited_bench(*values),
+        [EndpointAnswer(item_id="q1", answer=answer, citations=citations)],
+    )
+    return report.items[0]
+
+
+_GOLD_PAGE = Citation(doc_key="tcs-2025-26", page=362)
+
+
+def test_a_correct_answer_citing_the_gold_page_is_completed() -> None:
+    item = _cited("Revenue was ₹2,71,423 crore.", _GOLD_PAGE)
+    assert item.status == "correct"
+    assert item.completed
+
+
+def test_a_correct_answer_citing_the_wrong_page_is_not_completed() -> None:
+    item = _cited("Revenue was ₹2,71,423 crore.", Citation(doc_key="tcs-2025-26", page=361))
+    assert item.status == "correct"
+    assert not item.completed
+
+
+def test_the_gold_page_of_another_report_is_not_a_valid_citation() -> None:
+    item = _cited("Revenue was ₹2,71,423 crore.", Citation(doc_key="ril-2025-26", page=362))
+    assert not item.completed
+
+
+def test_a_correct_answer_with_no_citation_is_not_completed() -> None:
+    item = _cited("Revenue was ₹2,71,423 crore.")
+    assert item.status == "correct"
+    assert not item.completed
+
+
+def test_a_wrong_answer_citing_the_gold_page_is_not_completed() -> None:
+    item = _cited("Revenue was ₹2,55,324 crore.", _GOLD_PAGE)
+    assert item.status == "wrong"
+    assert not item.completed
+
+
+def test_a_multi_value_item_completes_only_with_every_value() -> None:
+    both = ((7.55, "INR", 0.005), (7.54, "INR", 0.005))
+    assert _cited("Basic 7.55, diluted 7.54.", _GOLD_PAGE, values=both).completed
+    assert not _cited("Basic and diluted were both 7.55.", _GOLD_PAGE, values=both).completed
+
+
+def test_citation_validity_is_the_share_of_an_items_citations_on_a_gold_page() -> None:
+    item = _cited(
+        "Revenue was ₹2,71,423 crore.",
+        _GOLD_PAGE, Citation(doc_key="tcs-2025-26", page=12),
+        Citation(doc_key=None, page=None, doc_id="d-1"), _GOLD_PAGE,
+    )
+    assert (item.citations, item.valid_citations) == (4, 2)
+    assert item.citation_validity == 0.5
+    assert item.supported
+
+
+def test_an_item_with_no_valid_citation_is_unsupported() -> None:
+    uncited = _cited("Revenue was ₹2,71,423 crore.")
+    assert (uncited.citations, uncited.valid_citations, uncited.supported) == (0, 0, False)
+    assert uncited.citation_validity == 0.0
+    off_page = _cited("Revenue was ₹2,71,423 crore.", Citation(doc_key="tcs-2025-26", page=1))
+    assert (off_page.citations, off_page.valid_citations, off_page.supported) == (1, 0, False)
+
+
+def test_support_and_completion_rates_aggregate_per_kind_and_overall() -> None:
+    def item(item_id: str, kind: str) -> dict[str, object]:
+        return {"id": item_id, "kind": kind, "question": "?",
+                "gold": {"answerable": True,
+                         "values": [{"value": 10.0, "unit": "INR crore", "tolerance": 0.5}],
+                         "evidence": [{"doc_key": "acme", "page": 3}]}}
+
+    bench = parse_benchmark({"version": "v-test", "items": [
+        item("f0", "fact_lookup"), item("f1", "fact_lookup"), item("f2", "fact_lookup"),
+        item("f3", "fact_lookup"), item("c0", "cross_company"),
+    ]})
+    gold, off = Citation(doc_key="acme", page=3), Citation(doc_key="acme", page=4)
+    report = score_run(bench, [
+        EndpointAnswer(item_id="f0", answer="10", citations=(gold, off)),  # completed
+        EndpointAnswer(item_id="f1", answer="10", citations=(off,)),  # correct, unsupported
+        EndpointAnswer(item_id="f2", answer="11", citations=(gold,)),  # supported, wrong
+        EndpointAnswer(item_id="f3", answer=None, error="HTTP 500"),  # failed
+        EndpointAnswer(item_id="c0", answer="10", citations=(gold,)),  # completed
+    ])
+
+    fact = report.by_kind["fact_lookup"]
+    assert (fact.citations, fact.valid_citations, fact.supported, fact.completed) == (4, 2, 2, 1)
+    assert fact.citation_validity == 0.5
+    assert fact.evidence_support_rate == 0.5
+    assert fact.completion_rate == 0.25
+
+    cross = report.by_kind["cross_company"]
+    assert (cross.completed, cross.completion_rate, cross.evidence_support_rate) == (1, 1.0, 1.0)
+
+    overall = report.overall
+    assert (overall.citations, overall.valid_citations) == (5, 3)
+    assert overall.citation_validity == 0.6
+    assert overall.evidence_support_rate == 0.6
+    assert overall.completion_rate == 0.4
+
+
+def test_rates_over_no_items_are_zero() -> None:
+    o = score_run(_cited_bench(_REVENUE), []).overall
+    assert (o.citation_validity, o.evidence_support_rate, o.completion_rate) == (0.0, 0.0, 0.0)
+
+
+def test_a_failed_item_is_not_completed_whatever_it_cites() -> None:
+    report = score_run(_cited_bench(_REVENUE), [EndpointAnswer(
+        item_id="q1", answer=None, error="HTTP 500", citations=(_GOLD_PAGE,),
+    )])
+    assert not report.items[0].completed
