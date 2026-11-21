@@ -108,6 +108,18 @@ _Avoid_: "confirmation dialog", "review" (review is for Extracted values)
 
 ## Research
 
+**Research session**:
+A saved, named investigation of one Company — its question, the Agent runs that worked on it, and the Findings they verified — that an Invitee can reopen and extend later.
+_Avoid_: "conversation" (a Conversation is the message thread; a Research session is what is kept from it), "project"
+
+**Finding**:
+A conclusion within a Research session — "operating margin fell 2.1 points in FY2025-26, mostly from employee costs" — built from Claims and their Evidence, with its own verification status.
+_Avoid_: "claim" (a Claim is one checkable statement; a Finding groups them into a conclusion), "insight"
+
+**Research report**:
+A document FDI writes from a Research session's verified Findings — analysis, multi-year comparison, risk summary — with every figure cited. Never confused with a Report (an issuer's annual report).
+_Avoid_: "report" on its own, "export"
+
 **Evidence**:
 A located piece of one Report version — a passage, a table, a table cell, a page, or a financial fact — that an answer can point at. Its identity comes from where it is in the Report, never from how it was found or how well it ranked, so the same passage found two ways is the same Evidence.
 _Avoid_: "chunk" (a chunk is how text is indexed, one possible kind of Evidence), "source", "context"
