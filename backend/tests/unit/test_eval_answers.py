@@ -12,6 +12,7 @@ import pytest
 
 from fdi.core.answer_scoring import Citation, EndpointAnswer, EvalReport, score_run
 from fdi.core.benchmark import Benchmark, BenchmarkItem, Evidence, Gold, GoldValue
+from fdi.core.eval_cost import summarise_cost
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
@@ -76,6 +77,57 @@ def _ask_stack(result: Mapping[str, object]) -> httpx.MockTransport:
     return httpx.MockTransport(handle)
 
 
+def _fake_stack(capsys: pytest.CaptureFixture[str], printed_before_ask: list[str]):
+    """A scripted FDI API: two earlier succeeded /ask jobs that cost 0.20 and
+    0.40 INR (and a failed one, which is no evidence of cost), then answers
+    to this run's items, each billed 1,200 + 80 tokens = 0.25 INR."""
+    answers = iter(["ACME's total assets were ₹100 crore.", "Total assets: ₹90 crore."])
+    usage = {
+        "old-1": (900, 40, 0.20), "old-2": (1_800, 90, 0.40),
+        "cid-0": (1_200, 80, 0.25), "cid-1": (1_200, 80, 0.25),
+    }
+    submitted: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/auth/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        if path == "/jobs" and request.method == "GET":
+            assert request.url.params["kind"] == "ask"
+            return httpx.Response(200, json={"jobs": [
+                {"job_id": "o1", "status": "succeeded", "kind": "ask", "correlation_id": "old-1"},
+                {"job_id": "o2", "status": "succeeded", "kind": "ask", "correlation_id": "old-2"},
+                {"job_id": "o3", "status": "failed", "kind": "ask", "correlation_id": "old-3"},
+            ]})
+        if path.startswith("/usage/"):
+            cid = path.removeprefix("/usage/")
+            in_tok, out_tok, cost = usage[cid]
+            return httpx.Response(200, json={
+                "correlation_id": cid, "call_count": 2, "input_tokens": in_tok,
+                "output_tokens": out_tok, "duration_ms": 10, "cost_inr": cost, "by_source": [],
+            })
+        if path == "/ask":
+            if not submitted:
+                printed_before_ask.append(capsys.readouterr().out)
+            n = len(submitted)
+            submitted.append(f"j{n}")
+            return httpx.Response(202, json={"job_id": f"j{n}", "correlation_id": f"cid-{n}",
+                                             "status": "queued"})
+        if path.endswith("/result"):
+            # Both answers cite the gold page; only q0's figure is right.
+            return httpx.Response(200, json={
+                "answer": next(answers), "tool_trace": [],
+                "citations": [{"doc_key": "acme-2025-26", "page": 7}],
+            })
+        if path.startswith("/jobs/"):
+            n = path.removeprefix("/jobs/j")
+            return httpx.Response(200, json={"job_id": f"j{n}", "status": "succeeded",
+                                             "kind": "ask", "correlation_id": f"cid-{n}"})
+        raise AssertionError(f"unexpected {request.method} {path}")
+
+    return httpx.MockTransport(handle)
+
+
 async def test_the_ask_adapter_normalises_todays_citation_shape() -> None:
     """The wire shape is AskCitationView: every key present, most of them
     null for any one tool's citation."""
@@ -117,6 +169,9 @@ async def test_the_ask_adapter_skips_citation_values_of_the_wrong_type() -> None
     assert answer.citations == (Citation(),)
 
 
+_NO_COST = summarise_cost([], ())
+
+
 def _two_item_report() -> EvalReport:
     """q1 correct and cited on the gold page; q2 correct but cited off it."""
     bench = Benchmark(version="v-test", items=(_ITEM, replace(_ITEM, id="q2")))
@@ -129,7 +184,7 @@ def _two_item_report() -> EvalReport:
 
 def test_the_json_report_carries_citation_and_completion_per_item_kind_and_overall() -> None:
     # Through JSON, as a reader of report.json sees it.
-    body = json.loads(dump(report_json(_two_item_report(), {}, {})))
+    body = json.loads(dump(report_json(_two_item_report(), {}, {}, _NO_COST)))
     q1, q2 = body["items"]
     assert (q1["citations"], q1["valid_citations"], q1["citation_validity"]) == (2, 1, 0.5)
     assert (q1["supported"], q1["completed"]) == (True, True)
@@ -142,10 +197,10 @@ def test_the_json_report_carries_citation_and_completion_per_item_kind_and_overa
 
 
 def test_the_markdown_summary_has_a_completion_table_and_lists_unsupported_answers() -> None:
-    summary = render_markdown(_two_item_report(), {})
+    summary = render_markdown(_two_item_report(), {}, {}, _NO_COST)
     assert "| fact_lookup | 2 | 1 | 50.0% | 1 | 50.0% | 3 | 1 | 33.3% |" in summary
     assert "| **overall** | 2 | 1 | 50.0% | 1 | 50.0% | 3 | 1 | 33.3% |" in summary
-    unsupported = summary.split("## Correct but not completed")[1]
+    unsupported = summary.split("## Correct but not completed")[1].split("\n## ")[0]
     assert "`q2`" in unsupported
     assert "`q1`" not in unsupported
 
@@ -157,3 +212,78 @@ async def test_an_ask_result_with_no_citations_key_has_no_citations() -> None:
 
     assert answer.answer == "Revenue was ₹2,71,423 crore."
     assert answer.citations == ()
+
+
+def _two_item_benchmark(directory: Path) -> Path:
+    def item(n: int) -> dict[str, object]:
+        return {
+            "id": f"fact_lookup:acme:q{n}", "kind": "fact_lookup",
+            "question": f"What were ACME's total assets? (q{n})",
+            "gold": {"answerable": True,
+                     "values": [{"value": 100.0, "unit": "INR crore", "tolerance": 0.5}],
+                     "evidence": [{"doc_key": "acme-2025-26", "page": 7}]},
+        }
+
+    directory.mkdir()
+    (directory / "fact_lookup.json").write_text(
+        json.dumps({"version": "v-test", "items": [item(0), item(1)]}), encoding="utf-8"
+    )
+    return directory
+
+
+def test_run_prints_its_expected_spend_before_the_first_billed_call_and_reports_cost(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    printed_before_ask: list[str] = []
+    out_dir = tmp_path / "out"
+    code = main(
+        ["run", "--endpoint", "http://fdi.test", "--out-dir", str(out_dir), "--limit", "2",
+         "--email", "eval@example.test", "--password", "pw",
+         "--benchmark", str(_two_item_benchmark(tmp_path / "bench"))],
+        transport=_fake_stack(capsys, printed_before_ask),
+    )
+    assert code == 0
+
+    # 2 items x the 0.30 INR average of the two recent succeeded jobs.
+    assert printed_before_ask, "no /ask was ever submitted"
+    assert "expected spend: INR 0.60" in printed_before_ask[0]
+    assert "2 recent /ask job(s)" in printed_before_ask[0]
+
+    body = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    first = body["items"][0]
+    assert first["correlation_id"] == "cid-0"
+    assert (first["input_tokens"], first["output_tokens"]) == (1_200, 80)
+    assert first["cost_inr"] == pytest.approx(0.25)
+    assert first["latency_s"] >= 0.0
+    cost = body["cost"]
+    assert cost["cost_inr"] == pytest.approx(0.50)
+    # Only q0 is completed, so it carries both items' spend.
+    assert cost["completed"] == 1
+    assert cost["cost_per_completed_task_inr"] == pytest.approx(0.50)
+    assert cost["latency_by_kind"]["fact_lookup"]["count"] == 2
+
+    summary = (out_dir / "report.md").read_text(encoding="utf-8")
+    assert "| kind | items | P50 latency (s) | P95 latency (s) |" in summary
+    assert "cost per completed task**: INR 0.5000" in summary
+    assert "| `fact_lookup:acme:q0` | correct |" in summary
+
+
+def test_with_no_recent_usage_the_run_says_it_cannot_estimate_and_still_runs_its_limit(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        if request.url.path == "/jobs":
+            return httpx.Response(200, json={"jobs": []})
+        return httpx.Response(503, json={"detail": "agent_client"})
+
+    main(
+        ["run", "--endpoint", "http://fdi.test", "--out-dir", str(tmp_path / "out"),
+         "--limit", "1", "--email", "e", "--password", "p",
+         "--benchmark", str(_two_item_benchmark(tmp_path / "bench"))],
+        transport=httpx.MockTransport(handle),
+    )
+    out = capsys.readouterr().out
+    assert "no recent /ask usage to estimate from" in out
+    assert "[1/1]" in out

@@ -50,6 +50,7 @@ from fdi.api.schemas import (
     ConceptLookupView,
     CorpusCostView,
     CorpusTotalsView,
+    CorrelationUsageView,
     CostBySourceView,
     DocumentCostSummaryView,
     DocumentCostView,
@@ -719,6 +720,32 @@ async def document_cost(doc_id: str, session: SessionDep) -> DocumentCostView:
     return DocumentCostView(
         doc_id=doc_id,
         total_cost_inr=sum(r.cost_inr for r in by_source),
+        by_source=by_source,
+    )
+
+
+@router.get("/usage/{correlation_id}", response_model=CorrelationUsageView)
+async def correlation_usage(
+    correlation_id: str, session: SessionDep, user_id: CurrentUserDep
+) -> CorrelationUsageView:
+    """The LLM spend billed under a correlation id the caller's own job
+    carries (S1.3). Ownership is the lookup's precondition: an id no job of
+    theirs carries -- someone else's, or nobody's -- is a plain 404, the
+    same answer either way, so ids do not leak."""
+    if not await JobRepository(session).owns_correlation_id_for_user(correlation_id, user_id):
+        raise HTTPException(status_code=404, detail=f"no job with correlation id {correlation_id}")
+    settings = get_settings()
+    by_source = [
+        _priced_source(r, settings)
+        for r in await RegistryRepository(session).correlation_cost_by_source(correlation_id)
+    ]
+    return CorrelationUsageView(
+        correlation_id=correlation_id,
+        call_count=sum(s.call_count for s in by_source),
+        input_tokens=sum(s.input_tokens for s in by_source),
+        output_tokens=sum(s.output_tokens for s in by_source),
+        duration_ms=sum(s.duration_ms for s in by_source),
+        cost_inr=sum(s.cost_inr for s in by_source),
         by_source=by_source,
     )
 

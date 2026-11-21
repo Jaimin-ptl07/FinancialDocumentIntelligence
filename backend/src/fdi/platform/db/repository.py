@@ -560,6 +560,33 @@ class RegistryRepository:
         events.sort(key=lambda e: e["created_at"], reverse=True)
         return events
 
+    async def correlation_cost_by_source(self, correlation_id: str) -> list[CostBySource]:
+        """Every LLM usage source billed under one correlation id -- one
+        API job's spend, whatever document (or none, for /ask) it touched.
+        OCR is not included: no API job runs OCR inline."""
+        rows = (
+            await self._s.execute(
+                select(
+                    LlmUsageEvent.source,
+                    func.count(),
+                    func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.duration_ms), 0),
+                )
+                .where(LlmUsageEvent.correlation_id == correlation_id)
+                .group_by(LlmUsageEvent.source)
+                .order_by(LlmUsageEvent.source)
+            )
+        ).all()
+        return [
+            CostBySource(
+                source=str(source), call_count=int(count), page_count=0,
+                input_tokens=int(in_tok), output_tokens=int(out_tok),
+                duration_ms=int(dur),
+            )
+            for source, count, in_tok, out_tok, dur in rows
+        ]
+
     async def corpus_cost_totals(self) -> CorpusCostTotals:
         """Every billable event corpus-wide, including /ask's doc_id=NULL
         rows -- the "grand total" figure for GET /analytics."""
@@ -1119,6 +1146,17 @@ class JobRepository:
     async def get_for_user(self, job_id: str, user_id: str) -> ApiJob | None:
         stmt = select(ApiJob).where(ApiJob.id == job_id, ApiJob.user_id == user_id)
         return (await self._s.execute(stmt)).scalar_one_or_none()
+
+    async def owns_correlation_id_for_user(self, correlation_id: str, user_id: str) -> bool:
+        """Whether this user has a job carrying `correlation_id` -- the gate
+        in front of reading that id's usage, so a route reads only spend the
+        caller's own job made."""
+        stmt = select(
+            sqlalchemy.exists().where(
+                ApiJob.correlation_id == correlation_id, ApiJob.user_id == user_id
+            )
+        )
+        return bool((await self._s.execute(stmt)).scalar())
 
     async def list_for_user(
         self, user_id: str, *, kind: str | None = None, limit: int = 50

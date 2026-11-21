@@ -214,6 +214,12 @@ async def test_run_eval_scores_ask_answers_end_to_end(
     assert body["items"][0]["completed"] is True
     assert body["items"][2]["completed"] is False
     assert body["by_kind"]["fact_lookup"]["completion_rate"] == 0.25
+    # Usage was read back through the real GET /usage/{correlation_id}: the
+    # fake model reports none, so each item is priced, at zero.
+    assert body["items"][0]["correlation_id"]
+    assert (body["items"][0]["input_tokens"], body["items"][0]["cost_inr"]) == (0, 0.0)
+    assert body["cost"]["items_without_usage"] == 0
+    assert body["cost"]["completed"] == 1
 
     summary = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "`abc123`" in summary
