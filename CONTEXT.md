@@ -94,6 +94,14 @@ _Avoid_: "step", "subtask"
 A progress record an Agent run emits for the Invitee to follow — a specialist started, a tool was called, Evidence was found, the run finished. Never the model's private reasoning.
 _Avoid_: "log", "trace", "thought"
 
+**Conversation**:
+An Invitee's ongoing thread of questions and answers, usually about one Company. Each question starts an Agent run; later questions can build on what earlier runs verified.
+_Avoid_: "chat session", "thread" (a thread is the runtime's checkpoint identity)
+
+**Claim**:
+One checkable statement inside an answer — a figure ("TCS's FY2025-26 consolidated PAT was ₹49,454 crore") or a qualitative statement ("margins fell because of higher employee costs") — tied to the Evidence it rests on. Every Claim is verified, unsupported, contradicted or inconclusive.
+_Avoid_: "fact" (a Financial fact is FDI's stored value; a Claim is something an answer asserts), "finding" for a single statement
+
 **Approval**:
 An Agent run's request for an Invitee's yes or no before an action that changes or deletes data. The run waits until it is answered.
 _Avoid_: "confirmation dialog", "review" (review is for Extracted values)
