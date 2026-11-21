@@ -35,3 +35,14 @@ class Stage(Protocol):
     deps: tuple[str, ...]
 
     async def run(self, ctx: StageContext) -> object: ...
+
+    def key_material(self, services: Mapping[str, object]) -> str:
+        """Extra cache-key material from INJECTED SERVICES, or "".
+
+        `run_stage` keys an artifact on its declared deps' output hashes plus
+        `version`. A stage whose output also depends on something handed to it
+        through `services` -- the taxonomy schema, a prompt template -- is
+        outside that key, so changing it changes the answer while the stale
+        artifact is served forever. Returning a digest of that input closes
+        the hole without making services a dependency edge."""
+        return ""

@@ -13,6 +13,15 @@ from fdi.pipeline.stages import (
     embedding as embedding,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
+    fog_mapping as fog_mapping,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
+    fog_objects as fog_objects,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
+    fog_reason as fog_reason,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
     graph as graph,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
@@ -30,6 +39,9 @@ from fdi.pipeline.stages import (
 from fdi.pipeline.stages import (
     normalize as normalize,  # noqa: F401 - import for its registration side effect
 )
+from fdi.pipeline.stages import (
+    note_index as note_index,  # noqa: F401 - import for its registration side effect
+)
 from fdi.pipeline.stages import ocr as ocr  # noqa: F401 - import for its registration side effect
 from fdi.pipeline.stages import (
     ontology as ontology,  # noqa: F401 - import for its registration side effect
@@ -43,6 +55,9 @@ from fdi.pipeline.stages import (
 )
 from fdi.pipeline.stages import (
     semantic as semantic,  # noqa: F401 - import for its registration side effect
+)
+from fdi.pipeline.stages import (
+    statement_index as statement_index,  # noqa: F401 - import for its registration side effect
 )
 from fdi.pipeline.stages import (
     structure as structure,  # noqa: F401 - import for its registration side effect

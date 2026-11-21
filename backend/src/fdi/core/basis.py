@@ -225,3 +225,62 @@ def page_basis(basis_artifact: Mapping[str, object], page: int | None) -> str:
             return basis
 
     return default
+
+
+def basis_regions(basis_artifact: Mapping[str, object]) -> list[tuple[str, int, int]]:
+    """Well-formed `(basis, start_page, end_page)` regions, in document order.
+    Total: a malformed artifact yields []."""
+    out: list[tuple[str, int, int]] = []
+    regions = basis_artifact.get("regions") if isinstance(basis_artifact, Mapping) else None
+    if not isinstance(regions, list):
+        return out
+    for region in regions:
+        if not isinstance(region, Mapping):
+            continue
+        start = region.get("start_page")
+        end = region.get("end_page")
+        basis = region.get("basis")
+        if not isinstance(start, int) or isinstance(start, bool):
+            continue
+        if not isinstance(end, int) or isinstance(end, bool):
+            continue
+        if not isinstance(basis, str) or not basis or end < start:
+            continue
+        out.append((basis, start, end))
+    return out
+
+
+def resolve_effective_basis(
+    basis_artifact: Mapping[str, object], preference: str
+) -> str:
+    """The ONE basis a whole document should be read against.
+
+    Basis must be decided per DOCUMENT, not per retrieval unit. The per-unit
+    fallback ("if filtering to the preference would empty this pool, keep it
+    unfiltered") is correct in isolation and wrong in aggregate: on a
+    consolidated-only filing it lets a unit whose pool happens to contain a
+    standalone page filter to standalone while its neighbour falls back to
+    consolidated. Measured on RIL FY2025-26, that produced total non-current
+    assets from page 58 and total current liabilities from page 100 -- two
+    different statement sets -- and a balance sheet out by 998,799.
+
+    Resolution: honour `preference` when the document actually HAS that basis;
+    otherwise adopt the basis it does have (the largest region when several
+    compete). Returns `preference` unchanged when there is nothing to go on, so
+    a document with no basis artifact behaves exactly as before.
+    """
+    regions = basis_regions(basis_artifact)
+    if not regions or preference == "both":
+        return preference
+    if any(basis == preference for basis, _, _ in regions):
+        return preference
+    widest = max(regions, key=lambda r: (r[2] - r[1], -r[1]))
+    return widest[0]
+
+
+def basis_is_ambiguous(basis_artifact: Mapping[str, object]) -> bool:
+    """True when the document carries MORE THAN ONE basis, i.e. when falling
+    back to an unfiltered pool could silently mix statement sets. A document
+    with a single basis (or none) cannot mix, so the fallback stays safe there.
+    """
+    return len({basis for basis, _, _ in basis_regions(basis_artifact)}) > 1

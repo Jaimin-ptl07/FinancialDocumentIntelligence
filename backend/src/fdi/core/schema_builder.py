@@ -59,11 +59,35 @@ def _extraction_prompt(particulars: str, statement: str) -> str:
     )
 
 
+def _unique_tag(tag: str, seen: set[str]) -> str:
+    """A tag used once. Later reuses get a numbered variant.
+
+    The taxonomy reuses `WCL` for two structurally different concepts --
+    working-capital loans (children WCLI/WCLB/WCLO) at sr 1.2, and Buyers Credit
+    (children STBYCRD/LTBYCRD) at sr 1.3. Disambiguating only `field_path` (as
+    this builder used to) leaves both concepts sharing one tag, and every
+    tag-keyed structure downstream -- `by_tag`, `all_concepts`, `for_tag`, the
+    XBRL export -- keeps whichever it saw first and silently discards the other.
+    A concept that cannot be addressed cannot be extracted, so the second one
+    was permanently unreachable.
+
+    The customer's own code is preserved on the node as `taxonomy_tag`, so the
+    mapping back to their sheet is never lost."""
+    if tag not in seen:
+        seen.add(tag)
+        return tag
+    n = 2
+    while f"{tag}{n}" in seen:
+        n += 1
+    out = f"{tag}{n}"
+    seen.add(out)
+    return out
+
+
 def _leaf_node(
-    row: Mapping[str, object], statement: str, field_path: str
+    row: Mapping[str, object], statement: str, field_path: str, tag: str
 ) -> dict[str, object]:
     particulars = str(row.get("particulars") or "")
-    tag = str(row.get("tag") or "")
     origin = str(row.get("origin") or "extracted")
     data_type, is_ratio = _data_type(particulars)
     node: dict[str, object] = {
@@ -74,6 +98,9 @@ def _leaf_node(
         "sr_no": row.get("sr_no"),
         "field_path": field_path,
         "aliases": [particulars],
+        # Set only when the taxonomy reused this code; the customer's original.
+        **({"taxonomy_tag": str(row.get("tag") or "")}
+           if tag != str(row.get("tag") or "") else {}),
         "is_new": bool(row.get("is_new")),
         "is_ratio": is_ratio,
         "redirect": {
@@ -103,7 +130,8 @@ def _unique_path(base: str, seen: set[str]) -> str:
 
 
 def _build_unit(
-    block_id: str, rows: Sequence[Mapping[str, object]], statement: str, seen: set[str]
+    block_id: str, rows: Sequence[Mapping[str, object]], statement: str,
+    seen: set[str], seen_tags: set[str]
 ) -> dict[str, object]:
     """One retrieval unit for one BlockID. Section-header rows open `group`
     nodes; leaves/derived attach to the most recent open group (or the unit
@@ -138,8 +166,9 @@ def _build_unit(
         tag = row.get("tag")
         if not tag:
             continue  # a non-header row with no tag carries no field
-        base = f"{statement}.{block_id}.{tag}"
-        _emit(_leaf_node(row, statement, _unique_path(base, seen)))
+        unique = _unique_tag(str(tag), seen_tags)
+        base = f"{statement}.{block_id}.{unique}"
+        _emit(_leaf_node(row, statement, _unique_path(base, seen), unique))
 
     # Drop groups that ended up empty.
     fields = [
@@ -159,7 +188,9 @@ def _build_unit(
     }
 
 
-def _build_module(statement: Mapping[str, object], seen: set[str]) -> dict[str, object]:
+def _build_module(
+    statement: Mapping[str, object], seen: set[str], seen_tags: set[str]
+) -> dict[str, object]:
     name = str(statement.get("statement") or "unknown")
     rows_obj = statement.get("rows")
     rows = [r for r in rows_obj if isinstance(r, Mapping)] if isinstance(rows_obj, list) else []
@@ -174,7 +205,7 @@ def _build_module(statement: Mapping[str, object], seen: set[str]) -> dict[str, 
             order.append(block)
         by_block[block].append(r)
 
-    units = [_build_unit(b, by_block[b], name, seen) for b in order]
+    units = [_build_unit(b, by_block[b], name, seen, seen_tags) for b in order]
     units = [u for u in units if u["fields"]]  # a block with no fields is no unit
     return {
         "key": f"module_{name}",
@@ -187,18 +218,21 @@ def _build_module(statement: Mapping[str, object], seen: set[str]) -> dict[str, 
 def build_schema(normalized: Mapping[str, object]) -> dict[str, object]:
     """Normalized taxonomy -> v4 field-extraction schema document.
 
-    Pure and total. Field paths are made globally unique (a duplicate tag such
-    as `WCL` yields `...WCL` and `...WCL#2`); the tag itself is left intact so
-    downstream tagging keeps the customer's code.
+    Pure and total. Both field paths AND tags are made globally unique: the
+    taxonomy reuses `WCL` for working-capital loans and again for Buyers Credit,
+    and leaving the tag intact made the second concept unreachable in every
+    tag-keyed structure downstream. The reused code is preserved on the node as
+    `taxonomy_tag`.
     """
     seen_paths: set[str] = set()
+    seen_tags: set[str] = set()
     statements_obj = normalized.get("statements")
     statements = (
         [s for s in statements_obj if isinstance(s, Mapping)]
         if isinstance(statements_obj, list)
         else []
     )
-    modules = [_build_module(s, seen_paths) for s in statements]
+    modules = [_build_module(s, seen_paths, seen_tags) for s in statements]
     modules = [m for m in modules if m["retrieval_units"]]
 
     return {

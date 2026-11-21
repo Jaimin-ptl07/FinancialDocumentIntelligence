@@ -58,7 +58,7 @@ describe("Dashboard", () => {
     );
     renderWithQuery(<Dashboard />);
     expect(await screen.findByText("✕ 1 failed")).toBeInTheDocument();
-    expect(screen.getByText("11/15")).toBeInTheDocument();
+    expect(screen.getByText("11/21")).toBeInTheDocument();
   });
 
   it("explains the failure when the filings cannot be loaded", async () => {

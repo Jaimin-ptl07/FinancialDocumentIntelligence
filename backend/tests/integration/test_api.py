@@ -22,6 +22,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
+from tests.integration.conftest import authenticate, job_services
 
 pytestmark = pytest.mark.integration
 
@@ -33,13 +35,19 @@ DEAD_BROKER = "amqp://guest:guest@127.0.0.1:1/%2F"
 
 
 @pytest.fixture
-def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
+async def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch, invitee):
     """Build a client whose app is wired to real containers, or to dead ports.
 
     A factory rather than a fixture so a single test can choose which backend is
     dead. The app is built and its lifespan entered per call, which is also what
     makes the engine-in-lifespan rule (Global Constraint 3) observable here at
     all: nothing is wired until lifespan runs.
+
+    T3: every client is LOGGED IN through the real /auth/login by default --
+    these tests exercise protected routes, and doing it through the front door
+    is what keeps the gate itself under test everywhere. `login=False` opts
+    out for the tests that deliberately kill a backend (whose login would
+    fail before the interesting request could run).
     """
 
     @asynccontextmanager
@@ -47,6 +55,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
         *,
         raise_app_exceptions: bool = True,
         dependency_overrides: dict[object, object] | None = None,
+        login: bool = True,
         **overrides: str,
     ):
         env = {
@@ -56,6 +65,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
             "FDI_S3_ENDPOINT": minio_endpoint,
             "FDI_S3_ACCESS_KEY": "minioadmin",
             "FDI_S3_SECRET_KEY": "minioadmin",
+            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
         }
         env.update(overrides)
         for key, value in env.items():
@@ -74,6 +84,8 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
         async with app.router.lifespan_context(app):
             transport = ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
+                if login:
+                    await authenticate(client, invitee)
                 yield client
 
     return _make
@@ -110,6 +122,16 @@ async def store(minio_client):
     s = ArtifactStore(minio_client, bucket="artifacts")
     await s.ensure_bucket()
     return s
+
+
+async def run_job(client: AsyncClient, job_id: str, session_factory, store, **clients):
+    """Play the worker (T5): run the submitted job eagerly against `clients`
+    -- the same fakes the route was served -- and return its result response.
+    No Celery worker consumes the test broker."""
+    from fdi.pipeline.jobs import execute_job
+
+    await execute_job(job_id, job_services(session_factory, store, **clients))
+    return await client.get(f"/jobs/{job_id}/result")
 
 
 # --------------------------------------------------------------------------
@@ -354,8 +376,11 @@ async def test_ready_reports_the_one_dead_backend(
     from a probe wired to the wrong backend. `broker` shipped as a literal
     `True`: it passed the plan's test, which never asserted it, and would still
     pass a test that only killed Postgres.
+
+    login=False: the dead backend would fail the fixture's login before the
+    /ready request this test exists to make, and /ready is public anyway.
     """
-    async with make_client(**overrides) as client:
+    async with make_client(login=False, **overrides) as client:
         r = await client.get("/ready")
 
     assert r.status_code == 503, "a backend is down; this instance cannot serve traffic"
@@ -373,9 +398,15 @@ async def test_health_is_still_200_when_every_backend_is_dead(
     Liveness answers "restart this process?". A backend outage is not a reason
     to kill the API -- the orchestrator would restart-loop every replica while
     the DB recovers, turning a recoverable outage into an unrecoverable one.
+
+    login=False: every backend is dead, so login cannot succeed -- and these
+    two probes are exactly the routes that must not need it.
     """
     async with make_client(
-        FDI_DATABASE_URL=DEAD_POSTGRES, FDI_S3_ENDPOINT=DEAD_S3, FDI_BROKER_URL=DEAD_BROKER
+        login=False,
+        FDI_DATABASE_URL=DEAD_POSTGRES,
+        FDI_S3_ENDPOINT=DEAD_S3,
+        FDI_BROKER_URL=DEAD_BROKER,
     ) as client:
         health = await client.get("/health")
         ready = await client.get("/ready")
@@ -491,7 +522,7 @@ async def test_reprocess_unknown_document_is_404(
 
 
 async def test_eval_endpoint_runs_and_ranks(
-    client: AsyncClient, minio_client, _alembic_applied
+    client: AsyncClient, minio_client, session_factory, _alembic_applied
 ) -> None:
     """Seed the toy dataset into the APP's bucket -- not the test `store` fixture's.
 
@@ -512,6 +543,8 @@ async def test_eval_endpoint_runs_and_ranks(
     r = await client.post(
         "/eval", json={"candidate": "uppercase", "dataset": "toy", "dataset_version": 1}
     )
+    assert r.status_code == 202, r.text
+    r = await run_job(client, r.json()["job_id"], session_factory, seed_store)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["aggregate"] == 1.0
@@ -1667,6 +1700,11 @@ async def test_ask_returns_cited_answer_with_fake_agent_client_override(
         }
     ) as client:
         r = await client.post("/ask", json={"question": f"total assets, marker {marker}?"})
+        assert r.status_code == 202
+        r = await run_job(
+            client, r.json()["job_id"], session_factory, store, agent_client=fake,
+            embedder=fake_embedder, vector_store=fake_vector_store,
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["answer"] == f"Total Assets were 100 (see {doc.id}:s0)."
@@ -1867,6 +1905,27 @@ async def test_extract_document_happy_path_with_fake_extractor_client_override(
         }
     ) as client:
         r = await client.post("/extract/document", json={"doc_key": f"acme-{marker}"})
+        assert r.status_code == 202
+        r = await run_job(
+            client, r.json()["job_id"], session_factory, store, extractor_client=fake,
+            extraction_schema_path=str(schema_path), embedder=fake_embedder,
+            vector_store=fake_vector_store,
+        )
+        # The factsheet job over the same (doc, schema) is served from the
+        # persisted extraction record -- no second scripted LLM response --
+        # and its XBRL result keeps the media type the inline route had.
+        fs = await client.post(
+            "/factsheet/document?format=xbrl", json={"doc_key": f"acme-{marker}"}
+        )
+        assert fs.status_code == 202
+        fs = await run_job(
+            client, fs.json()["job_id"], session_factory, store, extractor_client=fake,
+            extraction_schema_path=str(schema_path), embedder=fake_embedder,
+            vector_store=fake_vector_store,
+        )
+        assert fs.status_code == 200
+        assert fs.headers["content-type"].startswith("application/xml")
+        assert fs.text.lstrip().startswith("<")
     assert r.status_code == 200
     body = r.json()
     assert body["doc_key"] == f"acme-{marker}"

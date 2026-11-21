@@ -1,0 +1,687 @@
+"""Map a FOG LineItem's own label onto a taxonomy concept.
+
+THE INVERSION
+-------------
+Extraction asks a PULL question -- *what is the value of `GRSPNE`?* -- and the
+model hunts the document for our label. Measured across three issuers, alias
+matching alone answered 69% / 58% / 30% of face rows; the 30% is what a
+TCS-shaped alias list does to an unrelated filer.
+
+This asks the PUSH question instead: *here is Note 13(b) and its own lines --
+which concept is each?* Three consequences: unseen vocabulary stops being fatal,
+a line with no taxonomy home surfaces as `unmapped` instead of vanishing, and
+the note's own total becomes the arbiter for its components.
+
+The mapper assigns CONCEPTS ONLY. Every value already sits on a LineItem,
+parsed by `fdi.core.numbers.parse_amount`; letting the model restate one
+reintroduces the comma bug this codebase already paid for.
+
+Pure (`fdi.core` law): no I/O, deterministic, total.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+from fdi.core.concepts import MAX_CANDIDATES, ConceptCandidate, normalize
+from fdi.core.fog import Edge
+from fdi.core.mapping import lexical_match
+from fdi.core.memory import MemoryKey, MemoryStore, recall
+
+_UNMAPPED = {"unmapped", "none", "null", "n/a", "-", ""}
+
+
+@dataclass(frozen=True)
+class MapUnit:
+    """One statement face or one note, with the labels and concepts in play.
+
+    `kind` is "face" or "note", and it decides the candidate set: face rows are
+    SUMMARIES and match parent concepts, note rows are DETAIL and match
+    descendants. Conflating the two left 15 of TCS's 28 face rows unmapped.
+
+    `basis` ("consolidated" | "standalone" | ...) is carried so memory lookups
+    can be scoped by it -- see `resolve_from_memory`'s docstring for why a
+    label alone is not a safe key.
+
+    `item_ids` is the FOG line item id behind each label, parallel to
+    `labels` -- appended LAST with a default of `()` so no existing caller
+    (this module's own tests included) has to change. MEASURED ON TCS: the
+    balance sheet prints "Lease liabilities" TWICE, once under Non-current
+    liabilities and once under Current -- two ROWS, one STRING. Every
+    resolution table below used to be keyed by that string, so the second
+    row silently overwrote the first. `item_ids` gives each row a key the
+    label collision cannot touch; see `row_ids` for the fallback when it is
+    empty."""
+
+    unit_id: str
+    kind: str
+    title: str
+    labels: tuple[str, ...]
+    candidates: tuple[ConceptCandidate, ...]
+    kinds: tuple[str, ...] = ()
+    basis: str = ""
+    sections: tuple[tuple[str, ...], ...] = ()
+    item_ids: tuple[str, ...] = ()
+
+
+def row_ids(unit: MapUnit) -> tuple[str, ...]:
+    """The per-ROW key every resolution table below is addressed by.
+
+    `unit.item_ids` when it covers every label -- the normal path, populated
+    by `units_from_fog` -- otherwise `unit.labels` itself, so a `MapUnit`
+    built without ids (an older caller, a test) still works. `fdi.core` is
+    pure and TOTAL: this never raises and never lets a short `item_ids`
+    desync a row from its id."""
+    if len(unit.item_ids) == len(unit.labels):
+        return unit.item_ids
+    return unit.labels
+
+
+_SYSTEM = """\
+You map line items from an Indian company's financial statements onto a fixed \
+list of accounting concepts.
+
+Rules:
+- Rows are numbered. For each ROW, answer with the TAG of the single concept \
+its label represents.
+- Two rows may print the IDENTICAL label -- e.g. "Lease liabilities" once \
+under Non-current liabilities and once under Current liabilities. They are \
+still separate rows and must be judged independently; the row's own section \
+(shown in brackets) is what tells them apart.
+- Use ONLY the tags listed. Never invent a tag, and never use one from \
+elsewhere in the taxonomy.
+- If a row has no good match in the list, answer "unmapped". Guessing is \
+worse than admitting the gap.
+- Each tag may be used at most ONCE. If two rows seem to fit one tag, keep \
+the better fit and mark the other "unmapped".
+- Do NOT report any value, amount or number. Values are already extracted; you \
+are assigning concepts only.
+- Subtotal and total rows usually map to a parent concept, not a component.
+
+Answer with a JSON object mapping each row's NUMBER, as a string (e.g. "1"), \
+to a tag or to "unmapped".\
+"""
+
+
+def _ranked_candidates(unit: MapUnit) -> tuple[ConceptCandidate, ...]:
+    """`unit.candidates`, best-affinity-first for the labels being asked.
+
+    Ties keep declaration order (`sorted` is stable), so the result is
+    deterministic -- this feeds a prompt whose answer reaches an artifact."""
+    if not unit.labels:
+        return unit.candidates
+
+    def affinity(candidate: ConceptCandidate) -> float:
+        best = 0.0
+        for label in unit.labels:
+            _hit, _method, score = lexical_match(label, (candidate,))
+            best = max(best, score)
+        return best
+
+    return tuple(sorted(unit.candidates, key=affinity, reverse=True))
+
+
+def shown_candidates(unit: MapUnit) -> tuple[ConceptCandidate, ...]:
+    """The candidates the model is ACTUALLY SHOWN for this unit.
+
+    One definition, used by both `build_map_prompt` (to render them) and
+    `read_map_reply` (to decide what the reply may name). They were two
+    expressions before: the prompt rendered the capped top slice while the
+    reader validated against `unit.candidates`, all ~577 of them. A tag from
+    the other ~537 -- one the model never saw and therefore cannot have read
+    off the shortlist -- was accepted as if the unit had offered it, and
+    `read_map_reply`'s own docstring claimed the opposite.
+
+    Pure and deterministic, so recomputing it here yields the identical
+    sequence the prompt rendered."""
+    return _ranked_candidates(unit)[:MAX_CANDIDATES]
+
+
+def build_map_prompt(unit: MapUnit) -> tuple[str, str, int]:
+    """`(system, user, dropped)` for one unit. The system half is shared and
+    versioned; the user half is this unit's rows and its candidate concepts.
+
+    Each row is rendered with a 1-based ROW NUMBER -- cheap in tokens and
+    trivial for the model to echo -- because two rows can share one label
+    verbatim (see `MapUnit.item_ids`'s docstring) and a prompt that lists
+    bare labels cannot ask the model to tell them apart. `read_map_reply`
+    reads the reply back by that same number.
+
+    Candidates are capped at `MAX_CANDIDATES` (fdi.core.concepts): an
+    uncapped note-candidate set MEASURED at ~519 concepts, ~12.3k tokens/unit,
+    ~INR 218/document -- `build_map_prompt` was the one place in the mapper
+    that bypassed the cap every other candidate-set builder already respects.
+    `dropped` is how many candidates the cap cut, so a caller can log it
+    rather than let the truncation pass as "considered everything".
+
+    WHICH candidates survive is the whole game. Truncating in schema
+    DECLARATION order keeps an arbitrary 40 of ~519 and leaves the model
+    answering from a set that is 92% blind -- the right concept is almost
+    never in it, and a confidently wrong answer from a blind shortlist is
+    worse than the cost the cap was saving. Candidates are therefore
+    ranked by their best lexical affinity to any label this unit is
+    actually asking about, and the cap keeps the strongest.
+
+    This tier only ever sees labels the FREE tiers could not settle, so a
+    high affinity here means "close but under the floor" -- exactly the
+    population a judgement is worth paying for."""
+    kept = shown_candidates(unit)
+    dropped = max(0, len(unit.candidates) - len(kept))
+    lines = [
+        f"UNIT: {unit.unit_id} ({unit.kind})",
+        f"TITLE: {unit.title}",
+        "",
+        "CONCEPTS (tag - name - aliases):",
+    ]
+    for c in kept:
+        aliases = ", ".join(c.aliases) if c.aliases else "-"
+        lines.append(f"  {c.tag} - {c.name} - {aliases}")
+    lines += ["", "ROWS to map (answer keyed by row number):"]
+    for index, label in enumerate(unit.labels):
+        row_number = index + 1
+        section = unit.sections[index] if index < len(unit.sections) else ()
+        if section:
+            lines.append(f"  {row_number}. {label}  [section: {' > '.join(section)}]")
+        else:
+            lines.append(f"  {row_number}. {label}")
+    return _SYSTEM, "\n".join(lines), dropped
+
+
+def read_map_reply(reply: object, unit: MapUnit) -> dict[str, str]:
+    """`{row_id: tag}` for the assignments this unit actually authorises,
+    keyed by `row_ids(unit)` -- the item id, or the label when the unit
+    carries no ids.
+
+    The reply itself is keyed by 1-based ROW NUMBER (`build_map_prompt`'s
+    contract), not by label: two rows can print the identical label, and a
+    reply keyed by that label could never say which row it meant. Reading
+    positionally off `unit`'s own rows means a row the unit never held
+    cannot be answered for -- there is no key for it to arrive on. The
+    remaining filters close the other ways the answer could be unauditable:
+    a tag the unit never SHOWED, an explicit `unmapped`, and a second claim
+    on an already-taken tag. Total: never raises.
+
+    "Showed" is the operative word, and it used to be wrong. This validated
+    against `unit.candidates` -- the full ~577 -- while the prompt renders
+    only the top `MAX_CANDIDATES` (~40, measured: 15,231 dropped on TCS's
+    consolidated basis alone). A tag from the ~537 the model never saw was
+    accepted as authorised, so the one class of answer the shortlist exists
+    to prevent -- a tag pulled from the taxonomy at large rather than read
+    off the offered list -- was the class that passed."""
+    if not isinstance(reply, Mapping):
+        return {}
+    offered = {c.tag for c in shown_candidates(unit)}
+
+    out: dict[str, str] = {}
+    taken: set[str] = set()
+    # Iterate the UNIT's row order, not the reply's: two rows racing for one
+    # tag must resolve the same way on every run or the artifact stops
+    # hashing stably.
+    for index, row_id in enumerate(row_ids(unit)):
+        raw = reply.get(str(index + 1))
+        if not isinstance(raw, str):
+            continue
+        tag = raw.strip()
+        if tag.lower() in _UNMAPPED or tag not in offered or tag in taken:
+            continue
+        out[row_id] = tag
+        taken.add(tag)
+    return out
+
+
+def unmapped_labels(
+    unit: MapUnit, resolved: Mapping[str, object]
+) -> list[tuple[str, str]]:
+    """`(row_id, label)` for the unit's rows that nothing resolved, in unit
+    order. `resolved` is keyed by `row_ids(unit)`, same as every resolution
+    table in this module.
+
+    These are the point of the push model: "Facility expenses 2,966" has no
+    taxonomy home, and it must stay VISIBLE rather than vanish. The id
+    travels alongside the label rather than replacing it: a caller still
+    needs the label to DISPLAY, and the id alone cannot reconstruct it once
+    two rows share one string."""
+    return [
+        (row_id, label)
+        for row_id, label in zip(row_ids(unit), unit.labels, strict=True)
+        if row_id not in resolved
+    ]
+
+
+def candidates_for_kind(
+    kind: str,
+    face_candidates: Sequence[ConceptCandidate],
+    note_candidates: Sequence[ConceptCandidate],
+) -> tuple[ConceptCandidate, ...]:
+    """Face rows match PARENTS, note rows match DESCENDANTS."""
+    return tuple(face_candidates) if kind == "face" else tuple(note_candidates)
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """One label resolved to one concept, and HOW.
+
+    `method` is "memory" | "lexical" | "llm". It is not decoration: a wrong
+    value must trace to the tier that produced it, and the three tiers have
+    very different trust profiles."""
+
+    label: str
+    tag: str
+    method: str
+    score: float
+
+
+# Below this, `lexical_match` is guessing from token overlap rather than
+# recognising a name. MEASURED: sub-floor overlaps produced every remaining
+# wrong value (REMC 1, RIL 2) by winning uncontested. Silence is better --
+# an unmapped label is visible in the artifact, a wrong number is not.
+LEXICAL_FLOOR = 0.75
+
+# The bar a SECTION-QUALIFIED subset must clear to win without the full set
+# being consulted. Set at the top of `lexical_match`'s token-overlap range
+# (that function caps overlap at 0.9 and reserves 0.95/1.0 for an exact alias
+# and an exact name), so clearing it means an exact hit or an overlap that
+# left nothing on the table -- never a partial-word guess.
+_SECTION_CONFIDENT = 0.9
+
+# A concept expecting money can never be satisfied by a share count, a
+# per-share figure or a ratio. "unknown" is permitted: a classification gap
+# must not become silent data loss.
+_CURRENCY_ONLY = frozenset({"count", "per_share", "ratio"})
+
+# A concept name may carry a period qualifier the SECTION can confirm or
+# contradict. These are the only two that matter on an Indian balance sheet,
+# and they are mutually exclusive by construction.
+_QUALIFIERS: tuple[tuple[str, str], ...] = (
+    ("non-current", "non-current"),
+    ("current", "current"),
+)
+
+
+def _qualifier(text: str) -> str:
+    """The period qualifier `text` asserts, or "".
+
+    "non-current" is tested FIRST and wins: it CONTAINS "current", so testing
+    in the other order would label every non-current concept "current" and
+    invert the disambiguation this exists to provide."""
+    key = text.lower()
+    for needle, name in _QUALIFIERS:
+        if needle in key:
+            return name
+    return ""
+
+
+def _measure(tag: str) -> str:
+    """"gross" | "net" | "" -- read from the TAG PREFIX, never from the name.
+
+    The taxonomy carries the gross/net distinction ONLY here: `GRSGW` and
+    `NETGW` are both named "Goodwill", `GRSPNE` and `NETPNE` both "Plant and
+    equipment"."""
+    upper = tag.upper()
+    if upper.startswith("GRS"):
+        return "gross"
+    if upper.startswith("NET"):
+        return "net"
+    return ""
+
+
+def drop_gross_twins(
+    candidates: tuple[ConceptCandidate, ...],
+) -> tuple[ConceptCandidate, ...]:
+    """`candidates` with the GROSS twin dropped wherever a NET twin shares its
+    name -- for STATEMENT FACE rows only.
+
+    MEASURED on the v4.3 taxonomy: 49 concept names are claimed by 115
+    concepts, and NOT ONE of the 49 is separable by `_qualifier`, which reads
+    the name. 21 are separable by the tag prefix, and the biggest family is the
+    PPE schedule -- Land, Buildings, Plant and equipment, Furniture and
+    fixtures, Vehicles, Leasehold improvements, Other tangible assets, Goodwill
+    -- each declared twice under GRS* and NET* with IDENTICAL names.
+
+    `lexical_match` returns the FIRST exact name hit, so DECLARATION ORDER
+    decided which one a face row got, and GRS* is declared first: TCS's balance
+    sheet resolved Goodwill to GRSGW = 9,108, the GROSS block, where the face
+    prints the NET carrying amount.
+
+    Dropping the gross twin on the face is accounting, not preference: a
+    balance sheet states assets NET of accumulated depreciation, and the gross
+    block appears only in the PPE note's own schedule. Notes keep both twins,
+    because that schedule is exactly where the gross column is real."""
+    by_name: dict[str, set[str]] = {}
+    for c in candidates:
+        by_name.setdefault(normalize(c.name), set()).add(_measure(c.tag))
+    return tuple(
+        c
+        for c in candidates
+        if not (
+            _measure(c.tag) == "gross" and "net" in by_name.get(normalize(c.name), set())
+        )
+    )
+
+
+_PARENTHETICAL = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _same_concept(a: str, b: str) -> bool:
+    """Do these two names denote the SAME concept, one merely qualified?
+
+    The taxonomy names a reported twin by appending a parenthetical --
+    "Total Non-Current Assets" / "Total Non-Current Assets (as reported)".
+    Stripping one trailing parenthetical is exactly that relationship.
+
+    WITHOUT THIS the swap took ANY extracted concept within the margin, not
+    the declared twin, and it shipped: measured on TCS it retagged 108 rows,
+    DESTROYED 14 facts (EEBEXP 1,54,994, TOTFC 1,227, TOTTAXEXP 16,033,
+    TOTPRVE 1,378, TOTOL 2,814) and CORRUPTED 5 more (CFTAX -14,384 ->
+    16,033, another line's value entirely). Face-level-only ground truth
+    scored none of those tags, so every number in the gate stayed green."""
+    # `a` must BE the qualified variant: it carries the parenthetical and `b`
+    # does not. Name equality alone is not enough -- "Finance costs" is the
+    # name of BOTH the derived TOTFC and the cash-flow CFFIN, and treating
+    # those as twins moved 1,227 onto the wrong statement's concept.
+    stripped = _PARENTHETICAL.sub("", a).strip()
+    if stripped == a.strip():
+        return False
+    return stripped.lower() == b.strip().lower()
+
+
+# The gap an "(as reported)" suffix costs: its derived twin matches by NAME
+# (1.0) while it matches by ALIAS (0.95). Wide enough to cross that, narrow
+# enough that a token-overlap guess never qualifies.
+_REPORTED_MARGIN = 0.05
+
+
+def _prefer_reported(
+    label: str,
+    candidates: tuple[ConceptCandidate, ...],
+    hit: ConceptCandidate | None,
+    method: str,
+    score: float,
+) -> tuple[ConceptCandidate | None, str, float]:
+    """Prefer an "as reported" concept over a DERIVED one that matched
+    EQUALLY WELL.
+
+    A value read off the page belongs in the slot meant for a read value.
+    The taxonomy deliberately pairs a computed total with an "as reported"
+    counterpart -- TOTNCA/TOTNCR, TOTA/TOTCAR, TOTINVT/INVT -- carrying the
+    SAME alias, precisely so the two can be RECONCILED against each other.
+
+    MEASURED ON TCS: every printed total resolved to the DERIVED tag, purely
+    because it was declared first. That put a read value where a computed one
+    belongs, left the reported slot empty, and destroyed the reconciliation --
+    46,667 and 1,35,705 landed on tags nothing checks.
+
+    THE MARGIN IS THE WHOLE CONDITION, and both ways of getting it wrong are
+    measured. Dropping derived candidates whenever any extracted one merely
+    EXISTS took TCS equity from 100%/100% to 0%: "Share capital" then matched
+    the far poorer EQWVR instead of TOTEQ, which the taxonomy models only as
+    derived and which is the right answer. Requiring an EQUAL score fixed that
+    but stopped fixing the totals, because the reported twin is named
+    "... (as reported)" and so matches by ALIAS (0.95) where its derived
+    partner matches by NAME (1.0). That 0.05 is a naming convention, not a
+    quality difference -- so the twin is preferred within a small margin, and
+    a genuinely worse match (EQWVR at token-overlap distance) still cannot
+    displace a better one."""
+    if hit is None or hit.origin != "derived":
+        return hit, method, score
+    extracted = tuple(c for c in candidates if c.origin != "derived")
+    if not extracted:
+        return hit, method, score
+    twins = tuple(c for c in extracted if _same_concept(c.name, hit.name))
+    if not twins:
+        return hit, method, score
+    alt_hit, alt_method, alt_score = lexical_match(label, twins)
+    if alt_hit is not None and alt_score >= score - _REPORTED_MARGIN:
+        return alt_hit, alt_method, alt_score
+    return hit, method, score
+
+
+def _match_with_section(
+    label: str,
+    candidates: tuple[ConceptCandidate, ...],
+    section_qualifier: str,
+) -> tuple[ConceptCandidate | None, str, float]:
+    """Match `label`, giving the section's own variant FIRST REFUSAL.
+
+    A section qualifier is evidence about WHICH variant of a concept a row
+    is, so variants that agree with it are tried alone before anything else.
+
+    MEASURED ON TCS: the balance sheet prints "Lease liabilities" twice --
+    once under Non-current liabilities (9,453), once under Current (1,830).
+    The taxonomy holds LTOLR (non-current), STLL (current) AND `LL`, the
+    unqualified TOTAL. `LL` is an exact name match and scores 1.000 against
+    the qualified pair's 0.900, so BOTH component rows resolved to the total
+    and neither split tag resolved at all. Merely vetoing contradictions -- as
+    the first version of this did -- cannot help: `LL` carries no qualifier to
+    contradict, so nothing dropped it.
+
+    Falling back to the full set keeps a row whose section names a period the
+    taxonomy does not split on resolvable, and the contradiction veto still
+    applies there so the wrong period can never win.
+
+    First refusal is granted at `_SECTION_CONFIDENT`, NOT at `LEXICAL_FLOOR`.
+    The distinction is what stops the preference from becoming a licence.
+    `lexical_match` scores an exact name 1.0, an exact alias 0.95, and caps
+    every token overlap at 0.9 -- so a subset hit between the floor (0.75) and
+    0.9 is a partial-word guess and nothing more. Returning it here did two
+    things at once: it beat an EXACT match available in the full set, and it
+    stamped the guess `section:`, which `_tier` ranks as certain evidence.
+    A 0.80 overlap outranking a 1.0 name match, and outranking it as proof,
+    is the inversion this threshold removes. The LL case still resolves:
+    "Lease liabilities" against the qualified variants scores exactly 0.900."""
+    if section_qualifier:
+        preferred = tuple(
+            c for c in candidates if _qualifier(c.name) == section_qualifier
+        )
+        if preferred:
+            hit, method, score = _prefer_reported(
+                label, preferred, *lexical_match(label, preferred)
+            )
+            if hit is not None and score >= _SECTION_CONFIDENT:
+                # Marked SECTION-CONFIRMED. The section agreeing is
+                # independent structural corroboration, not a lucky token
+                # overlap, and `_tier` must rank it accordingly.
+                return hit, f"section:{method}", score
+        candidates = tuple(
+            c for c in candidates
+            if _qualifier(c.name) in ("", section_qualifier)
+        )
+        best, method, score = _prefer_reported(
+            label, candidates, *lexical_match(label, candidates)
+        )
+        # A sub-confident subset hit did not get first refusal, but if it wins
+        # the full contest ON ITS OWN SCORE the section still corroborates it,
+        # so the marking is earned rather than assumed.
+        if best is not None and best in preferred:
+            return best, f"section:{method}", score
+        return best, method, score
+    return _prefer_reported(label, candidates, *lexical_match(label, candidates))
+
+
+def resolve_lexical(unit: MapUnit) -> dict[str, Resolution]:
+    """Labels an alias or normalised form settles, with no model call.
+
+    Free and deterministic, so it runs before the LLM. It is NOT sufficient on
+    its own -- measured across three issuers it answered 69% / 58% / 30% -- but
+    every label it settles is one the expensive tier never sees.
+
+    `lexical_match(label, candidates)` returns `(candidate | None, method,
+    score)` and REFUSES a tie rather than guessing, so a None here means the
+    label is genuinely ambiguous and belongs to the semantic tier.
+
+    A ROW'S SECTION BREAKS A TIE THE LABEL ALONE CANNOT. Two candidates
+    sharing a label -- "Lease liabilities" under both Non-current and Current
+    liabilities -- score identically on token overlap and `lexical_match`
+    refuses rather than guess. When the row's section carries a period
+    qualifier that CONTRADICTS a candidate's own qualifier, that candidate is
+    excluded before matching, so the surviving candidate is no longer tied
+    and resolves for free. If every candidate is excluded, the label stays
+    unresolved rather than accepting a contradicted match.
+
+    Keyed by `row_ids(unit)`, not by label -- two rows sharing a label share
+    nothing else here, and a label key would let the second overwrite the
+    first exactly as it did before this table was rekeyed."""
+    out: dict[str, Resolution] = {}
+    # Computed ONCE, not per row: identical for every row of a unit, and it
+    # walks the whole candidate set.
+    available = (
+        drop_gross_twins(unit.candidates) if unit.kind == "face" else unit.candidates
+    )
+    for index, row_id in enumerate(row_ids(unit)):
+        label = unit.labels[index]
+        kind = unit.kinds[index] if index < len(unit.kinds) else "unknown"
+        if kind in _CURRENCY_ONLY:
+            continue
+        section = unit.sections[index] if index < len(unit.sections) else ()
+        section_qualifier = _qualifier(" ".join(section))
+        candidate, method, score = _match_with_section(
+            label, available, section_qualifier
+        )
+        if candidate is not None and score >= LEXICAL_FLOOR:
+            out[row_id] = Resolution(label, candidate.tag, f"lexical:{method}", score)
+    return out
+
+
+def resolve_from_memory(
+    unit: MapUnit, store: MemoryStore
+) -> dict[str, Resolution]:
+    """Labels a PREVIOUS document already resolved.
+
+    Keyed on (label, section, basis) rather than label alone: "Computer
+    equipment" under PPE is a fixed asset, "Computer software" under
+    intangibles is not -- and CONSOLIDATED and STANDALONE are different
+    numbers for the same concept, which is exactly the confusion the basis
+    model exists to prevent. `MemoryKey.of` normalises all three parts, so
+    callers never have to match its casing rules by hand.
+
+    `recall` returns only TRUSTED entries, and a remembered tag this unit does
+    not offer is DROPPED -- memory from another statement must not leak in.
+
+    Keyed by `row_ids(unit)`, same as every resolution table in this module
+    -- the lookup itself still keys on the LABEL (that is what a previous
+    document's mapping was learned against), but the result must be
+    addressable per row so two rows sharing a label do not collide."""
+    offered = {c.tag for c in unit.candidates}
+    out: dict[str, Resolution] = {}
+    for index, row_id in enumerate(row_ids(unit)):
+        label = unit.labels[index]
+        entry = recall(store, MemoryKey.of(label, unit.title, unit.basis))
+        if entry is not None and entry.tag in offered:
+            out[row_id] = Resolution(label, entry.tag, "memory", entry.confidence)
+    return out
+
+
+def _items_by_parent(region: Mapping[str, object]) -> dict[str, list[Mapping[str, object]]]:
+    out: dict[str, list[Mapping[str, object]]] = {}
+    raw = region.get("line_items") if isinstance(region, Mapping) else None
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        parent = item.get("parent")
+        if isinstance(parent, str) and parent:
+            out.setdefault(parent, []).append(item)
+    return out
+
+
+def _section_path_of(item: Mapping[str, object]) -> tuple[str, ...]:
+    """A LineItem body's `section_path`, or `()` if absent or malformed."""
+    raw = item.get("section_path")
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(s) for s in raw)
+
+
+def units_from_fog(
+    region: Mapping[str, object],
+    *,
+    face_candidates: Sequence[ConceptCandidate],
+    note_candidates: Sequence[ConceptCandidate],
+    basis: str = "",
+) -> list[MapUnit]:
+    """One MapUnit per statement face and per note that HAS line items.
+
+    A unit with no items is not emitted: it would cost an LLM call and answer
+    nothing. Units are id-sorted so the artifact hashes stably. Total.
+
+    `basis` is carried onto every unit unchanged -- it identifies which of the
+    FOG's bases this `region` IS, not something derived per-unit -- so
+    `resolve_from_memory` can scope its lookups by it."""
+    by_parent = _items_by_parent(region)
+    units: list[MapUnit] = []
+
+    for key, kind in (("statements", "face"), ("notes", "note")):
+        raw = region.get(key) if isinstance(region, Mapping) else None
+        for node in raw if isinstance(raw, list) else []:
+            if not isinstance(node, Mapping):
+                continue
+            node_id = node.get("id")
+            if not isinstance(node_id, str) or not node_id:
+                continue
+            items = by_parent.get(node_id, [])
+            labels = tuple(
+                str(i.get("label", "")) for i in items if str(i.get("label", ""))
+            )
+            if not labels:
+                continue
+            kinds = tuple(
+                str(i.get("kind", "unknown"))
+                for i in items if str(i.get("label", ""))
+            )
+            sections = tuple(
+                _section_path_of(i) for i in items if str(i.get("label", ""))
+            )
+            item_ids = tuple(
+                str(i.get("id", "")) for i in items if str(i.get("label", ""))
+            )
+            title = str(node.get("title") or node.get("statement") or "")
+            units.append(MapUnit(
+                unit_id=node_id, kind=kind, title=title, labels=labels,
+                candidates=candidates_for_kind(kind, face_candidates, note_candidates),
+                kinds=kinds, basis=basis, sections=sections, item_ids=item_ids,
+            ))
+    units.sort(key=lambda u: u.unit_id)
+    return units
+
+
+def mapping_edges(
+    resolutions: Mapping[str, Mapping[str, Resolution]],
+    region: Mapping[str, object],
+) -> tuple[list[Edge], list[dict[str, object]]]:
+    """`MAPS_TO` edges plus the proof record behind each.
+
+    Looked up by ITEM ID, not by label: `resolutions[unit_id]` is keyed by
+    `row_ids(unit)` (see that function's docstring), and the normal path --
+    every unit built by `units_from_fog` -- makes that the FOG's own line
+    item ids. A resolution naming a line item this region does not hold is
+    dropped: an edge to a node that is not in the graph looks like
+    navigation and leads nowhere. Both outputs are sorted -- they reach an
+    artifact body. Total."""
+    by_parent = _items_by_parent(region)
+    edges: list[Edge] = []
+    proof: list[dict[str, object]] = []
+
+    for unit_id in sorted(resolutions):
+        per_item = resolutions[unit_id]
+        for item in by_parent.get(unit_id, []):
+            item_id = item.get("id")
+            if not isinstance(item_id, str):
+                continue
+            resolution = per_item.get(item_id)
+            if resolution is None:
+                continue
+            label = str(item.get("label", ""))
+            edges.append(Edge("MAPS_TO", item_id, resolution.tag))
+            proof.append({
+                "line_item": item_id,
+                "unit": unit_id,
+                "label": label,
+                "tag": resolution.tag,
+                "method": resolution.method,
+                "score": round(float(resolution.score), 4),
+            })
+
+    edges.sort(key=lambda e: (e.source, e.target))
+    proof.sort(key=lambda p: (str(p["line_item"]), str(p["tag"])))
+    return edges, proof

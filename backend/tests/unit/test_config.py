@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from fdi.platform.config import Settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 REQUIRED = {
     "FDI_DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/db",
@@ -12,6 +13,9 @@ REQUIRED = {
     "FDI_S3_ENDPOINT": "h:9000",
     "FDI_S3_ACCESS_KEY": "ak",
     "FDI_S3_SECRET_KEY": "sk",
+    # Required with no default: a default signing secret would be a secret
+    # baked into the image, which ADR-0002 forbids.
+    "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
 }
 
 
@@ -132,6 +136,28 @@ def test_extraction_schema_path_default(
     assert p.is_absolute()
     assert p.as_posix().endswith("docs/architecture/field-extraction-schema.json")
     assert p.exists()
+
+
+def test_auth_settings_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0002: token lifetimes are configurable; the secret is injected.
+
+    Defaults are the spec's numbers (~15 min access, ~30 day refresh), and the
+    secret has NO default on purpose -- one shipped default would be a signing
+    secret baked into the image, the exact thing ADR-0002 rules out.
+    """
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()
+    assert s.auth_secret == REQUIRED["FDI_AUTH_SECRET"]
+    assert s.auth_access_ttl_seconds == 900  # ~15 minutes
+    assert s.auth_refresh_ttl_seconds == 2_592_000  # 30 days
+
+
+def test_auth_secret_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No secret, no boot: the app must refuse to sign tokens with nothing."""
+    monkeypatch.delenv("FDI_AUTH_SECRET", raising=False)
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_cors_origins_default(monkeypatch: pytest.MonkeyPatch) -> None:

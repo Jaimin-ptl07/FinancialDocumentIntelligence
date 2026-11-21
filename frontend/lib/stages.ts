@@ -17,11 +17,19 @@ export const STAGES = [
   { name: "chunks", deps: ["ast", "semantic", "provenance", "structure"] },
   { name: "embedding", deps: ["chunks"] },
   { name: "index", deps: ["embedding", "chunks"] },
+  { name: "basis", deps: ["ast", "provenance"] },
+  { name: "statement_index", deps: ["ocr", "structure", "basis"] },
+  { name: "note_index", deps: ["ocr", "structure", "basis"] },
+  { name: "fog_objects", deps: ["ocr", "statement_index", "note_index", "structure"] },
+  { name: "fog_mapping", deps: ["fog_objects"] },
+  { name: "fog_reason", deps: ["fog_mapping", "fog_objects"] },
 ] as const satisfies readonly { name: string; deps: readonly string[] }[];
 
-/** The last stage to settle. When this reaches `done` the filing is readable
- *  end to end, which is what the ingestion screen polls for. */
-export const TERMINAL_STAGE = "index";
+/** The last stage to settle. When this reaches `done` the FINANCIAL OBJECT
+ *  GRAPH is readable — facts, their proof, and the health of the run. It used
+ *  to be `index`, which only meant the vector store had been written: a filing
+ *  could reach it with nothing mapped at all. */
+export const TERMINAL_STAGE = "fog_reason";
 
 /** `GET /documents` reports each row's progress as a {status: count} map over
  *  the latest run per stage. Reduce it to the three numbers the filings index

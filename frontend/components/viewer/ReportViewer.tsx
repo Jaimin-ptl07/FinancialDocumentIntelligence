@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { extractDocument, getDocument, pdfUrl } from "@/lib/api";
+import { getDocument, pdfUrl } from "@/lib/api";
+import { submitExtract } from "@/lib/jobs";
+import type { ExtractDocumentView } from "@/lib/types";
+import { useJob } from "@/lib/useJob";
 import { filingLabel, hasSourceFile } from "@/lib/documents";
 import { fieldId as toFieldId } from "@/lib/format";
 import { PageHeader } from "@/components/shell/PageHeader";
@@ -21,28 +24,27 @@ export function ReportViewer({ docId }: { docId: string }) {
     queryFn: () => getDocument(docId),
   });
 
-  // A plain (non-forced) read is a query, not a mutation: extract_document is
-  // now cache-first server-side (a persisted record from a prior run is
-  // served with no LLM calls), so loading the viewer should show whatever's
-  // already on disk without waiting for a click -- the click is for the
-  // FIRST read of a filing, or for forcing a fresh one via `extract.refetch`
-  // after `force` is flipped true below.
+  // Reading the figures is an API job (T5): submit, poll, then fetch the
+  // body the route used to answer inline. A plain (non-forced) read is cheap
+  // -- extract_document is cache-first server-side, serving a persisted record
+  // with no LLM calls -- so opening the viewer starts one by itself, unless a
+  // job for this filing is already remembered (left running, or settled):
+  // then that job is picked back up instead of paying for another.
   const canRead = Boolean(filing && hasSourceFile(filing));
-  // A ref, not state: `refetch()` can run in the same tick as the click that
-  // sets this, and queryFn must see the flag that click intended, not a
-  // batched-and-not-yet-applied state update.
-  const forceRef = useRef(false);
-  const extract = useQuery({
-    queryKey: ["extract", docId, filing?.doc_key],
-    queryFn: () => {
-      const force = forceRef.current;
-      forceRef.current = false;
-      return extractDocument(filing!.doc_key ?? docId, undefined, force);
-    },
-    enabled: canRead,
+  const docKey = filing ? (filing.doc_key ?? docId) : null;
+  const extract = useJob<ExtractDocumentView, [boolean]>({
+    slot: canRead && docKey ? `extract:${docKey}` : null,
+    submit: (force) => submitExtract(docKey!, undefined, force),
   });
+  const { start, phase, restored } = extract;
+  const autoStarted = useRef<string | null>(null);
+  useEffect(() => {
+    if (!canRead || !restored || phase !== "idle" || autoStarted.current === docKey) return;
+    autoStarted.current = docKey;
+    start(false);
+  }, [canRead, restored, phase, docKey, start]);
 
-  const fields = useMemo(() => extract.data?.fields ?? [], [extract.data]);
+  const fields = useMemo(() => extract.result?.fields ?? [], [extract.result]);
   // Indexed by position, matching FieldList's fieldId scheme: field_name
   // alone collides across modules (e.g. two "Cash on hand" rows), so it
   // cannot resolve which field is selected on its own.
@@ -72,20 +74,17 @@ export function ReportViewer({ docId }: { docId: string }) {
       >
         <button
           type="button"
-          disabled={!canRead || extract.isFetching}
-          onClick={() => extract.refetch()}
+          disabled={!canRead || extract.busy}
+          onClick={() => start(false)}
           className="btn btn-primary"
         >
-          {extract.isFetching ? "Reading figures" : "Read figures"}
+          {phase === "queued" ? "Queued" : extract.busy ? "Reading figures" : "Read figures"}
         </button>
-        {extract.data ? (
+        {extract.result ? (
           <button
             type="button"
-            disabled={extract.isFetching}
-            onClick={() => {
-              forceRef.current = true;
-              extract.refetch();
-            }}
+            disabled={extract.busy}
+            onClick={() => start(true)}
             className="btn"
             title="Discard the stored reading and extract again from scratch"
           >
@@ -178,11 +177,14 @@ export function ReportViewer({ docId }: { docId: string }) {
           className="viewer-aside overflow-y-auto"
           style={{ background: "var(--leaf)" }}
         >
-          {extract.error ? (
+          {/* Above the figures, not instead of them: a failed re-read leaves
+              the previous reading standing, and it is still worth showing. */}
+          {extract.problem ? (
             <p style={{ padding: "var(--sp-6)", fontSize: "var(--text-sm)" }}>
-              {(extract.error as Error).message}
+              {extract.problem}
             </p>
-          ) : fields.length === 0 ? (
+          ) : null}
+          {extract.problem && fields.length === 0 ? null : fields.length === 0 ? (
             <p
               style={{
                 padding: "var(--sp-6)",

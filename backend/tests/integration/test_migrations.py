@@ -8,11 +8,24 @@ pytestmark = pytest.mark.integration
 
 
 async def test_alembic_version_is_stamped(migrated_engine: AsyncEngine) -> None:
+    """The database is stamped at the migration directory's OWN head.
+
+    Derived, not hardcoded. A literal here has to be edited by every commit
+    that adds a migration, and it fails in a way that says nothing about the
+    new migration -- it just reports two revision numbers and leaves you to
+    work out which is the database and which is the assertion. Reading the head
+    from the script directory asserts the thing actually worth asserting:
+    `alembic upgrade head` really did reach head."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+    assert head is not None
     async with migrated_engine.connect() as conn:
         result = await conn.execute(sqlalchemy.text(
             "SELECT version_num FROM alembic_version"
         ))
-        assert result.scalar_one() == "0008"
+        assert result.scalar_one() == head
 
 
 async def test_usage_event_tables_exist(migrated_engine: AsyncEngine) -> None:
@@ -91,3 +104,21 @@ async def test_chunk_table_is_gone(migrated_engine: AsyncEngine) -> None:
     async with migrated_engine.connect() as conn:
         result = await conn.execute(sqlalchemy.text("SELECT to_regclass('chunk')"))
         assert result.scalar_one() is None
+
+
+async def test_identity_tables_exist(migrated_engine: AsyncEngine) -> None:
+    """Migration 0010 (T3, ADR-0002) adds the gate's two tables: app_user
+    (Invitee accounts) and refresh_token (the server-side half of the
+    rotating cookie). The unique email bites -- a second row for the same
+    address would be a duplicate Invitee, not a second identity."""
+    async with migrated_engine.begin() as conn:
+        await conn.execute(sqlalchemy.text(
+            "INSERT INTO app_user (id, email, password_hash) "
+            "VALUES ('u-t3-1', 'first@example.test', '$argon2id$stub')"
+        ))
+    with pytest.raises(sqlalchemy.exc.IntegrityError, match="uq_app_user_email"):
+        async with migrated_engine.begin() as conn:
+            await conn.execute(sqlalchemy.text(
+                "INSERT INTO app_user (id, email, password_hash) "
+                "VALUES ('u-t3-2', 'first@example.test', '$argon2id$stub')"
+            ))

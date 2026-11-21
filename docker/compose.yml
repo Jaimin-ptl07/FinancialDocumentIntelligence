@@ -16,6 +16,9 @@ x-backend-env: &backend-env
   # artifact_url signed with it is dead in the address bar. This signs URLs a host
   # can fetch. A Settings field, so it MUST live in this allowlist.
   FDI_S3_PUBLIC_ENDPOINT: ${FDI_S3_PUBLIC_ENDPOINT}
+  # Scheme of those URLs, independent of FDI_S3_SECURE (the in-network hop).
+  # Unset = follow FDI_S3_SECURE; compose.prod.yml pins it true for the edge.
+  FDI_S3_PUBLIC_SECURE: ${FDI_S3_PUBLIC_SECURE}
   FDI_S3_ACCESS_KEY: ${FDI_S3_ACCESS_KEY}
   FDI_S3_SECRET_KEY: ${FDI_S3_SECRET_KEY}
   FDI_S3_BUCKET: ${FDI_S3_BUCKET}
@@ -53,11 +56,40 @@ x-backend-env: &backend-env
   FDI_LLM_OUTPUT_COST_PER_MTOK_USD: ${FDI_LLM_OUTPUT_COST_PER_MTOK_USD}
   FDI_USD_TO_INR_RATE: ${FDI_USD_TO_INR_RATE}
   FDI_EXTRACTION_SCHEMA_PATH: ${FDI_EXTRACTION_SCHEMA_PATH}
+  # Authentication (ADR-0002, T3). REQUIRED -- no default exists in code on
+  # purpose (a default would be a signing secret baked into the image), so an
+  # operator's .env without it fails the stack at boot with a clear
+  # "auth_secret: Field required". Lifetimes are optional policy knobs.
+  FDI_AUTH_SECRET: ${FDI_AUTH_SECRET}
+  FDI_AUTH_ACCESS_TTL_SECONDS: ${FDI_AUTH_ACCESS_TTL_SECONDS}
+  FDI_AUTH_REFRESH_TTL_SECONDS: ${FDI_AUTH_REFRESH_TTL_SECONDS}
+  # The refresh cookie's public path: unset = /auth (dev, browser talks to
+  # the API directly); /api/auth behind the same-origin edge (T2/T4).
+  FDI_AUTH_COOKIE_PATH: ${FDI_AUTH_COOKIE_PATH}
+  # Sentry error monitoring (T8). Optional: unset/empty expands to "" and
+  # the app's empty-is-unset env source reads it as monitoring OFF; nothing
+  # at boot changes without a DSN. Set per deployment, never baked in.
+  FDI_SENTRY_DSN: ${FDI_SENTRY_DSN}
+  # Per-Invitee rate limits (T7). All optional: unset = the code defaults
+  # (50 expensive jobs/day, 20 uploads/day, 1 job in flight, a UTC-day
+  # window, Redis = FDI_RESULT_BACKEND's).
+  FDI_RATE_LIMIT_REDIS_URL: ${FDI_RATE_LIMIT_REDIS_URL}
+  FDI_RATE_LIMIT_JOBS_PER_DAY: ${FDI_RATE_LIMIT_JOBS_PER_DAY}
+  FDI_RATE_LIMIT_UPLOADS_PER_DAY: ${FDI_RATE_LIMIT_UPLOADS_PER_DAY}
+  FDI_RATE_LIMIT_MAX_CONCURRENT_JOBS: ${FDI_RATE_LIMIT_MAX_CONCURRENT_JOBS}
+  FDI_RATE_LIMIT_WINDOW_SECONDS: ${FDI_RATE_LIMIT_WINDOW_SECONDS}
+  FDI_RATE_LIMIT_STALE_JOB_SECONDS: ${FDI_RATE_LIMIT_STALE_JOB_SECONDS}
 
 x-backend-build: &backend-build
   build:
     context: ..
     dockerfile: backend/Dockerfile
+    # The image bakes the embedding weights for THIS model at build time; the
+    # runtime reads the same var via x-backend-env. One source, so an .env
+    # change rebakes instead of silently re-downloading in every new container.
+    # Defaulted in-place: a blank arg would bake `model_name=''` and fail.
+    args:
+      FDI_EMBED_MODEL: ${FDI_EMBED_MODEL:-BAAI/bge-small-en-v1.5}
 
 services:
   postgres:
@@ -78,10 +110,16 @@ services:
       start_period: 30s
 
   minio:
-    # NOT RELEASE.2025-10-15T17-29-55Z: that release exists but was never published
-    # as an image. This is the newest pullable tag, and is knowingly unpatched for
-    # CVE-2025-62506. Local dev only -- never production. See spec 3.4.
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # The final upstream MinIO image, mirrored into our GHCR and pinned by DIGEST
+    # (ADR-0001): upstream's Docker Hub repository is deleted, so this pin is what
+    # lets a fresh host boot the stack at all. Knowingly unpatched for
+    # CVE-2025-62506 -- accepted, see ADR-0001 for the threat-model rationale,
+    # which assumes NO published ports. That holds for the production compose;
+    # THIS dev file still publishes 9000/9001 for host-side tools, so it must
+    # never be what a reachable host runs. linux/amd64 only (the only platform the mirror source held). The tag is
+    # informational; the digest is what is pulled. The package is private: a
+    # fresh host needs `docker login ghcr.io` first.
+    image: ghcr.io/jaimin-ptl07/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}

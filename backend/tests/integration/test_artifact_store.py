@@ -213,3 +213,79 @@ async def test_put_and_get_bytes(store: ArtifactStore) -> None:
 # minio SDK's documented contract and it stays -- it is what stops the middle row
 # above from happening the day someone streams a large artifact instead of
 # read()-ing it whole. It is simply not observable from here today.
+
+
+async def test_presigned_url_survives_the_same_origin_edge(
+    minio_client: Minio, minio_container: Any, minio_endpoint: str
+) -> None:
+    """Production: MinIO publishes nothing, the browser fetches presigned URLs
+    from the PUBLIC origin over HTTPS, and the Caddy edge forwards them to
+    `minio:9000` over plain HTTP with the original Host header kept.
+
+    So the URL must be signed `https://<public host>/...` even though the store
+    itself is reached insecurely -- that split is FDI_S3_PUBLIC_SECURE. The
+    "edge" here is a plain GET at MinIO carrying the public Host header: SigV4
+    signs Host and path (not scheme), so this is exactly the request Caddy makes.
+    """
+    from fdi.platform.config import Settings
+    from fdi.platform.storage.artifact_store import build_presign_client
+    from tests.conftest import TEST_SIGNING_SECRET
+
+    cfg = minio_container.get_config()
+    settings = Settings(
+        database_url="postgresql+asyncpg://u:p@h:5432/db",
+        broker_url="amqp://guest:guest@h:5672/%2F",
+        result_backend="redis://h:6379/0",
+        s3_endpoint=minio_endpoint,
+        s3_public_endpoint="fdi.example",
+        s3_public_secure=True,
+        s3_secure=False,
+        s3_access_key=cfg["access_key"],
+        s3_secret_key=cfg["secret_key"],
+        auth_secret=TEST_SIGNING_SECRET,
+    )
+    store = ArtifactStore(
+        minio_client, bucket="test-artifacts", presign_client=build_presign_client(settings)
+    )
+    await store.ensure_bucket()
+    await store.put_json("edge.json", {"edge": True})
+
+    url = await store.presigned_get_url("edge.json", ttl_seconds=60)
+    parsed = urlparse(url)
+    assert parsed.scheme == "https", "an http:// link is mixed content on the https page"
+    assert parsed.netloc == "fdi.example"
+    assert parsed.path == "/test-artifacts/edge.json", (
+        "the edge routes by bucket path; any prefix would break the signed path"
+    )
+
+    origin = f"http://{minio_endpoint}{parsed.path}?{parsed.query}"
+    async with httpx.AsyncClient() as client:
+        via_edge = await client.get(origin, headers={"Host": "fdi.example"})
+        wrong_host = await client.get(origin)
+
+    assert via_edge.status_code == 200, f"edge-forwarded fetch refused: {via_edge.text}"
+    assert via_edge.content == b'{"edge":true}'
+    assert wrong_host.status_code == 403, (
+        "a rewritten Host was accepted -- the signature does not bind the public origin"
+    )
+
+
+def test_presign_client_defaults_to_the_store_scheme() -> None:
+    """Unset FDI_S3_PUBLIC_SECURE keeps the dev arrangement: the presign scheme
+    follows FDI_S3_SECURE, as it did before the edge existed."""
+    from fdi.platform.config import Settings
+    from fdi.platform.storage.artifact_store import build_presign_client
+    from tests.conftest import TEST_SIGNING_SECRET
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://u:p@h:5432/db",
+        broker_url="amqp://guest:guest@h:5672/%2F",
+        result_backend="redis://h:6379/0",
+        s3_endpoint="minio:9000",
+        s3_public_endpoint="localhost:9000",
+        s3_access_key="ak",
+        s3_secret_key="sk",
+        auth_secret=TEST_SIGNING_SECRET,
+    )
+    url = build_presign_client(settings).presigned_get_object("artifacts", "k")
+    assert url.startswith("http://localhost:9000/artifacts/k?")

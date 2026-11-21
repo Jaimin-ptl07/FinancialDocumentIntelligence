@@ -1,0 +1,25 @@
+{
+  "issuer": "TCS",
+  "fiscal_year": "FY2025-26",
+  "basis": "standalone",
+  "statement": "profit_and_loss",
+  "_source": "Standalone Statement of Profit and Loss, PDF page 253 of annual-report-2025-2026.pdf (Tata Consultancy Services Integrated Annual Report 2025-26).",
+  "_unit": "INR crore, exactly as printed. No rescaling. Brackets are negative.",
+  "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure Document Intelligence OCR. Every subtotal re-derived by hand and ties: 230974-164101=66873; 66873-4067=62806; 62806-13710=49096; 49096+(-600)=48496.",
+  "_pbmi_note": "PBMI is 48,496 = PATR 49,096 plus OCI (-600). It is total COMPREHENSIVE income before minority interest, NOT profit after tax. An earlier hand-read ground truth recorded 49,096 here; that was the truth set being wrong, not the extractor -- see the note-driven design section 7.2.",
+  "_coverage": "FACE-LEVEL ONLY, deliberately partial. Same convention as the consolidated file: a tag is listed only where its mapping to a printed line is unambiguous, and tags in NEITHER list are out of scope and ignored by score_document.",
+  "values": {
+    "TOTRNOTINR": 230974.0,
+    "TOTEXPR": 164101.0,
+    "PB3NTAX": 66873.0,
+    "PBTR": 62806.0,
+    "CT": 14178.0,
+    "DT": -468.0,
+    "PATR": 49096.0,
+    "OTCI": -600.0,
+    "PBMI": 48496.0,
+    "EPSB": 135.70,
+    "EPSD": 135.70
+  },
+  "not_reported": []
+}

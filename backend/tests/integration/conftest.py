@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from urllib.parse import quote
@@ -19,6 +20,7 @@ if sys.platform == "win32":
 import pytest
 from alembic import command
 from alembic.config import Config
+from httpx import AsyncClient
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from testcontainers.minio import MinioContainer
@@ -27,6 +29,7 @@ from testcontainers.rabbitmq import RabbitMqContainer
 from testcontainers.redis import RedisContainer
 
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -101,6 +104,7 @@ _SETTINGS_STUBS = {
     "FDI_S3_ENDPOINT": "localhost:9000",
     "FDI_S3_ACCESS_KEY": "minioadmin",
     "FDI_S3_SECRET_KEY": "minioadmin",
+    "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
 }
 
 # Deliberately unroutable (port 1). Nothing should ever CONNECT to this: tests
@@ -199,3 +203,67 @@ async def migrated_engine(
     engine = create_async_engine(postgres_url)
     yield engine
     await engine.dispose()
+
+
+# The password every test Invitee gets. Not a secret -- it exists so fixtures
+# read as fixtures and not as cryptography.
+INVITEE_PASSWORD = "correct-horse-battery-staple"
+
+
+@pytest.fixture
+async def invitee(migrated_engine: AsyncEngine, _alembic_applied: None) -> tuple[str, str]:
+    """(email, password) for one account, created the way the admin CLI
+    creates accounts -- UserRepository + argon2, no signup shortcut exists.
+
+    Unique per test on purpose: the container's Postgres is session-scoped,
+    so a fixed email would collide with sibling tests' logins via the unique
+    constraint."""
+    from fdi.platform.db.engine import make_session_factory
+    from fdi.platform.db.repository import UserRepository
+    from fdi.platform.security import hash_password
+
+    email = f"invitee-{uuid.uuid4().hex}@example.test"
+    factory = make_session_factory(migrated_engine)
+    async with factory() as s:
+        await UserRepository(s).create(
+            email=email, password_hash=hash_password(INVITEE_PASSWORD)
+        )
+        await s.commit()
+    return email, INVITEE_PASSWORD
+
+
+async def authenticate(client: AsyncClient, creds: tuple[str, str]) -> None:
+    """Log `client` in through the real /auth/login and arm its Authorization
+    header, so every existing route test exercises the gate end to end
+    instead of bypassing it.
+
+    raise_for_status, not a soft skip: a broken login is a broken suite, and
+    a test that quietly proceeded unauthenticated would be exactly the
+    silence the gate exists to make loud."""
+    email, password = creds
+    r = await client.post("/auth/login", json={"email": email, "password": password})
+    r.raise_for_status()
+    token = r.json()["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+
+
+def job_services(session_factory, store, **overrides):
+    """`JobServices` for playing the worker eagerly (T5): every client off
+    unless a test passes the fake its route was served."""
+    from fdi.pipeline.evaluation import CANDIDATES
+    from fdi.pipeline.jobs import JobServices
+
+    fields = {
+        "session_factory": session_factory,
+        "store": store,
+        "embedder": None,
+        "vector_store": None,
+        "graph_store": None,
+        "agent_client": None,
+        "extractor_client": None,
+        "entity_threshold": 0.85,
+        "extraction_schema_path": "",
+        "candidates": CANDIDATES,
+    }
+    fields.update(overrides)
+    return JobServices(**fields)

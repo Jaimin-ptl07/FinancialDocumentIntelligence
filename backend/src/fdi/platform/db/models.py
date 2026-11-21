@@ -14,7 +14,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    true,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -137,19 +139,27 @@ class OcrUsageEvent(Base):
 
 class LlmUsageEvent(Base):
     """One real Azure OpenAI chat.completions.create() call, across all
-    three call sites (semantic classification, schema-driven extraction,
-    the /ask agent loop). `doc_id`/`stage_run_id` are nullable: `/ask` is
-    corpus-wide (doc_id NULL), and both `/ask` and `/extract/document` run
-    OUTSIDE run_stage entirely (stage_run_id NULL) -- only the `semantic`
-    stage's calls carry a real stage_run_id. Costing feature (docs/
-    superpowers/specs/2026-07-28-costing-feature-design.md); INR cost is
-    computed at read time from input_tokens/output_tokens, never stored
-    here."""
+    four call sites (semantic classification, FOG concept mapping, schema-
+    driven extraction, the /ask agent loop). `doc_id`/`stage_run_id` are
+    nullable: `/ask` is corpus-wide (doc_id NULL), and both `/ask` and
+    `/extract/document` run OUTSIDE run_stage entirely (stage_run_id NULL)
+    -- only the `semantic` and `fog_mapping` stages' calls carry a real
+    stage_run_id. Costing feature (docs/superpowers/specs/2026-07-28-
+    costing-feature-design.md); INR cost is computed at read time from
+    input_tokens/output_tokens, never stored here.
+
+    `fog_mapping` was added to the source set in migration 0009. Its
+    absence was not a cosmetic gap: the constraint is enforced on INSERT,
+    so every mapping call raised CheckViolationError while recording the
+    usage it had ALREADY spent money on, and the stage died mid-run. A
+    billing ledger that rejects a real charge is worse than one that
+    misses it -- it takes the work down with it."""
 
     __tablename__ = "llm_usage_event"
     __table_args__ = (
         CheckConstraint(
-            "source IN ('semantic_classify','extract_document','ask_agent')",
+            "source IN ('semantic_classify','fog_mapping','extract_document',"
+            "'ask_agent')",
             name="ck_llm_usage_event_source",
         ),
     )
@@ -167,6 +177,91 @@ class LlmUsageEvent(Base):
     input_tokens: Mapped[int] = mapped_column(nullable=False)
     output_tokens: Mapped[int] = mapped_column(nullable=False)
     duration_ms: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AppUser(Base):
+    """An Invitee's account (ADR-0002). `app_user`, not `user`: USER is a
+    reserved word in PostgreSQL, and quoting it forever to keep a prettier
+    name buys nothing. There is no self-signup and no role column yet --
+    accounts exist only because an admin CLI created them, and roles are the
+    product path ADR-0002 deliberately defers.
+
+    `password_hash` is an argon2id string (fdi.platform.security); it is
+    never the password, and no view ever serialises this row."""
+
+    __tablename__ = "app_user"
+    __table_args__ = (UniqueConstraint("email", name="uq_app_user_email"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # RFC 5321's forward-mailbox ceiling (64 local + @ + 255 domain), not
+    # the folklore 254, so no legal address is rejected by the column.
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(nullable=False, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ApiJob(Base):
+    """One polled request to an expensive route (T5): `/ask`, document
+    extraction, factsheet generation or an eval run.
+
+    `params` is the validated request the route accepted; `result` is the
+    body the route used to return inline -- JSON, or, for an XBRL factsheet,
+    the XML document as a JSON string. Status is its own vocabulary, not
+    `StageStatus`: a job SUCCEEDS (the caller's request was answered), a
+    stage is DONE (an artifact exists); conflating them would make the jobs
+    endpoint say `done` for ping runs and `succeeded` for these."""
+
+    __tablename__ = "api_job"
+    __table_args__ = (
+        CheckConstraint("kind IN ('ask','extract','factsheet','eval')", name="ck_api_job_kind"),
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed')", name="ck_api_job_status"
+        ),
+        Index("ix_api_job_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    params: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    result: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class RefreshToken(Base):
+    """One live refresh-token session row (ADR-0002).
+
+    The cookie carries the raw token; this row stores only its SHA-256.
+    Rotation is `revoked_at IS NULL -> revoked_at = now()` plus a fresh row,
+    so replaying a rotated-or-logged-out token finds `revoked_at` set and
+    fails. Rows are per-LOGIN, not per-user: the same Invitee may hold
+    several concurrent sessions (laptop + phone), each dying independently."""
+
+    __tablename__ = "refresh_token"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_user.id"), index=True, nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

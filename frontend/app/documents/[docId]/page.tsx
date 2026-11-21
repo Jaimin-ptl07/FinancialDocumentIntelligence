@@ -1,7 +1,7 @@
 "use client";
 
 import { use } from "react";
-import { ReportViewer } from "@/components/viewer/ReportViewer";
+import { FogViewer } from "@/components/fog/FogViewer";
 
 /** The route shell. It exists only to unwrap the async `params` promise; the
  *  screen itself takes a plain `docId` so it can be rendered — and tested —
@@ -12,5 +12,5 @@ export default function ReportViewerPage({
   params: Promise<{ docId: string }>;
 }) {
   const { docId } = use(params);
-  return <ReportViewer docId={docId} />;
+  return <FogViewer docId={docId} />;
 }

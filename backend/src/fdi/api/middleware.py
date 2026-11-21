@@ -26,6 +26,7 @@ from fdi.platform.obs.logging import (
     is_valid_correlation_id,
     new_correlation_id,
 )
+from fdi.platform.obs.sentry import tag_correlation_id
 
 HEADER = "x-request-id"
 
@@ -77,6 +78,12 @@ class CorrelationIdMiddleware:
         correlation_id = inbound if (inbound and not rejected) else new_correlation_id()
 
         bind_correlation_id(correlation_id)
+        # The id must also reach Sentry's per-request SCOPE, here at bind time,
+        # not the contextvar at capture time: the `finally` below clears the
+        # contextvar while the exception is still unwinding past this frame, but
+        # a tag on Sentry's scope object survives to the capture that happens
+        # further out. A no-op with no DSN configured -- see obs/sentry.py.
+        tag_correlation_id(correlation_id)
         # The echo wraps the REJECTION too, not just the app. A refusal is still
         # a response, and the id on it is the minted one -- which is the only
         # way the caller can quote the request whose id we would not accept.

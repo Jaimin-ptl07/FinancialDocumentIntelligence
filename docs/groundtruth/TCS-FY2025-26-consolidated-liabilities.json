@@ -1,0 +1,20 @@
+{
+  "issuer": "TCS",
+  "fiscal_year": "FY2025-26",
+  "basis": "consolidated",
+  "statement": "liabilities",
+  "_source": "Consolidated Balance Sheet, PDF page 166 of annual-report-2025-2026.pdf (TCS Integrated Annual Report 2025-26).",
+  "_unit": "INR crore, exactly as printed. No rescaling. Brackets are negative.",
+  "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure DI OCR. Every subtotal re-derived by hand and ties.",
+  "_coverage": "FACE LEVEL, deliberately partial. A tag is listed only where its mapping to a printed line is unambiguous. Tags in NEITHER list are out of scope and ignored by score_document -- putting a disclosed-but-unmappable tag in not_reported would score a CORRECT extraction as a false positive.",
+  "_notes": "LTOLR is 9,453: pdftotext rendered the cell as `9 453` without its comma, and the subtotal proves the value -- 12,980 - (126+588+961+1,205+647) = 9,453. TCS prints NO single 'Total liabilities' line, only non-current and current.",
+  "values": {
+    "NETDTL": 1205.0,
+    "LTOLR": 9453.0,
+    "STLL": 1830.0,
+    "STTRP": 14808.0,
+    "TOTNCLR": 12980.0,
+    "TOTCLR": 60914.0
+  },
+  "not_reported": []
+}

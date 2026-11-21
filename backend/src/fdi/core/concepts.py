@@ -132,6 +132,24 @@ class ConceptIndex:
         return best
 
 
+def _alias_list(node: Mapping[str, object]) -> tuple[str, ...]:
+    """A concept's report-side label variants, under either schema generation.
+
+    v4.3 names this `note_aliases`; the v3.2 seed that `load_schema` still
+    serves by default names it `aliases` -- 190 of them, none of which this
+    module could see. Reading only one key meant the FREE lexical tier never
+    fired against whichever generation was live, sending every label to the
+    paid tier or leaving it unmapped. Aliases are aliases; accept both, with
+    the v4.3 name winning when a document carries both."""
+    for key in ("note_aliases", "aliases"):
+        raw = node.get(key)
+        if isinstance(raw, list):
+            found = tuple(a for a in raw if isinstance(a, str) and a)
+            if found:
+                return found
+    return ()
+
+
 def _tagged_descendants(
     node: Mapping[str, object], depth: int = 1
 ) -> list[ConceptCandidate]:
@@ -150,7 +168,7 @@ def _tagged_descendants(
             name = child.get("field_name")
             path = child.get("field_path")
             sr_no = child.get("sr_no")
-            aliases = child.get("note_aliases")
+            aliases = _alias_list(child)
             definition = child.get("definition")
             out.append(
                 ConceptCandidate(
@@ -160,9 +178,7 @@ def _tagged_descendants(
                     depth=depth,
                     origin=str(child.get("origin") or "extracted"),
                     sr_no=sr_no if isinstance(sr_no, str) else None,
-                    aliases=tuple(a for a in aliases if isinstance(a, str))
-                    if isinstance(aliases, list)
-                    else (),
+                    aliases=aliases,
                     definition=definition if isinstance(definition, str) else "",
                 )
             )
@@ -182,21 +198,94 @@ def _walk_groups(
         candidates = _tagged_descendants(node)
         if len(candidates) >= min_children:
             name = node.get("field_name")
-            aliases = node.get("note_aliases")
+            aliases = _alias_list(node)
             kept = candidates[:MAX_CANDIDATES]
             out.append(
                 ConceptGroup(
                     key=normalize(name),
                     name=name if isinstance(name, str) else "",
                     statement=statement,
-                    note_aliases=tuple(a for a in aliases if isinstance(a, str))
-                    if isinstance(aliases, list)
-                    else (),
+                    note_aliases=aliases,
                     candidates=tuple(kept),
                     truncated=max(0, len(candidates) - len(kept)),
                 )
             )
         _walk_groups(children, statement, out, min_children)
+
+
+def parent_map(schema: Mapping[str, object]) -> dict[str, str]:
+    """child tag -> nearest tagged ancestor.
+
+    Needed to catch a note's TOTAL row being mapped onto one of its own
+    components: note 15's grand total 13,710 was placed on `OTTAX` ("Other tax
+    items"), whose ancestor `TOTTAXEXP` was already known to be 13,710 -- so the
+    reconstructed total came out at exactly twice the truth. Recognising that a
+    value equals an ANCESTOR's is what makes that detectable."""
+    out: dict[str, str] = {}
+    modules = schema.get("modules") if isinstance(schema, Mapping) else None
+    if not isinstance(modules, list):
+        return out
+
+    def walk(fields: object, ancestor: str) -> None:
+        if not isinstance(fields, list):
+            return
+        for node in fields:
+            if not isinstance(node, Mapping):
+                continue
+            tag = node.get("tag")
+            own = tag if isinstance(tag, str) and tag else ancestor
+            if isinstance(tag, str) and tag and ancestor:
+                out[tag] = ancestor
+            walk(node.get("fields"), own)
+
+    for module in modules:
+        if not isinstance(module, Mapping):
+            continue
+        units = module.get("retrieval_units")
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if isinstance(unit, Mapping):
+                walk(unit.get("fields"), "")
+    return out
+
+
+def all_concepts(schema: Mapping[str, object]) -> tuple[ConceptCandidate, ...]:
+    """EVERY tagged concept in the schema, top-level parents included.
+
+    Not the same set as the union of `ConceptIndex` group candidates, and the
+    difference is the whole point: a group holds a parent's DESCENDANTS, so a
+    root concept is a group *key* but appears in no group's candidate list.
+    Mapping the face against group candidates alone therefore cannot place
+    "Revenue from operations" or "Profit before tax" -- measured on TCS, 15 of
+    28 face rows went unmapped, including every waterfall total.
+
+    Face rows are summaries and match parents; note rows are detail and match
+    descendants. The two need different candidate sets."""
+    modules = schema.get("modules") if isinstance(schema, Mapping) else None
+    if not isinstance(modules, list):
+        return ()
+    seen: set[str] = set()
+    out: list[ConceptCandidate] = []
+    for module in modules:
+        if not isinstance(module, Mapping):
+            continue
+        units = module.get("retrieval_units")
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if not isinstance(unit, Mapping):
+                continue
+            fields = unit.get("fields")
+            if not isinstance(fields, list):
+                continue
+            # A synthetic root makes the unit's own top-level fields children,
+            # so they are emitted like any other tagged node.
+            for cand in _tagged_descendants({"fields": fields}):
+                if cand.tag not in seen:
+                    seen.add(cand.tag)
+                    out.append(cand)
+    return tuple(out)
 
 
 def build_concept_index(

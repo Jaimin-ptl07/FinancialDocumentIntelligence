@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import EnvSettingsSource, PydanticBaseSettingsSource
 
@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     # to None: where the in-network address IS reachable by clients (single-host prod,
     # tests), presigning falls back to s3_endpoint and this is a no-op.
     s3_public_endpoint: str | None = None
+    # Scheme of presigned URLs, distinct from s3_secure (the in-network hop). Behind
+    # the production same-origin edge the store is reached over plain http at
+    # minio:9000, but the browser fetches `https://<domain>/<bucket>/...` -- an http
+    # link there is mixed content. None = follow s3_secure (dev, tests).
+    s3_public_secure: bool | None = None
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str = "artifacts"
@@ -225,6 +230,49 @@ class Settings(BaseSettings):
     llm_input_cost_per_mtok_usd: float = 2.5
     llm_output_cost_per_mtok_usd: float = 10.0
     usd_to_inr_rate: float = 95.0
+
+    # Authentication (ADR-0002: app-level JWT gate, Gated demo). The access
+    # token is a signed JWT (~15 min); the refresh token is an opaque server-
+    # side-remembered secret in an httpOnly cookie (~30 days, rotated on each
+    # use). auth_secret signs the access token and MUST be injected at runtime
+    # -- REQUIRED with no default because a default would be a signing secret
+    # baked into the image, the exact thing ADR-0002 forbids. Lifetimes are
+    # policy, so they are settings: a demo can shorten them without a rebuild.
+    auth_secret: str
+    auth_access_ttl_seconds: int = 900
+    auth_refresh_ttl_seconds: int = 2_592_000
+    # The refresh cookie's Path: the PUBLIC path of the /auth routes as the
+    # browser sees them. "/auth" when the browser talks to the API directly
+    # (dev compose); "/api/auth" behind the same-origin edge, which strips
+    # /api before the request arrives -- a cookie scoped to the backend's
+    # internal path would never be sent back by the browser (T4).
+    auth_cookie_path: str = "/auth"
+
+    # Sentry error monitoring (productionization T8, Gated demo). None/empty =
+    # monitoring OFF, cleanly: fdi.platform.obs.sentry returns before the SDK
+    # initialises, so boot and behaviour are unchanged. The DSN identifies a
+    # project's ingest endpoint and is set per deployment, not per image --
+    # like every FDI_ var it is injected at runtime and never baked in.
+    sentry_dsn: str | None = None
+
+    # Per-Invitee rate limits (productionization T7): they bound what one
+    # Invitee can spend on Azure. Checked when a job is submitted
+    # (fdi.api.limits). Two daily quotas, kept as Redis counters in a fixed
+    # window aligned to the epoch (86400 s => resets at 00:00 UTC):
+    # submissions to the four expensive job routes (/ask, /extract/document,
+    # /factsheet/document, /eval share one quota), and uploads. Plus a cap on
+    # expensive jobs in flight (queued or running) at once, counted from
+    # api_job itself. A job that has not changed status for
+    # stale_job_seconds no longer counts, so a lost worker cannot lock an
+    # Invitee out for good -- the trade-off being that a job legitimately
+    # running longer than that stops holding its slot (workers set no task
+    # time limit to pair it with). redis_url None = FDI_RESULT_BACKEND's Redis.
+    rate_limit_redis_url: str | None = None
+    rate_limit_jobs_per_day: int = Field(default=50, ge=1)
+    rate_limit_uploads_per_day: int = Field(default=20, ge=1)
+    rate_limit_max_concurrent_jobs: int = Field(default=1, ge=1)
+    rate_limit_window_seconds: int = Field(default=86_400, ge=1)
+    rate_limit_stale_job_seconds: int = Field(default=7_200, ge=1)
 
     @classmethod
     def settings_customise_sources(

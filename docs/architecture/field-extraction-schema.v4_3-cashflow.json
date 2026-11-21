@@ -1,0 +1,156 @@
+{
+  "version": "4.3.0-cashflow",
+  "authored": "by hand from Ind AS 7 and from what TCS, RITES and RIL actually print. The Q3VENI taxonomy has NO cash-flow sheet.",
+  "reporting_unit": "as reported",
+  "tags_are_new": "EVERY tag in this module is new. The customer taxonomy defines none of them, so none of these codes came from the sheet and all of them need sign-off before they are treated as canonical. They use a CF prefix so their provenance is obvious at a glance and they can never be mistaken for a Q3VENI code.",
+  "design_rules": {
+    "see": "field-extraction-schema.v4_3-pl.json carries the full rule text; the same seven rules apply here.",
+    "the_statement_is_a_waterfall_not_a_tree": "A cash-flow statement is a running total: profit before tax, adjusted, then working capital, then tax, giving operating cash. Most parents here are WATERFALLS over peers. Only the adjustment and working-capital blocks are true compositions.",
+    "sign_is_carried_by_the_line_not_the_reader": "Filings print outflows in parentheses, and fdi.core.numbers already reads those as negative. So the adjustment and working-capital blocks are summed with weight +1 and the printed sign does the work. The only explicit -1 weights are where a filing prints a positive number that must be subtracted (taxes paid).",
+    "three_issuers_disagree_on_labels": "TCS writes 'Net cash generated from operating activities', RITES 'Net Cash Flow from Operating Activities', RIL 'Net Cash Flow from Operating Activities'. Every total therefore carries several note_aliases; the anchors in fdi.core.statements.STATEMENT_ANCHORS were widened for the same reason."
+  },
+  "modules": [
+    {
+      "key": "module_cash_flow",
+      "name": "Cash Flow",
+      "statement": "cash_flow",
+      "retrieval_units": [
+        {
+          "unit_id": "CF",
+          "statement_type": "cash_flow",
+          "basis_preference": "standalone",
+          "fields": [
+
+            {"tag":"CFPBT","field_name":"Profit before tax","sr_no":"A.1","origin":"extracted","data_type":"decimal",
+             "note_aliases":["net profit before tax","profit before tax","net profit before tax as per statement of profit and loss","net profit before share of profit"],
+             "definition":"The opening line of the indirect method. It is the SAME number as the P&L's PBTR; a mismatch between the two statements is a finding.",
+             "reconciliation":{"method":"sum","inputs":[{"tag":"PBTR","weight":1}]}},
+
+            { "tag": "CFADJ", "field_name": "Adjustments for non-cash and non-operating items", "sr_no": "A.2",
+              "origin": "derived",
+              "note_aliases": ["adjusted for", "adjustments for"],
+              "definition": "Items in profit that moved no cash, plus items whose cash belongs to investing or financing. Printed signs carry the direction.",
+              "derivation": {"method":"sum","inputs":["CFDEP","CFFIN","CFINT","CFDIV","CFPPE","CFIMP","CFPRV","CFFX","CFSBP","CFOTADJ"]},
+              "fields": [
+                {"tag":"CFDEP","field_name":"Depreciation, amortisation and depletion","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["depreciation and amortisation expense","depreciation / amortisation and depletion expense","depreciation and amortization"]},
+                {"tag":"CFFIN","field_name":"Finance costs","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["finance costs","finance cost","interest expense"]},
+                {"tag":"CFINT","field_name":"Interest income","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["interest income"],
+                 "definition":"Removed from operating profit here because the cash appears under investing."},
+                {"tag":"CFDIV","field_name":"Dividend income","origin":"extracted","data_type":"decimal","note_aliases":["dividend income"]},
+                {"tag":"CFPPE","field_name":"Loss / (gain) on sale or discard of property, plant and equipment","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["loss on sale / discard of property plant and equipment","profit on sale of assets","net gain on disposal of property, plant and equipment"]},
+                {"tag":"CFIMP","field_name":"Impairment and write-offs","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["impairment","bad debts and advances written off","allowance for expected credit loss"]},
+                {"tag":"CFPRV","field_name":"Provisions and employee benefit charges","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["provision towards legal claim","provisions"]},
+                {"tag":"CFFX","field_name":"Unrealised foreign exchange loss / (gain)","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["unrealised foreign exchange gain","effect of exchange rate change"]},
+                {"tag":"CFSBP","field_name":"Share-based payment expense","origin":"extracted","data_type":"decimal","note_aliases":["share based payment"]},
+                {"tag":"CFOTADJ","field_name":"Other adjustments","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["net gain on financial assets","net gain on lease modification","net gain on sub-lease"]}
+              ]},
+
+            { "tag": "CFOPWC", "field_name": "Operating profit before working capital changes", "sr_no": "A.3",
+              "origin": "derived",
+              "note_aliases": ["operating profit before working capital changes"],
+              "waterfall": {"method":"sum","inputs":[{"tag":"CFPBT","weight":1},{"tag":"CFADJ","weight":1}]}},
+
+            { "tag": "CFWC", "field_name": "Changes in working capital", "sr_no": "A.4",
+              "origin": "derived",
+              "note_aliases": ["changes in working capital", "adjustments for increase / decrease in operating assets"],
+              "definition": "An increase in an operating ASSET consumes cash; an increase in an operating LIABILITY releases it. Filings already print that direction, so these are summed as printed.",
+              "derivation": {"method":"sum","inputs":["CFWCINV","CFWCTR","CFWCOA","CFWCTP","CFWCOL","CFWCPRV"]},
+              "fields": [
+                {"tag":"CFWCINV","field_name":"(Increase) / decrease in inventories","origin":"extracted","data_type":"decimal","note_aliases":["inventories"]},
+                {"tag":"CFWCTR","field_name":"(Increase) / decrease in trade receivables","origin":"extracted","data_type":"decimal","note_aliases":["trade receivables"]},
+                {"tag":"CFWCOA","field_name":"(Increase) / decrease in other assets","origin":"extracted","data_type":"decimal","note_aliases":["other assets","other financial assets","loans and advances"]},
+                {"tag":"CFWCTP","field_name":"Increase / (decrease) in trade payables","origin":"extracted","data_type":"decimal","note_aliases":["trade payables"]},
+                {"tag":"CFWCOL","field_name":"Increase / (decrease) in other liabilities","origin":"extracted","data_type":"decimal","note_aliases":["other liabilities","other financial liabilities"]},
+                {"tag":"CFWCPRV","field_name":"Increase / (decrease) in provisions","origin":"extracted","data_type":"decimal","note_aliases":["provisions"]}
+              ]},
+
+            { "tag": "CFGEN", "field_name": "Cash generated from operations", "sr_no": "A.5",
+              "origin": "derived",
+              "note_aliases": ["cash generated from operations", "cash generated from operating activities"],
+              "waterfall": {"method":"sum","inputs":[{"tag":"CFOPWC","weight":1},{"tag":"CFWC","weight":1}]}},
+
+            {"tag":"CFTAX","field_name":"Income taxes paid (net of refunds)","sr_no":"A.6","origin":"extracted","data_type":"decimal",
+             "note_aliases":["taxes paid","direct taxes paid","income taxes paid","tax expense"],
+             "definition":"Cash actually paid, which is NOT the P&L tax charge -- the gap is current-tax provisioning and refunds."},
+
+            { "tag": "CFO", "field_name": "Net cash from operating activities", "sr_no": "A",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["net cash generated from operating activities", "net cash flow from operating activities", "net cash from operating activities", "cash flows from operating activities"],
+              "definition": "Taxes paid are subtracted explicitly: filings usually print this line positive under a 'less' caption rather than in parentheses.",
+              "waterfall": {"method":"sum","inputs":[{"tag":"CFGEN","weight":1},{"tag":"CFTAX","weight":-1}]}},
+
+            { "tag": "CFI", "field_name": "Net cash used in investing activities", "sr_no": "B",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["net cash used in investing activities", "net cash flow from investing activities", "cash flows from investing activities"],
+              "derivation": {"method":"sum","inputs":["CFIPPE","CFISPPE","CFIINVP","CFIINVS","CFILOAN","CFIDEP","CFIINT","CFIDIV","CFIOT"]},
+              "fields": [
+                {"tag":"CFIPPE","field_name":"Purchase of property, plant, equipment and intangibles","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["purchase of property plant and equipment","purchase of fixed assets","additions to property, plant and equipment"]},
+                {"tag":"CFISPPE","field_name":"Proceeds from sale of property, plant and equipment","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["proceeds from sale of property plant and equipment","sale of fixed assets"]},
+                {"tag":"CFIINVP","field_name":"Purchase of investments","origin":"extracted","data_type":"decimal","note_aliases":["purchase of investments"]},
+                {"tag":"CFIINVS","field_name":"Proceeds from sale or redemption of investments","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["proceeds from sale of investments","sale / redemption of investments"]},
+                {"tag":"CFILOAN","field_name":"Loans given, net of repayments","origin":"extracted","data_type":"decimal","note_aliases":["loans given","inter-corporate deposits"]},
+                {"tag":"CFIDEP","field_name":"Bank deposits placed, net of maturities","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["bank deposits","fixed deposits with banks"],
+                 "definition":"Deposits with an original maturity over three months are NOT cash equivalents, so their movement is an investing flow."},
+                {"tag":"CFIINT","field_name":"Interest received","origin":"extracted","data_type":"decimal","note_aliases":["interest received"]},
+                {"tag":"CFIDIV","field_name":"Dividend received","origin":"extracted","data_type":"decimal","note_aliases":["dividend received"]},
+                {"tag":"CFIOT","field_name":"Other investing flows","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "CFF", "field_name": "Net cash from financing activities", "sr_no": "C",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["net cash used in financing activities", "net cash flow from financing activities", "cash flows from financing activities"],
+              "derivation": {"method":"sum","inputs":["CFFBOR","CFFREP","CFFSHR","CFFBUY","CFFLEA","CFFINT","CFFDIV","CFFOT"]},
+              "fields": [
+                {"tag":"CFFBOR","field_name":"Proceeds from borrowings","origin":"extracted","data_type":"decimal","note_aliases":["proceeds from borrowings","proceeds from long-term borrowings"]},
+                {"tag":"CFFREP","field_name":"Repayment of borrowings","origin":"extracted","data_type":"decimal","note_aliases":["repayment of borrowings","repayment of long-term borrowings"]},
+                {"tag":"CFFSHR","field_name":"Proceeds from issue of share capital","origin":"extracted","data_type":"decimal","note_aliases":["proceeds from issue of shares"]},
+                {"tag":"CFFBUY","field_name":"Buyback of equity shares","origin":"extracted","data_type":"decimal","note_aliases":["buyback of equity shares"]},
+                {"tag":"CFFLEA","field_name":"Payment of lease liabilities","origin":"extracted","data_type":"decimal",
+                 "note_aliases":["payment of lease liabilities","principal payment of lease liabilities"],
+                 "definition":"Ind AS 116 puts the principal portion of lease rentals in financing, not operating."},
+                {"tag":"CFFINT","field_name":"Interest paid","origin":"extracted","data_type":"decimal","note_aliases":["interest paid","finance cost paid"]},
+                {"tag":"CFFDIV","field_name":"Dividend paid","origin":"extracted","data_type":"decimal","note_aliases":["dividend paid","dividends paid including dividend tax"]},
+                {"tag":"CFFOT","field_name":"Other financing flows","origin":"extracted","data_type":"decimal"}
+              ]},
+
+            { "tag": "CFNET", "field_name": "Net increase / (decrease) in cash and cash equivalents", "sr_no": "D",
+              "origin": "derived",
+              "note_aliases": ["net increase in cash and cash equivalents", "net increase / (decrease) in cash and cash equivalents"],
+              "waterfall": {"method":"sum","inputs":[{"tag":"CFO","weight":1},{"tag":"CFI","weight":1},{"tag":"CFF","weight":1}]}},
+
+            {"tag":"CFOPEN","field_name":"Cash and cash equivalents at the beginning of the year","sr_no":"E","origin":"extracted","data_type":"decimal",
+             "note_aliases":["cash and cash equivalents at the beginning of the year","opening balance of cash and cash equivalents"]},
+
+            {"tag":"CFFXCASH","field_name":"Effect of exchange rate changes on cash held in foreign currency","sr_no":"F","origin":"extracted","data_type":"decimal",
+             "note_aliases":["effect of exchange rate changes on cash and cash equivalents"],
+             "definition":"Ind AS 7 requires this to be presented separately from operating, investing and financing flows."},
+
+            { "tag": "CFCLOSE", "field_name": "Cash and cash equivalents at the end of the year", "sr_no": "G",
+              "origin": "derived", "reported": true,
+              "note_aliases": ["cash and cash equivalents at the end of the year", "closing balance of cash and cash equivalents"],
+              "definition": "The statement's own closing figure. It must equal CNBK on the balance sheet -- a cross-statement tie, and the strongest single check that both statements were read from the same basis.",
+              "waterfall": {"method":"sum","inputs":[
+                {"tag":"CFNET","weight":1},{"tag":"CFOPEN","weight":1},{"tag":"CFFXCASH","weight":1}]}},
+
+            {"tag":"CFCLOSEREP","field_name":"Cash and cash equivalents at the end of the year (as reported)","sr_no":"H","origin":"extracted","data_type":"decimal",
+             "note_aliases":["closing balance of cash and cash equivalents"],
+             "reconciliation":{"method":"sum","inputs":[{"tag":"CFCLOSE","weight":1}]},
+             "definition":"Reported wins. The derived roll-forward is a CHECK on it; a gap means a line of the statement was missed, which is exactly what this module exists to detect."}
+          ]
+        }
+      ]
+    }
+  ]
+}

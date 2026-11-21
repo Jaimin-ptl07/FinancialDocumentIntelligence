@@ -3,7 +3,12 @@
 import json
 import pathlib
 
-from fdi.core.concepts import MAX_CANDIDATES, build_concept_index, normalize
+from fdi.core.concepts import (
+    MAX_CANDIDATES,
+    all_concepts,
+    build_concept_index,
+    normalize,
+)
 
 _V42 = (
     pathlib.Path(__file__).resolve().parents[3]
@@ -182,9 +187,85 @@ def test_definition_disambiguates_a_catch_all_sibling():
     assert next(c for c in group.candidates if c.tag == "GRSOTTA").definition == ""
 
 
+def test_all_concepts_includes_the_top_level_parents_groups_leave_out():
+    """REGRESSION. A group holds a parent's DESCENDANTS, so a root concept is a
+    group *key* but sits in no group's candidate list. Mapping the face against
+    group candidates alone left 15 of TCS's 28 face rows unmapped -- including
+    'Revenue from operations' and every waterfall total."""
+    schema = _schema([
+        {"tag": "RFOGRS", "field_name": "Gross Revenue from Operations",
+         "origin": "derived", "field_path": "pl.RFOGRS",
+         "fields": [_leaf("RFSP", "Sale of Products"),
+                    _leaf("RFSS", "Sale of Services")]},
+    ])
+
+    tags = {c.tag for c in all_concepts(schema)}
+    assert tags == {"RFOGRS", "RFSP", "RFSS"}
+
+    # the parent is precisely what the group-candidate route omits
+    group_tags = {c.tag for g in build_concept_index(schema).groups for c in g.candidates}
+    assert "RFOGRS" not in group_tags
+
+
+def test_all_concepts_dedupes_and_survives_junk():
+    assert all_concepts({}) == ()
+    assert all_concepts({"modules": "no"}) == ()
+    assert all_concepts({"modules": [None, {"retrieval_units": [None, 3]}]}) == ()
+
+
+def test_real_v43_pl_exposes_every_tagged_concept():
+    path = _V42.parent / "field-extraction-schema.v4_3-pl.json"
+    if not path.exists():
+        return
+    concepts = all_concepts(json.loads(path.read_text("utf-8")))
+    tags = [c.tag for c in concepts]
+    assert len(tags) == len(set(tags))          # deduped
+    assert "RFOGRS" in tags and "PBMI" in tags  # top-level parents present
+
+
 def test_real_v42_carries_definitions_for_ambiguous_concepts():
     if not _V42.exists():
         return
     index = build_concept_index(json.loads(_V42.read_text("utf-8")))
     defined = [c for g in index.groups for c in g.candidates if c.definition]
     assert defined, "expected curated definitions in the generated schema"
+
+
+def test_aliases_are_read_under_either_schema_generation():
+    """v4.3 names this `note_aliases`; the v3.2 seed `load_schema` still serves
+    by default names it `aliases` -- 190 of them. Reading only one key left the
+    FREE lexical tier permanently silent against the other generation, sending
+    every label to the paid tier."""
+    from fdi.core.concepts import all_concepts
+
+    v43 = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "note_aliases": ["travel expenses"]}]}]}]}
+    v32 = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "aliases": ["travel expenses"]}]}]}]}
+
+    assert all_concepts(v43)[0].aliases == ("travel expenses",)
+    assert all_concepts(v32)[0].aliases == ("travel expenses",)
+
+
+def test_the_v4_3_alias_key_wins_when_a_node_carries_both():
+    from fdi.core.concepts import all_concepts
+
+    both = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "note_aliases": ["new"], "aliases": ["old"]}]}]}]}
+    assert all_concepts(both)[0].aliases == ("new",)
+
+
+def test_a_malformed_alias_list_degrades_to_empty_never_raises():
+    from fdi.core.concepts import all_concepts
+
+    bad = {"modules": [{"module_id": "pl", "statement": "pl", "retrieval_units": [
+        {"unit_id": "RU", "fields": [
+            {"tag": "TCEXP", "field_name": "Travel", "origin": "extracted",
+             "note_aliases": "not a list", "aliases": [1, 2, None]}]}]}]}
+    assert all_concepts(bad)[0].aliases == ()

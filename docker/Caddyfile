@@ -1,0 +1,37 @@
+# The Gated demo's only public surface (docker/compose.prod.yml). Caddy
+# terminates TLS with automatic certificates and routes SAME-ORIGIN by path, so
+# the browser never makes a cross-origin call and CORS is irrelevant. It
+# authenticates nothing -- the API's JWT gate (ADR-0002) does that.
+#
+# EDGE_DOMAIN is the public hostname (e.g. fdi.example.com). `localhost` works
+# for a local production smoke run: Caddy then issues from its internal CA.
+{$EDGE_DOMAIN} {
+	# Presigned artifact URLs. Object storage publishes nothing (ADR-0001); the
+	# API signs download URLs as https://{$EDGE_DOMAIN}/<bucket>/<key>
+	# (FDI_S3_PUBLIC_ENDPOINT/_SECURE), and this forwards them to MinIO with the
+	# path untouched and the Host header kept (Caddy's default) -- SigV4 binds
+	# both, so any prefix rewrite here would break every signature.
+	#
+	# Deliberately narrow: only reads, only the artifact bucket, only requests
+	# that carry a signature. Everything else of the S3 API stays network-internal.
+	@artifact {
+		method GET HEAD
+		path /{$EDGE_ARTIFACT_BUCKET}/*
+		query X-Amz-Signature=*
+	}
+	handle @artifact {
+		reverse_proxy minio:9000
+	}
+
+	# The API. handle_path strips /api, so backend routes keep their current
+	# shapes (/jobs, /auth/login, ...). The refresh cookie is scoped to the
+	# PUBLIC path, which is why compose.prod.yml pins FDI_AUTH_COOKIE_PATH=/api/auth.
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the Next.js standalone server.
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

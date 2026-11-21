@@ -13,6 +13,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from fdi.platform.config import get_settings
+from tests.conftest import TEST_SIGNING_SECRET
+from tests.integration.conftest import authenticate
 
 pytestmark = pytest.mark.integration
 
@@ -20,7 +22,9 @@ PDF_BYTES = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\ntrailer\n%%EOF
 
 
 @pytest.fixture
-def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch, _alembic_applied):
+async def make_client(
+    postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch,
+    _alembic_applied, invitee):
     # `_alembic_applied` is this suite's migration gate (tests/integration/
     # conftest.py); without it the schema is empty and the very first
     # `POST /documents` fails on `relation "document" does not exist`.
@@ -33,6 +37,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch, 
             "FDI_S3_ENDPOINT": minio_endpoint,
             "FDI_S3_ACCESS_KEY": "minioadmin",
             "FDI_S3_SECRET_KEY": "minioadmin",
+            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
         }
         for key, value in env.items():
             monkeypatch.setenv(key, value)
@@ -49,6 +54,7 @@ def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch, 
             await app.state.artifact_store.ensure_bucket()
             transport = ASGITransport(app=app, raise_app_exceptions=True)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
+                await authenticate(client, invitee)
                 yield client
 
     return _make

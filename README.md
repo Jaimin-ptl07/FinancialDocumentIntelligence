@@ -86,10 +86,15 @@ contract — so without it a green architecture reads as a violation.
 
 ## Known caveats
 
-- **MinIO is local-dev only and knowingly unpatched** for CVE-2025-62506. Its patched
-  release shipped source-only after the project archived; the newest pullable image
-  predates the fix. Application code targets the generic S3 API, so replacing it is a
-  compose change. Never run it in production.
+- **MinIO is a frozen, mirrored image and knowingly unpatched** for CVE-2025-62506.
+  Upstream archived and its Docker Hub repository is deleted, so the final release is
+  mirrored into this project's GHCR namespace and pinned by digest (ADR-0001) — that
+  pin is what makes the stack bootable on a fresh host. The CVE is accepted on the
+  premise that MinIO is network-internal with no service accounts — true for the
+  production topology, where presigned artifact URLs reach it through the edge
+  proxy, but NOT for `docker/compose.yml`, which publishes 9000/9001 for local
+  tools. Never run the dev compose on a reachable host. Application code targets
+  the generic S3 API, so replacing it is a compose change.
 - **CORS on the API is a hardcoded dev allowlist** (`http://localhost:3000` only), so
   the walking-skeleton UI can read responses cross-origin. A real deployment serves
   the UI same-origin or makes the origin list configurable.

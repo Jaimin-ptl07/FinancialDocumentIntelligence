@@ -45,7 +45,18 @@ class IndexStage:
     async def run(self, ctx: StageContext) -> object:
         embedding = cast(Mapping[str, object], await ctx.read("embedding"))
         chunks_art = cast(Mapping[str, object], await ctx.read("chunks"))
-        store = cast(VectorStore, ctx.services["vector_store"])
+
+        # Milvus is OPTIONAL (the `vector` Compose profile is opt-in and
+        # FDI_MILVUS_URI defaults to None), so `vector_store` may be absent.
+        # Same reasoning as GraphLoadStage: an unconfigured backend is a
+        # reportable outcome, not a KeyError.
+        raw = ctx.services.get("vector_store")
+        if raw is None:
+            return {
+                "schema_version": 1, "upserted": 0,
+                "skipped": "vector_store not configured",
+            }
+        store = cast(VectorStore, raw)
 
         chunks_raw = embedding.get("chunks")
         chunks = (

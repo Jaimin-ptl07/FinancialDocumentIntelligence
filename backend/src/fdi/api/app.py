@@ -1,16 +1,23 @@
 """FastAPI application factory."""
 
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+import structlog
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 from pydantic import ValidationError
+from redis.asyncio import Redis
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 
+from fdi.api.auth import auth_router, require_access_token
 from fdi.api.errors import install_error_handlers
+from fdi.api.limits import EXPOSED_HEADERS, RateLimits
 from fdi.api.middleware import CorrelationIdMiddleware
-from fdi.api.routes import router
+from fdi.api.routes import public_router, router
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.platform.agent import AzureOpenAIAgentClient
@@ -20,8 +27,12 @@ from fdi.platform.embeddings import BgeEmbeddingClient
 from fdi.platform.extractor import AzureOpenAIExtractorClient
 from fdi.platform.graphstore import Neo4jGraphStore
 from fdi.platform.obs.logging import configure_logging
-from fdi.platform.storage.artifact_store import ArtifactStore
+from fdi.platform.obs.sentry import init_sentry
+from fdi.platform.ratelimit import DailyQuota
+from fdi.platform.storage.artifact_store import ArtifactStore, build_presign_client
 from fdi.platform.vectorstore import MilvusVectorStore
+
+log = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -43,30 +54,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         secret_key=settings.s3_secret_key,
         secure=settings.s3_secure,
     )
-    # A SECOND client, built for the host-reachable endpoint, used ONLY to sign
-    # download URLs. presigned_get_object embeds whatever endpoint its client was
-    # constructed with, and `client` above holds the in-network `minio:9000` -- a name
-    # a host browser cannot resolve, so the artifact_url a UI needs would 404. Falls
-    # back to s3_endpoint when s3_public_endpoint is unset (single-host prod / tests),
-    # so this is identical to `client` there and changes nothing.
-    #
-    # region is REQUIRED here, not cosmetic: presigned_get_object first calls
-    # _get_region, which -- absent a constructor region -- issues a live
-    # GetBucketLocation to the client's endpoint. This client's endpoint is the
-    # host's view (localhost:9000), which is deliberately NOT reachable from inside
-    # this container, so that lookup would ConnectionRefused and turn every
-    # /jobs/{id} with an artifact into a 500. Setting region makes _get_region return
-    # it offline (verified in minio/api.py), so signing touches no network. us-east-1
-    # is MinIO's default and MUST match the server's region or the signature is
-    # rejected; a non-MinIO S3 behind a public endpoint in another region would need
-    # this made configurable.
-    presign_client = Minio(
-        settings.s3_public_endpoint or settings.s3_endpoint,
-        access_key=settings.s3_access_key,
-        secret_key=settings.s3_secret_key,
-        secure=settings.s3_secure,
-        region="us-east-1",
-    )
+    # A SECOND client, used ONLY to sign download URLs for the browser's view of
+    # the store (see build_presign_client).
+    presign_client = build_presign_client(settings)
 
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
@@ -79,7 +69,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # environment (bucket never created), any OTHER route hit first raised
     # minio.error.S3Error: NoSuchBucket instead of the app just working.
     # Doing it here means the bucket exists before the app can serve traffic.
-    await app.state.artifact_store.ensure_bucket()
+    #
+    # But an UNREACHABLE object store must not keep the app from BOOTING: the
+    # process can come up degraded and let /ready say so -- the same
+    # restart-loop reasoning as /health-vs-/ready (a backend outage is not a
+    # reason to kill or refuse to start the API). Warning, not exception, and
+    # the same suppress-if-logging-itself-breaks idiom as /ready's _probe.
+    # When the store IS reachable this changes nothing: the bucket is ensured
+    # exactly as before.
+    try:
+        await app.state.artifact_store.ensure_bucket()
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            log.warning(
+                "startup.bucket_ensure_failed",
+                bucket=settings.s3_bucket,
+                error=repr(exc),
+            )
     app.state.embedder = BgeEmbeddingClient.from_settings(settings)
     app.state.vector_store = MilvusVectorStore.from_settings(settings)
     app.state.graph_store = Neo4jGraphStore.from_settings(settings)
@@ -109,7 +115,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # DAG itself, but the resolver's registry must still be populated for anything
     # downstream that inspects it.
     from fdi.pipeline.dispatch import StageDispatcher
-    from fdi.workers.tasks import run_stage_task
+    from fdi.pipeline.jobs import JobDispatcher
+    from fdi.workers.tasks import run_job_task, run_stage_task
 
     # REGISTRY is populated as a side effect of the import above (tasks.py does
     # `from fdi.pipeline import stages as _stages`), so it must be built AFTER
@@ -134,6 +141,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     run_stage_task.app.conf.result_backend = settings.result_backend
 
     app.state.dispatcher = StageDispatcher(run_stage_task)
+    # T5: the expensive routes publish API jobs. Same Celery app as the stage
+    # task, so the broker re-assertion above covers it too.
+    app.state.job_dispatcher = JobDispatcher(run_job_task)
 
     # `api -> pipeline` is a legal edge in the import contract (only
     # `api -> workers` is the one exemption carved out above), so this import
@@ -150,9 +160,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from fdi.pipeline.evaluation import CANDIDATES
 
     app.state.candidates = CANDIDATES
+
+    # T7: per-Invitee limits. A lazy client -- no connection until the first
+    # metered request -- so an unreachable Redis does not stop boot, matching
+    # the bucket reasoning above; a metered request then fails loudly (500)
+    # rather than admitting work it cannot count.
+    redis = Redis.from_url(settings.rate_limit_redis_url or settings.result_backend)
+    app.state.rate_limits = RateLimits(
+        quota=DailyQuota(redis, window_seconds=settings.rate_limit_window_seconds),
+        jobs_per_day=settings.rate_limit_jobs_per_day,
+        uploads_per_day=settings.rate_limit_uploads_per_day,
+        max_concurrent_jobs=settings.rate_limit_max_concurrent_jobs,
+        stale_job_seconds=settings.rate_limit_stale_job_seconds,
+    )
     try:
         yield
     finally:
+        await redis.aclose()
         await engine.dispose()
 
 
@@ -187,8 +211,39 @@ def _cors_origins() -> list[str]:
         return list(_DEFAULT_CORS_ORIGINS)
 
 
+def _sentry_dsn() -> str | None:
+    """`FDI_SENTRY_DSN`, or None when Settings cannot be built.
+
+    Same narrow guard as `_cors_origins`, same reason: create_app runs at
+    import time under pytest collection with every FDI_ variable cleared, and
+    monitoring must fall back to "off", never take collection down.
+    """
+    try:
+        return get_settings().sentry_dsn
+    except ValidationError:
+        return None
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="Financial Document Intelligence", version="0.1.0", lifespan=lifespan)
+    # Before the app is built: the Starlette integration instruments
+    # Starlette.__call__, and a DSN-less deployment must initialise nothing at
+    # all (obs/sentry.py's no-op contract).
+    init_sentry(_sentry_dsn(), FastApiIntegration(), StarletteIntegration())
+    # docs_url/redoc_url/openapi_url None: FastAPI mounts these on the APP,
+    # not either router, so the auth gate below never covers them -- and an
+    # anonymous /openapi.json is a complete inventory of every protected
+    # route with request schemas, i.e. exactly the reconnaissance the gate
+    # exists to prevent. Disabled outright rather than moved behind the gate:
+    # the one thing nobody needs Swagger UI to read is the route table. The
+    # HTTP suite is this API's contract; there is no Swagger to lose.
+    app = FastAPI(
+        title="Financial Document Intelligence",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     install_error_handlers(app)
     # Must sit INSIDE ServerErrorMiddleware (which is always outermost) so that
     # the id is still bound when `errors._unhandled` renders a 500 and reaches
@@ -202,10 +257,23 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
+        # The dev UI calls /auth/* cross-origin with credentials so the
+        # httpOnly refresh cookie can be set and sent (T4). Safe only because
+        # the origins are an explicit allowlist -- never "*".
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Without this a cross-origin script cannot read quota headers (T7).
+        expose_headers=EXPOSED_HEADERS,
     )
-    app.include_router(router)
+    # Public by design (ADR-0002): the three /auth session routes, plus /health
+    # and /ready for infrastructure probes. Everything else -- the `router`
+    # include below -- requires a valid access token; the dependency rides the
+    # include, not each route, so a route added to `router` later is gated by
+    # default and has to opt OUT (public_router) to be reachable anonymously.
+    app.include_router(auth_router)
+    app.include_router(public_router)
+    app.include_router(router, dependencies=[Depends(require_access_token)])
     return app
 
 

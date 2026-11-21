@@ -382,6 +382,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "argon2-cffi" },
     { name = "asyncpg" },
     { name = "azure-ai-documentintelligence" },
     { name = "celery" },
@@ -393,9 +394,11 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt" },
     { name = "pymilvus" },
     { name = "python-multipart" },
     { name = "redis" },
+    { name = "sentry-sdk" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
@@ -415,6 +418,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.18" },
+    { name = "argon2-cffi", specifier = ">=25.1" },
     { name = "asyncpg", specifier = ">=0.31" },
     { name = "azure-ai-documentintelligence", specifier = ">=1.0.2" },
     { name = "celery", specifier = ">=5.6.3" },
@@ -426,9 +430,11 @@ requires-dist = [
     { name = "openai", specifier = ">=2.46.0" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "pydantic-settings", specifier = ">=2.14" },
+    { name = "pyjwt", specifier = ">=2.10" },
     { name = "pymilvus", specifier = ">=2.6" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "redis", specifier = ">=5.2" },
+    { name = "sentry-sdk", specifier = ">=2.19" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.51" },
     { name = "structlog", specifier = ">=26.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35" },
@@ -1200,6 +1206,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyjwt"
+version = "2.15.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193", size = 33860, upload-time = "2026-09-28T18:40:41.429Z" },
+]
+
+[[package]]
 name = "pymilvus"
 version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1372,6 +1387,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3a/3c/37d0ecb729a7cc2d393ea7dce316fc585680f35d93b8d62139d7d0a3700c/ruff-0.15.21-py3-none-win32.whl", hash = "sha256:01f8d5be84823c172b389e123174f781f9daf86d6c58719d603f941932195cdd", size = 10896555, upload-time = "2026-07-09T20:01:26.941Z" },
     { url = "https://files.pythonhosted.org/packages/c0/b8/e43466b2a6067ce91e669068f6e28d6c719a920f014b070d5c8731725de3/ruff-0.15.21-py3-none-win_amd64.whl", hash = "sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3", size = 12038772, upload-time = "2026-07-09T20:01:29.497Z" },
     { url = "https://files.pythonhosted.org/packages/dd/75/e90ab9aeece218a9fc5a5bc3ec97d0ee6bb3c4ff95869463c1de58e29a1c/ruff-0.15.21-py3-none-win_arm64.whl", hash = "sha256:6e83115d4b9377c1cbc13abf0e051f069fab0ef815ea0504a8a008cee24dd0a8", size = 11375265, upload-time = "2026-07-09T20:01:31.772Z" },
+]
+
+[[package]]
+name = "sentry-sdk"
+version = "2.71.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/93/9ef70bfb7346c778caf09b7cd10c17c33f601f2d17019fa1aedcda738b5f/sentry_sdk-2.71.0.tar.gz", hash = "sha256:7beb27a22f06396f3a05510c3da6ea10e1c79e02e859993c27ce4ff074e296d6", size = 1052358, upload-time = "2026-09-28T14:04:00.645Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/f6/b3e68b2e08e9a52e6c8a279ca2fc0d3a535f3886222375f54ef9efbd694d/sentry_sdk-2.71.0-py3-none-any.whl", hash = "sha256:9ed36b4c206048aa67b5ddba0a6e28d59fc55cf10d60f5f7aea2c3917184bf4a", size = 534254, upload-time = "2026-09-28T14:03:58.668Z" },
 ]
 
 [[package]]

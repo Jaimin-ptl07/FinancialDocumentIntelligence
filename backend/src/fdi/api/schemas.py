@@ -12,11 +12,24 @@ class JobAccepted(BaseModel):
 
 
 class JobView(BaseModel):
+    """One job's status. Two sources share this view: a ping job (a stage
+    run -- `artifact_*` set, `kind` None, status in the stage vocabulary)
+    and an API job (T5 -- `kind` set, status queued/running/succeeded/
+    failed). An API job's body is at GET /jobs/{id}/result once it
+    succeeds; a failed one carries `error` and the `correlation_id` to
+    report it with."""
+
     job_id: str
     status: str
+    kind: str | None = None
+    correlation_id: str | None = None
     artifact_key: str | None = None
     artifact_url: str | None = None
     error: str | None = None
+
+
+class JobListView(BaseModel):
+    jobs: list[JobView]
 
 
 class ReadyView(BaseModel):
@@ -60,7 +73,9 @@ class EvalRequest(BaseModel):
     metric: str | None = None
 
 
-class EvalAccepted(BaseModel):
+class EvalResultView(BaseModel):
+    """The body of a succeeded eval job (formerly /eval's inline response)."""
+
     run_id: str
     aggregate: float
 
@@ -640,3 +655,25 @@ class AnalyticsView(BaseModel):
     documents_failed: int
     chunk_count: int
     total_cost_inr: float
+
+
+class LoginRequest(BaseModel):
+    """POST /auth/login. The email is canonicalised (lowercase) server-side,
+    so the caller's casing is never the reason a login fails."""
+
+    # str, not EmailStr: EmailStr would add the email-validator dependency
+    # to validate format at an endpoint no stranger ever reaches -- accounts
+    # are created by the admin CLI, which is where format belongs. The route
+    # canonicalises casing; the account's existence is the real check.
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1)
+
+
+class TokenView(BaseModel):
+    """The answer to login and refresh: one short-lived access token. The
+    refresh half of the session never appears in a body -- it lives only in
+    the httpOnly cookie, which is the point of httpOnly."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int

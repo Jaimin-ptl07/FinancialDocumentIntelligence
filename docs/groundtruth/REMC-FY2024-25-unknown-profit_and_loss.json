@@ -1,0 +1,26 @@
+{
+  "issuer": "REMC",
+  "fiscal_year": "FY2024-25",
+  "basis": "unknown",
+  "statement": "profit_and_loss",
+  "_source": "Statement of Profit and Loss, PDF page 61 of Annual_Report_2024-25Compress_20250910_092510_pdf-2025-Sep-10-09-26-33.pdf (REMC Limited, a joint venture of Indian Railways and RITES Limited -- NOT RITES).",
+  "_unit": "INR LAKH, exactly as printed. No rescaling. Brackets are negative.",
+  "_basis_note": "basis is 'unknown': REMC files a single unqualified statement set with no standalone/consolidated anchors, which is what core/basis.py reports and what the FOG keys it under.",
+  "_ties": "13386.75+660.16=14046.91; expenses sum 3884.41; 14046.91-3884.41=10162.50; 10162.50-2681.75+450.34=7931.09.",
+  "_sign_convention": "CT is keyed -2681.75 because REMC prints Current Tax IN BRACKETS, as a deduction from PBT. TCS prints the same concept POSITIVE (16,388) with the total tax expense subtracted separately. Keying as-printed is correct for scoring an EXTRACTOR -- it must read what is on the page -- but it means one tag legitimately carries opposite signs across issuers. Normalising that belongs in the reasoning layer, not the truth set.",
+  "_oci_out_of_scope": "OTCI is deliberately in NEITHER list. REMC discloses the line with an explicit nil ('-'). Whether a disclosed nil should score as 0.0 or as absent is an open design question (see the FOG's nil-row decision), and prejudging it here would bake the answer into the truth set.",
+  "_method": "Read from the printed statement via `pdftotext -table`, independent of the pipeline's Azure DI OCR. Every subtotal re-derived by hand and ties.",
+  "_coverage": "FACE LEVEL, deliberately partial. A tag is listed only where its mapping to a printed line is unambiguous. Tags in NEITHER list are out of scope and ignored by score_document -- putting a disclosed-but-unmappable tag in not_reported would score a CORRECT extraction as a false positive.",
+  "values": {
+    "TOTRNOTINR": 14046.91,
+    "TOTEXPR": 3884.41,
+    "PBTR": 10162.5,
+    "CT": -2681.75,
+    "DT": 450.34,
+    "PATR": 7931.09,
+    "PBMI": 7931.09,
+    "EPSB": 7.55,
+    "EPSD": 7.55
+  },
+  "not_reported": []
+}

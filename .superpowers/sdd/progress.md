@@ -300,3 +300,55 @@ RT-9 END-TO-END VERIFICATION (2026-07-22):
   RT-9 DELIVERED: retrieval recall +20.9 points, entirely attributable to the revived keyword channel.
   The LLM's job is now strictly easier (answer in context 91% vs 70%); the field-accuracy confirmation is
   bottlenecked ONLY on the LLM, which is down. Merge gate cleared on the retrieval dimension.
+
+## TR-1 table representation (spec 2026-07-22, base main 09bbd0b)
+WAVE 1 (parallel worktrees, file-disjoint):
+TR-1 P4a: complete (commit aa8b81e, review PASS/APPROVED; schema v3.2.0 + per-unit basis_preference default standalone; 71 passed)
+TR-1 P3-core: complete (commit 8a685a6, review PASS/APPROVED; core/table_render.py repair_headers+render_table_markdown; 16 passed)
+  DEFER to integration: period regexes are ^..$-anchored + whole-cell; miss "As at 31-03-2024"/"31st March, 2024" prose.
+  Fix at P3-wire against real DI cells: drop ^, use re.search, add spelled-month patterns. Degrades to positional fallback meanwhile (Minor).
+TR-1 P1: complete (commit 01b9c01, review PASS/APPROVED; core/basis.py detect_basis_regions+page_basis, stages/basis.py; 9 unit+2 integ, fast suite 604)
+  Minor (defer final): two different-basis anchors on the SAME page can overlap (non-crash, first-match wins); double-pass over node_provenance (efficiency).
+  SPEC DOC FIX NEEDED: §3.1 says deps (ast, structure) but algorithm/impl use (ast, provenance) -- correct is provenance.
+WAVE 1 MERGED to main (d5fa892): 625 fast passed, ruff+mypy clean. Spec dep-line fixed (ecaf022).
+  PUSH PENDING: GitHub SSH port 22 timing out (network). Local commits safe; retry at wave boundaries.
+WAVE 2 dispatched: P2 table cards (chunks v3, one card per table replacing t{i}r{r} rows; basis-tagged via page_basis;
+  reuses fdi_chunks_v2 Milvus schema -- basis in card TEXT, no schema migration; basis-filter deferred to P4b).
+TR-1 P2: complete (commits 7c8e6d8 cards + 16baf04 version-fix, merged f7ce3dd; review PASS/APPROVED).
+  chunks v3: one card per table (t{i}) replacing t{i}r{r} rows; basis via page_basis; reuses fdi_chunks_v2.
+  Fixed P4a regression: test_schema_endpoints asserted stale 3.1.0 (P4a ran unit-only, missed this integ test).
+  DESIGN DECISION (spec aligned 2020e12): basis in card TEXT, NO Milvus scalar; P4b filters at retrieval via page_basis.
+  Reviewer Minor: stale t{i}r{j} docstrings in extractor/provenance/embedding (harmless prose). fdi_chunks_v3 scalar = at-scale follow-up.
+WAVE 3 next: P3-wire (fetch grid by table_id -> repair_headers -> render_table_markdown into extract_unit;
+  harden period regex vs "As at 31-03-2024") + P4b (basis-aware retrieval filter via page_basis).
+WAVE 2 MERGED (f7ce3dd) + spec aligned (2020e12): 628 fast passed.
+WAVE 3 dispatched (worktree tr1-wave3 @ 2020e12): P3-wire (grid fetch + render_table_markdown into extract_unit)
+  + P4b (basis-aware filter via page_basis, replacing consolidated_start_page) + period-regex hardening.
+PUSH STILL BLOCKED: GitHub SSH port 22 times out from this network (exit 128). Local commits safe. Workaround for
+  later: switch origin to ssh over 443 (ssh.github.com:443) or HTTPS+token -- NOT done unilaterally.
+WAVE 3 (P3-wire + P4b) complete: fbc58c7 + year-fix 42a5e80, review PASS/APPROVED, MERGED 6ca11b1.
+  extract_unit renders located table cards -> grid -> repair_headers -> render_table_markdown into the LLM prompt;
+  basis-aware retrieval filters by page_basis vs unit.basis_preference (replaces consolidated_start_page).
+  Reviewer Minors fixed: bare-year false-positive guarded (?<!\d). Redundant repair_headers call = cosmetic (skipped).
+  Deferred (spec 5.3): note-schedule char-budget cap (statements bounded ~40 rows) -- follow-up.
+TR-1 ALL P1-P4 COMPLETE + MERGED to main (6ca11b1): 647 fast passed, 213 integration, ruff+mypy clean.
+VERIFICATION RUNNING: dropped stale fdi_chunks_v2 (had RT-9 row chunks); TR-1 e2e re-ingests cards+basis, extracts
+  17 units with markdown tables, then layer-attribution to measure if L3 wrong-column/wrong-table/sign misses drop.
+
+TR-1 VERIFICATION (2026-07-23):
+  Re-ingest CLEAN: dropped stale fdi_chunks_v2 (RT-9 row chunks), re-ran basis+chunks-v3+embedding+index.
+  Embedding 210s (was ~18min) -- cards (~767 chunks) replace ~1985 row fragments. 17 units (module_16 gone).
+  BASIS STAGE WORKS on the real report: regions=[standalone 93-143, consolidated 144-185]. Generalizes the
+    hardcoded page-133 boundary into a labeled 2-region model; RU_BS (basis_preference=standalone) filters to it.
+  MARKDOWN RENDERING WORKS (LLM-free render_proof.py): the LLM now receives clean markdown with RESOLVED headers
+    e.g. "| Particulars | As at March 31, 2024 / Carrying values | ... |" + basis=standalone + real values
+    (Total equity 10901.47, Current tax 560.00, Deferred tax (22.55)) -- NOT the old "Details=X, Details=Y".
+    Directly fixes the wrong-column/wrong-table representation cause of the L3 misses.
+  FIELD-ACCURACY NUMBER BLOCKED: Azure OpenAI down again (APITimeoutError on trivial call, 18.3s). e2e extraction
+    returned all-null (suppressed-timeout signature, 78s/call). Same outage as the RT-9 verification. Re-run the
+    e2e when Azure recovers to get the L3-miss-drop number; ingestion is cached so it's ~7min then.
+PUSH STILL BLOCKED (SSH port 22 timeout). ~20 commits safe locally (main @ 6ca11b1).
+TR-1 RENDERED-CONTEXT RECALL (LLM-free, 2026-07-23): 173/188 = 92.0% (basis regions std 93-143, cons 144-185).
+  Recall HELD vs RT-9's 91.3% despite cards carrying labels-not-values -- the render fetches the grid, so values
+  reach context. Residual not-in-ctx: RU_COMPANY 7/9, RU_BS 36/40, RU_PL 24/26, RU_CF 32/34, RU_AUD 6/7, RU_POL 5/9
+  (mostly L0 ingestion / narrative). FIELD-EXTRACTION ACCURACY still blocked: Azure down (timeout 18.8s), 3rd check.

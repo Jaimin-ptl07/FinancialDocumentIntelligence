@@ -6,7 +6,7 @@ completeness assertion a bank auditor tests, inverted into something auditable.
 A missing number is visible here, never silent. No I/O; total.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 
 def _has_value(facts: Mapping[str, Mapping[str, object]], tag: str) -> bool:
@@ -19,19 +19,31 @@ def _has_value(facts: Mapping[str, Mapping[str, object]], tag: str) -> bool:
 def coverage_report(
     statements: Sequence[Mapping[str, object]],
     facts: Mapping[str, Mapping[str, object]],
+    unanswered: Collection[str] = (),
 ) -> dict[str, object]:
     """Classify every taxonomy tag against the produced Facts.
 
     Returns per-statement and overall counts plus the explicit lists a bank
     audits: `missing_extracted` (should have been read, wasn't) and
     `unresolved_derived` (a subtotal we could not compute).
+
+    `unanswered` splits `missing_extracted` in two, and the split is the whole
+    point. A tag the model was asked about and reported as absent means the
+    company does not disclose it -- a CORRECT null. A tag the model never
+    returned a key for was dropped by batching (a 76-field unit shares the same
+    60-candidate budget as a 25-field one), and reads afterwards as though the
+    company disclosed nothing. Reporting both as one number lets our own recall
+    loss masquerade as completeness. `not_answered` is therefore a defect
+    count, not a coverage statistic.
     """
     per_statement: list[dict[str, object]] = []
     totals = {
         "expected": 0, "found_extracted": 0, "derived_ok": 0,
-        "missing_extracted": 0, "unresolved_derived": 0,
+        "missing_extracted": 0, "unresolved_derived": 0, "not_answered": 0,
     }
     missing_extracted: list[str] = []
+    not_answered: list[str] = []
+    unanswered_set = {t for t in unanswered if isinstance(t, str)}
     unresolved_derived: list[str] = []
 
     for st in statements:
@@ -39,7 +51,7 @@ def coverage_report(
         rows = [r for r in rows_obj if isinstance(r, Mapping)] if isinstance(rows_obj, list) else []
         counts = {
             "expected": 0, "found_extracted": 0, "derived_ok": 0,
-            "missing_extracted": 0, "unresolved_derived": 0,
+            "missing_extracted": 0, "unresolved_derived": 0, "not_answered": 0,
         }
         for r in rows:
             tag = r.get("tag")
@@ -61,6 +73,9 @@ def coverage_report(
             else:
                 counts["missing_extracted"] += 1
                 missing_extracted.append(tag)
+                if tag in unanswered_set:
+                    counts["not_answered"] += 1
+                    not_answered.append(tag)
 
         for k in totals:
             totals[k] += counts[k]
@@ -76,4 +91,7 @@ def coverage_report(
         "totals": totals_out,
         "missing_extracted": missing_extracted,
         "unresolved_derived": unresolved_derived,
+        # A defect list, not a coverage statistic: these were never asked-and-
+        # answered, so they must not be read as "the company discloses nothing".
+        "not_answered": not_answered,
     }

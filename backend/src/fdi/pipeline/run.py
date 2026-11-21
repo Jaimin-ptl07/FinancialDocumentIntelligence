@@ -1,6 +1,7 @@
 """The framework around a Stage: hashing, the content-addressed cache, persistence,
 and successor scheduling. A stage stays a pure transform; all of that lives here."""
 
+import contextlib
 import time
 import uuid
 from collections.abc import Mapping
@@ -37,8 +38,18 @@ async def run_stage(
 
     async def read_artifact(d: str, upstream: str) -> object:
         async with session_factory() as s:
-            run = await RegistryRepository(s).latest_run(d, upstream)
-        assert run is not None and run.artifact_key is not None
+            run = await RegistryRepository(s).latest_completed_run(d, upstream)
+        if run is None or run.artifact_key is None:
+            # NOT an assert. A missing dependency artifact is a reachable
+            # state -- an upstream stage that failed, or was never run -- so
+            # it deserves a named error, not "impossible". The bare
+            # `AssertionError()` this replaces reported no doc, no stage and
+            # no dependency, and `python -O` would have removed the check
+            # entirely, leaving `store.get_json(None)` to fail instead.
+            raise ValueError(
+                f"{stage_name} for document {d} needs {upstream}, "
+                f"which has no completed run"
+            )
         return await store.get_json(run.artifact_key)
 
     async def read_source() -> bytes:
@@ -67,6 +78,12 @@ async def run_stage(
             doc = await s.get(Document, doc_id)
             checksum = doc.checksum.encode() if doc and doc.checksum else None
             input_hash = root_input_hash(checksum)
+
+        material = ""
+        with contextlib.suppress(Exception):
+            material = stage.key_material(svcs)
+        if material:
+            input_hash = derived_input_hash([input_hash, material])
 
     key = artifact_key(doc_id, stage_name, stage.version, input_hash)
 

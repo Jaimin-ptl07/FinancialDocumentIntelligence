@@ -64,7 +64,9 @@ function useTheme(): [Theme | null, (next: Theme) => void] {
   return [theme, setTheme];
 }
 
-export function Spine() {
+/** `onSignOut` is supplied by the AuthGate; without it (tests, or any shell
+ *  rendered outside the gate) there is no session to end and no control. */
+export function Spine({ onSignOut }: { onSignOut?: () => void } = {}) {
   const pathname = usePathname();
   const [theme, setTheme] = useTheme();
 
@@ -166,6 +168,16 @@ export function Spine() {
         >
           Every figure carries a reference back to the page it was read from.
         </p>
+        {onSignOut ? (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="btn"
+            style={{ marginTop: "var(--sp-3)", fontSize: "var(--text-xs)" }}
+          >
+            Sign out
+          </button>
+        ) : null}
       </div>
     </nav>
   );

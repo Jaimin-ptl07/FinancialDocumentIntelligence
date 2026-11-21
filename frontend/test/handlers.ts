@@ -3,6 +3,13 @@ import { http, HttpResponse } from "msw";
 const API = "http://localhost:8000";
 
 export const handlers = [
+  // No refresh cookie by default: a test that wants a session logs in (or
+  // overrides this) itself. Anything that probes for one -- the PDF loader,
+  // a 401 retry -- gets the anonymous answer instead of an unhandled request.
+  http.post(`${API}/auth/refresh`, () =>
+    HttpResponse.json({ detail: "No refresh token was presented." }, { status: 401 }),
+  ),
+
   http.get(`${API}/documents`, () =>
     HttpResponse.json({
       documents: [

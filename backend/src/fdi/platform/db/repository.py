@@ -3,7 +3,7 @@ theirs, not ours."""
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TypedDict
 
 import sqlalchemy
@@ -13,11 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fdi.core.eval_types import EvalOutcome
 from fdi.core.facts import RunFacts
 from fdi.platform.db.models import (
+    ApiJob,
+    AppUser,
     Document,
     EvalCaseResult,
     EvalRun,
     LlmUsageEvent,
     OcrUsageEvent,
+    RefreshToken,
     StageRun,
 )
 
@@ -248,6 +251,11 @@ class RegistryRepository:
         return facts
 
     async def latest_run(self, doc_id: str, stage_name: str) -> StageRun | None:
+        """The most recent run of `stage_name`, WHATEVER its status.
+
+        Use this to answer "what is this stage doing?". To answer "give me
+        this stage's output", use `latest_completed_run` -- see its docstring
+        for what taking the newest row instead actually costs."""
         return (
             await self._s.execute(
                 sqlalchemy.select(StageRun)
@@ -256,6 +264,54 @@ class RegistryRepository:
                 .limit(1)
             )
         ).scalars().first()
+
+    async def latest_completed_run(self, doc_id: str, stage_name: str) -> StageRun | None:
+        """The most recent run of `stage_name` that PRODUCED AN ARTIFACT.
+
+        A stage can hold several runs at once: an older `done` one with a real
+        `artifact_key`, and a newer `running` or `failed` one with NULL. Asking
+        for the newest row and then testing its `artifact_key` reports "no
+        artifact" whenever a re-run is in flight -- even though a perfectly good
+        artifact is sitting in the store, and even though the re-run may be
+        about to fail and leave that artifact the only answer there is.
+
+        MEASURED: reprocessing RIL from `basis` left `fog_mapping` with a `done`
+        run and a newer `running` one. `run_stage`'s dependency read took the
+        newer row, found a NULL key, and `fog_reason` died with a bare
+        `AssertionError()`. The same lookup backs
+        `GET /documents/{id}/artifacts/{stage}`, so the UI simultaneously showed
+        "not built yet" for stages whose artifacts existed.
+
+        Filtering on `artifact_key IS NOT NULL` as well as `status` is
+        deliberate belt-and-braces: the key is what the caller actually needs,
+        and a `done` row without one would be a broken invariant rather than a
+        reason to hand back None from a different code path."""
+        return (
+            await self._s.execute(
+                sqlalchemy.select(StageRun)
+                .where(
+                    StageRun.doc_id == doc_id,
+                    StageRun.stage_name == stage_name,
+                    StageRun.status == "done",
+                    StageRun.artifact_key.is_not(None),
+                )
+                .order_by(StageRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+
+    async def completed_runs(self) -> list[StageRun]:
+        """Every run, corpus-wide, that recorded an artifact -- the set of
+        objects the store must hold for this database to be consistent with it
+        (`fdi-mirror check`). Ordered for a deterministic report."""
+        rows = (
+            await self._s.execute(
+                sqlalchemy.select(StageRun)
+                .where(StageRun.status == "done", StageRun.artifact_key.is_not(None))
+                .order_by(StageRun.doc_id, StageRun.stage_name, StageRun.created_at)
+            )
+        ).scalars().all()
+        return list(rows)
 
     async def list_documents(self) -> list[Document]:
         """Every document in the corpus, ordered by id (deterministic).
@@ -627,12 +683,19 @@ class RegistryRepository:
         return result
 
     async def stage_cost_totals(self) -> dict[str, CorpusCostTotals]:
-        """{stage_name: totals} for the two stages that ever cost anything:
-        "ocr" (page charges) and "semantic" (its LLM calls, source=
-        'semantic_classify'). /ask and extract_document have no
-        stage_run_id and so no stage entry here -- they only ever appear in
+        """{stage_name: totals} for every stage that cost anything: "ocr"
+        (page charges) plus each stage whose LLM calls carry a stage_run_id.
+        /ask and extract_document run outside run_stage, so they have no
+        stage_run_id and no stage entry here -- they only ever appear in
         corpus_cost_totals. A stage with zero billable events is simply
-        absent from the returned dict."""
+        absent from the returned dict.
+
+        The stage name is JOINED from stage_run rather than inferred from
+        `source`. The previous version filtered on source == 'semantic_
+        classify' and hardcoded the key "semantic", which reported every
+        other stage's spend as zero -- and `fog_mapping`, the only stage in
+        the FOG pipeline that spends money at all, is exactly such a stage.
+        Joining means a new billed stage appears here on its own."""
         result: dict[str, CorpusCostTotals] = {}
         ocr_total = (
             await self._s.execute(
@@ -643,18 +706,25 @@ class RegistryRepository:
             result["ocr"] = CorpusCostTotals(
                 ocr_page_count=int(ocr_total), llm_input_tokens=0, llm_output_tokens=0
             )
-        semantic_totals = (
+        by_stage = (
             await self._s.execute(
                 select(
+                    StageRun.stage_name,
                     func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
                     func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
-                ).where(LlmUsageEvent.source == "semantic_classify")
+                )
+                .join(StageRun, LlmUsageEvent.stage_run_id == StageRun.id)
+                .group_by(StageRun.stage_name)
             )
-        ).one()
-        if semantic_totals[0] or semantic_totals[1]:
-            result["semantic"] = CorpusCostTotals(
-                ocr_page_count=0, llm_input_tokens=int(semantic_totals[0]),
-                llm_output_tokens=int(semantic_totals[1]),
+        ).all()
+        for stage_name, in_tok, out_tok in by_stage:
+            if not in_tok and not out_tok:
+                continue
+            prior = result.get(stage_name)
+            result[stage_name] = CorpusCostTotals(
+                ocr_page_count=prior["ocr_page_count"] if prior else 0,
+                llm_input_tokens=int(in_tok),
+                llm_output_tokens=int(out_tok),
             )
         return result
 
@@ -916,3 +986,189 @@ class DocumentRepository:
         if version is not None:
             stmt = stmt.where(Document.version == version)
         return list((await self._s.execute(stmt)).scalars().all())
+
+
+class UserRepository:
+    """app_user + refresh_token persistence (ADR-0002). The caller owns the
+    transaction -- commit is theirs, not ours.
+
+    Emails are normalised (strip + lowercase) HERE, at the only write and read
+    edges, so an Invitee created as ``Mentor@Example.ORG`` logs in as
+    ``mentor@example.org`` and the unique constraint is on the canonical form.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    @staticmethod
+    def _canonical(email: str) -> str:
+        return email.strip().lower()
+
+    async def create(self, *, email: str, password_hash: str, active: bool = True) -> AppUser:
+        user = AppUser(
+            id=str(uuid.uuid4()),
+            email=self._canonical(email),
+            password_hash=password_hash,
+            active=active,
+        )
+        self._s.add(user)
+        await self._s.flush()
+        return user
+
+    async def get_by_email(self, email: str) -> AppUser | None:
+        stmt = select(AppUser).where(AppUser.email == self._canonical(email))
+        return (await self._s.execute(stmt)).scalar_one_or_none()
+
+    async def get(self, user_id: str) -> AppUser | None:
+        return await self._s.get(AppUser, user_id)
+
+    async def set_active(self, user_id: str, *, active: bool) -> AppUser | None:
+        user = await self._s.get(AppUser, user_id)
+        if user is None:
+            return None
+        user.active = active
+        await self._s.flush()
+        return user
+
+    async def list(self) -> list[AppUser]:
+        stmt = select(AppUser).order_by(AppUser.created_at)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def store_refresh_token(
+        self, *, user_id: str, token_hash: str, expires_at: datetime
+    ) -> None:
+        self._s.add(
+            RefreshToken(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+            )
+        )
+        await self._s.flush()
+
+    async def purge_expired_refresh_tokens(self, *, now: datetime) -> int:
+        """Delete rows whose TTL has passed, returning the count.
+
+        Refresh rows are never touched again after revocation, so nothing else
+        ever removes them -- without this, every login leaks one row forever.
+        Called opportunistically by each session issue (login + refresh),
+        which bounds the table at ~one TTL's worth of live sessions with no
+        cron to forget. Revoked-but-unexpired rows are deliberately kept: the
+        burn-on-refuse path in the refresh route still needs to distinguish
+        "revoked" from "unknown" until the TTL would have ended them anyway.
+        """
+        result = await self._s.execute(
+            sqlalchemy.delete(RefreshToken).where(RefreshToken.expires_at < now)
+        )
+        # CursorResult.rowcount is typed only on the sync flavor; asyncpg's
+        # driver-level result reaches us as Result. The count is advisory (it
+        # feeds nothing but logs/debug), so the runtime attribute is fine and
+        # getattr keeps mypy --strict honest about it.
+        return int(getattr(result, "rowcount", 0))
+
+    async def find_refresh_token(self, token_hash: str) -> RefreshToken | None:
+        return (
+            await self._s.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+        ).scalar_one_or_none()
+
+    async def revoke_refresh_token(self, token_id: str) -> None:
+        token = await self._s.get(RefreshToken, token_id)
+        assert token is not None
+        token.revoked_at = func.now()
+        await self._s.flush()
+
+
+class JobRepository:
+    """api_job persistence (T5). The caller owns the transaction -- commit is
+    theirs, not ours.
+
+    Every read a ROUTE makes goes through an `_for_user` method: ownership is
+    part of the lookup, not a check after it, so a route cannot fetch a job
+    and forget to compare owners. `get` (unscoped) exists for the worker,
+    which has no user and runs whatever it was handed.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def create(
+        self,
+        *,
+        job_id: str,
+        user_id: str,
+        kind: str,
+        params: dict[str, object],
+        correlation_id: str,
+    ) -> ApiJob:
+        job = ApiJob(
+            id=job_id,
+            user_id=user_id,
+            kind=kind,
+            status="queued",
+            params=params,
+            correlation_id=correlation_id,
+        )
+        self._s.add(job)
+        await self._s.flush()
+        return job
+
+    async def get(self, job_id: str) -> ApiJob | None:
+        return await self._s.get(ApiJob, job_id)
+
+    async def get_for_user(self, job_id: str, user_id: str) -> ApiJob | None:
+        stmt = select(ApiJob).where(ApiJob.id == job_id, ApiJob.user_id == user_id)
+        return (await self._s.execute(stmt)).scalar_one_or_none()
+
+    async def list_for_user(
+        self, user_id: str, *, kind: str | None = None, limit: int = 50
+    ) -> list[ApiJob]:
+        stmt = select(ApiJob).where(ApiJob.user_id == user_id)
+        if kind is not None:
+            stmt = stmt.where(ApiJob.kind == kind)
+        stmt = stmt.order_by(ApiJob.created_at.desc(), ApiJob.id).limit(limit)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def lock_submissions(self, user_id: str) -> None:
+        """Serialise this user's job submissions until the transaction ends
+        (T7). Without it, two parallel tabs both count zero jobs in flight
+        and both pass a cap of one. A transaction-scoped advisory lock: it is
+        released by the commit or rollback, so it cannot leak."""
+        await self._s.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"api_job:{user_id}", 0)))
+        )
+
+    async def in_flight_ids(self, user_id: str, *, stale_after_seconds: int) -> list[str]:
+        """Ids of this user's jobs still queued or running, oldest first --
+        ignoring any whose status has not moved for `stale_after_seconds`,
+        which a lost worker would otherwise hold forever."""
+        cutoff = func.now() - sqlalchemy.literal(
+            timedelta(seconds=stale_after_seconds), sqlalchemy.Interval
+        )
+        stmt = (
+            select(ApiJob.id)
+            .where(
+                ApiJob.user_id == user_id,
+                ApiJob.status.in_(("queued", "running")),
+                ApiJob.updated_at > cutoff,
+            )
+            .order_by(ApiJob.created_at, ApiJob.id)
+        )
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def mark_running(self, job_id: str) -> None:
+        await self._set(job_id, status="running")
+
+    async def mark_succeeded(self, job_id: str, result: object) -> None:
+        await self._set(job_id, status="succeeded", result=result, error=None)
+
+    async def mark_failed(self, job_id: str, error: str) -> None:
+        await self._set(job_id, status="failed", error=error)
+
+    async def _set(self, job_id: str, **values: object) -> None:
+        job = await self._s.get(ApiJob, job_id)
+        if job is None:
+            raise LookupError(f"job {job_id} not found")
+        for name, value in values.items():
+            setattr(job, name, value)
+        await self._s.flush()

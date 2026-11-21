@@ -55,7 +55,21 @@ class GraphLoadStage:
 
     async def run(self, ctx: StageContext) -> object:
         graph = cast(Mapping[str, object], await ctx.read("graph"))
-        store = cast(GraphStore, ctx.services["graph_store"])
+
+        # Neo4j is OPTIONAL: `tasks.py` only registers `graph_store` when
+        # Neo4jGraphStore.from_settings returns a client, and it returns None
+        # when no Neo4j is configured. Indexing straight into ctx.services then
+        # raised a bare KeyError('graph_store') -- which is how every graph_load
+        # run in this deployment failed, reading as a pipeline defect when the
+        # truth was simply that an optional backend was absent. "Not configured"
+        # is a legitimate outcome and says so in the receipt.
+        raw = ctx.services.get("graph_store")
+        if raw is None:
+            return {
+                "schema_version": 1, "loaded_nodes": 0, "loaded_edges": 0,
+                "skipped": "graph_store not configured",
+            }
+        store = cast(GraphStore, raw)
 
         nodes: list[Mapping[str, object]] = [
             _namespace_node(ctx.doc_id, n) for n in _list_of_dicts(graph.get("nodes"))
