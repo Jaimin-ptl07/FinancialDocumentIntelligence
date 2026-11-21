@@ -32,6 +32,14 @@ _Avoid_: "client document", "private financials" (out of scope by decision, 2026
 The issuer behind a set of Public filings, identified by its corporate registration number (CIN) and known by many names (aliases, tickers). One Company publishes many reports across years. Shared by every Invitee — Public filings carry no per-user ownership.
 _Avoid_: "entity" (overloaded with cross-document entity clustering), "tenant", "client"
 
+**Report**:
+One Company's annual report for one Fiscal year. Uploading a corrected or re-downloaded copy adds a new version of the same Report, not a new Report. A Report usually holds both standalone and consolidated statements, so basis belongs to its statements, not to the Report.
+_Avoid_: "document" when the Report is meant (a document is one uploaded PDF), "filing" for a single version
+
+**Fiscal year**:
+The reporting period a Report covers, written `FY2025-26` for the year ending 31 March 2026 (the Indian April–March year). Distinct from when the Report was published.
+_Avoid_: "FY26", "2025" (ambiguous between the year a period starts, ends or is published)
+
 **Workspace**:
 An Invitee's working set of Companies — a view for focusing research, never an access boundary. Two Workspaces holding the same Company see the same reports and facts.
 _Avoid_: "tenant", "organization", "account"
