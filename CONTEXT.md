@@ -58,6 +58,28 @@ _Avoid_: "job" (a job is how any long request is queued, not what it does)
 What an Extraction run read for one Field in one Report, with its source location. An Invitee may correct it; the value as read is kept beside the correction.
 _Avoid_: "fact" (a financial fact is the canonical, cross-Report observation — S5)
 
+## Financial knowledge
+
+**Concept**:
+A line of financial meaning from FDI's standard taxonomy — "Profit after tax", "Trade receivables" — identified by its tag (e.g. `PATR`). Different Reports print it under different labels; the Concept is what they share.
+_Avoid_: "field" (a Field is what an Extraction schema asks for; it may name a Concept), "line item" (a printed row)
+
+**Observation**:
+One Report's printed value for one Concept, Fiscal year and basis. A Report observes its own Fiscal year (the current column) and usually the previous one (the comparative column), so one Fiscal year can have several Observations.
+_Avoid_: "fact" for a single Report's number
+
+**Financial fact**:
+The value FDI stands behind for one Company, Concept, Fiscal year and basis, chosen from its Observations by a fixed rule, with every Observation kept beside it.
+_Avoid_: "extracted value" (that is one Extraction run's read of one Field)
+
+**Restatement**:
+A later Report printing a different value for an earlier Fiscal year than that year's own Report did. Both Observations are kept; the Financial fact follows the latest Report, and says it was restated.
+_Avoid_: "correction", "error" (a restatement is the issuer's own revision, not a mistake by FDI)
+
+**Metric**:
+A named calculation over Financial facts — operating margin, revenue growth, debt to equity — with a fixed formula. Computed by FDI, never by the model.
+_Avoid_: "ratio" when the calculation is not a ratio (growth), "KPI"
+
 ## Research
 
 **Evidence**:
