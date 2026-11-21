@@ -58,6 +58,12 @@ _Avoid_: "job" (a job is how any long request is queued, not what it does)
 What an Extraction run read for one Field in one Report, with its source location. An Invitee may correct it; the value as read is kept beside the correction.
 _Avoid_: "fact" (a financial fact is the canonical, cross-Report observation — S5)
 
+## Research
+
+**Evidence**:
+A located piece of one Report version — a passage, a table, a table cell, a page, or a financial fact — that an answer can point at. Its identity comes from where it is in the Report, never from how it was found or how well it ranked, so the same passage found two ways is the same Evidence.
+_Avoid_: "chunk" (a chunk is how text is indexed, one possible kind of Evidence), "source", "context"
+
 **Workspace**:
 An Invitee's working set of Companies — a view for focusing research, never an access boundary. Two Workspaces holding the same Company see the same reports and facts.
 _Avoid_: "tenant", "organization", "account"
