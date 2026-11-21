@@ -151,3 +151,12 @@ as printed: anything beyond float noise is a real disagreement, not rounding.
 ```
 uv run --directory backend pytest tests/unit/test_groundtruth_files.py -q
 ```
+
+## The answer-quality benchmark (`benchmark/`)
+
+`benchmark/v0/fact_lookup.json` holds one question per `values` tag above,
+**generated** from these files by `scripts/eval_answers.py generate` — never
+edited by hand. `test_eval_answers.py` fails when the committed file and the
+generator disagree, so after keying new truth, regenerate and commit both.
+`scripts/eval_answers.py run` scores `/ask` against it (see that script's
+docstring); like `score_pipeline.py`, it always exits 0.
