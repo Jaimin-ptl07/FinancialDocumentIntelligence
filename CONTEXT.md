@@ -80,6 +80,24 @@ _Avoid_: "correction", "error" (a restatement is the issuer's own revision, not 
 A named calculation over Financial facts — operating margin, revenue growth, debt to equity — with a fixed formula. Computed by FDI, never by the model.
 _Avoid_: "ratio" when the calculation is not a ratio (growth), "KPI"
 
+## Agents
+
+**Agent run**:
+One execution of the agent system answering one request from an Invitee — planned, delegated, checked and answered, or failed, cancelled or awaiting approval. It survives a worker crash and continues where it stopped.
+_Avoid_: "job" (the queueing mechanism), "session", "conversation" (one conversation holds many Agent runs)
+
+**Agent task**:
+One piece of an Agent run handed to one specialist agent, with its own status and result.
+_Avoid_: "step", "subtask"
+
+**Run event**:
+A progress record an Agent run emits for the Invitee to follow — a specialist started, a tool was called, Evidence was found, the run finished. Never the model's private reasoning.
+_Avoid_: "log", "trace", "thought"
+
+**Approval**:
+An Agent run's request for an Invitee's yes or no before an action that changes or deletes data. The run waits until it is answered.
+_Avoid_: "confirmation dialog", "review" (review is for Extracted values)
+
 ## Research
 
 **Evidence**:
