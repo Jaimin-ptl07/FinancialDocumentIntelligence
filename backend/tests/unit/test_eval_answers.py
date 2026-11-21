@@ -83,8 +83,8 @@ def _fake_stack(capsys: pytest.CaptureFixture[str], printed_before_ask: list[str
     to this run's items, each billed 1,200 + 80 tokens = 0.25 INR."""
     answers = iter(["ACME's total assets were ₹100 crore.", "Total assets: ₹90 crore."])
     usage = {
-        "old-1": (900, 40, 0.20), "old-2": (1_800, 90, 0.40),
-        "cid-0": (1_200, 80, 0.25), "cid-1": (1_200, 80, 0.25),
+        "o1": (900, 40, 0.20), "o2": (1_800, 90, 0.40),
+        "j0": (1_200, 80, 0.25), "j1": (1_200, 80, 0.25),
     }
     submitted: list[str] = []
 
@@ -99,12 +99,13 @@ def _fake_stack(capsys: pytest.CaptureFixture[str], printed_before_ask: list[str
                 {"job_id": "o2", "status": "succeeded", "kind": "ask", "correlation_id": "old-2"},
                 {"job_id": "o3", "status": "failed", "kind": "ask", "correlation_id": "old-3"},
             ]})
-        if path.startswith("/usage/"):
-            cid = path.removeprefix("/usage/")
-            in_tok, out_tok, cost = usage[cid]
+        if path.endswith("/usage"):
+            job_id = path.removeprefix("/jobs/").removesuffix("/usage")
+            in_tok, out_tok, cost = usage[job_id]
             return httpx.Response(200, json={
-                "correlation_id": cid, "call_count": 2, "input_tokens": in_tok,
-                "output_tokens": out_tok, "duration_ms": 10, "cost_inr": cost, "by_source": [],
+                "job_id": job_id, "correlation_id": "c", "call_count": 2,
+                "input_tokens": in_tok, "output_tokens": out_tok, "duration_ms": 10,
+                "total_cost_inr": cost, "by_source": [],
             })
         if path == "/ask":
             if not submitted:
@@ -251,7 +252,7 @@ def test_run_prints_its_expected_spend_before_the_first_billed_call_and_reports_
 
     body = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     first = body["items"][0]
-    assert first["correlation_id"] == "cid-0"
+    assert first["job_id"] == "j0"
     assert (first["input_tokens"], first["output_tokens"]) == (1_200, 80)
     assert first["cost_inr"] == pytest.approx(0.25)
     assert first["latency_s"] >= 0.0
@@ -287,3 +288,23 @@ def test_with_no_recent_usage_the_run_says_it_cannot_estimate_and_still_runs_its
     out = capsys.readouterr().out
     assert "no recent /ask usage to estimate from" in out
     assert "[1/1]" in out
+
+
+def test_with_no_recent_usage_yes_alone_is_refused_before_any_billed_call(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        if request.url.path == "/jobs":
+            return httpx.Response(200, json={"jobs": []})
+        raise AssertionError(f"billed or unexpected call: {request.method} {request.url.path}")
+
+    main(
+        ["run", "--endpoint", "http://fdi.test", "--out-dir", str(tmp_path / "out"),
+         "--yes", "--email", "e", "--password", "p",
+         "--benchmark", str(_two_item_benchmark(tmp_path / "bench"))],
+        transport=httpx.MockTransport(handle),
+    )
+    assert "run a small --limit first" in capsys.readouterr().out
+    assert not (tmp_path / "out").exists()

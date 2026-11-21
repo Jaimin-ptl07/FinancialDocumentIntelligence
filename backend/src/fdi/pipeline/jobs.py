@@ -124,6 +124,15 @@ async def indexed_document(session: AsyncSession, doc_key: str) -> Document:
     return doc
 
 
+@dataclass(frozen=True)
+class JobRef:
+    """Which job a handler is running: the id its spend is attributed to,
+    and the correlation id its logs and usage rows carry."""
+
+    job_id: str
+    correlation_id: str
+
+
 async def execute_job(job_id: str, services: JobServices) -> None:
     """Run one job to a terminal status.
 
@@ -139,13 +148,14 @@ async def execute_job(job_id: str, services: JobServices) -> None:
         if job.status in TERMINAL_STATUSES:
             log.info("job.already_terminal", job_id=job_id, status=job.status)
             return
-        kind, params, correlation_id = job.kind, dict(job.params), job.correlation_id
+        kind, params = job.kind, dict(job.params)
+        ref = JobRef(job_id=job_id, correlation_id=job.correlation_id)
         await repo.mark_running(job_id)
         await s.commit()
 
     log.info("job.running", job_id=job_id, kind=kind)
     try:
-        result = await _HANDLERS[cast(JobKind, kind)](params, services, correlation_id)
+        result = await _HANDLERS[cast(JobKind, kind)](params, services, ref)
     except JobRejected as exc:
         await _record_failure(services, job_id, str(exc))
         return
@@ -183,7 +193,7 @@ async def _record_failure(services: JobServices, job_id: str, error: str) -> Non
 # --------------------------------------------------------------------------
 
 
-async def _ask(params: dict[str, object], services: JobServices, correlation_id: str) -> object:
+async def _ask(params: dict[str, object], services: JobServices, ref: JobRef) -> object:
     if services.agent_client is None:
         raise JobRejected("ask is not configured: missing agent_client")
     max_rounds = params.get("max_rounds")
@@ -192,7 +202,7 @@ async def _ask(params: dict[str, object], services: JobServices, correlation_id:
             session=s, store=services.store, embedder=services.embedder,
             vector_store=services.vector_store, graph_store=services.graph_store,
             default_entity_threshold=services.entity_threshold,
-            correlation_id=correlation_id,
+            correlation_id=ref.correlation_id, api_job_id=ref.job_id,
         )
         result = await answer_question(
             question=str(params["question"]), ctx=ctx, agent_client=services.agent_client,
@@ -206,7 +216,7 @@ async def _ask(params: dict[str, object], services: JobServices, correlation_id:
 async def _extract_records(
     params: dict[str, object],
     services: JobServices,
-    correlation_id: str,
+    ref: JobRef,
     *,
     whole_schema: bool,
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -227,7 +237,7 @@ async def _extract_records(
         ctx = ExtractContext(
             session=s, store=services.store, embedder=services.embedder,
             vector_store=services.vector_store, doc_id=doc.id, doc_key=doc_key,
-            version=doc.version, correlation_id=correlation_id,
+            version=doc.version, correlation_id=ref.correlation_id, api_job_id=ref.job_id,
         )
         result = await extract_document(
             ctx=ctx, fields=fields, client=services.extractor_client,
@@ -238,19 +248,13 @@ async def _extract_records(
     return schema, result
 
 
-async def _extract(
-    params: dict[str, object], services: JobServices, correlation_id: str
-) -> object:
-    _schema, result = await _extract_records(
-        params, services, correlation_id, whole_schema=False
-    )
+async def _extract(params: dict[str, object], services: JobServices, ref: JobRef) -> object:
+    _schema, result = await _extract_records(params, services, ref, whole_schema=False)
     return {"doc_key": params["doc_key"], "module": params.get("module"), **result}
 
 
-async def _factsheet(
-    params: dict[str, object], services: JobServices, correlation_id: str
-) -> object:
-    schema, result = await _extract_records(params, services, correlation_id, whole_schema=True)
+async def _factsheet(params: dict[str, object], services: JobServices, ref: JobRef) -> object:
+    schema, result = await _extract_records(params, services, ref, whole_schema=True)
     records = result.get("fields")
     bundle = document_factsheet(schema, records if isinstance(records, list) else [])
     doc_key = str(params["doc_key"])
@@ -265,7 +269,7 @@ async def _factsheet(
     return bundle
 
 
-async def _eval(params: dict[str, object], services: JobServices, correlation_id: str) -> object:
+async def _eval(params: dict[str, object], services: JobServices, ref: JobRef) -> object:
     candidate = str(params["candidate"])
     if candidate not in services.candidates.all():
         raise JobRejected(f"candidate {candidate!r} not found")
@@ -282,5 +286,5 @@ async def _eval(params: dict[str, object], services: JobServices, correlation_id
 
 
 _HANDLERS: dict[
-    JobKind, Callable[[dict[str, object], JobServices, str], Awaitable[object]]
+    JobKind, Callable[[dict[str, object], JobServices, JobRef], Awaitable[object]]
 ] = {"ask": _ask, "extract": _extract, "factsheet": _factsheet, "eval": _eval}

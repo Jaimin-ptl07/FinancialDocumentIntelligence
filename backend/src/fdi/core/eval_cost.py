@@ -6,7 +6,8 @@ Two entry points:
 - `summarise_cost(items, completed) -> CostSummary` -- per-item wall-clock
   latency and usage in, P50/P95 latency per item kind and the run's totals
   out. `completed` is the set of item ids that completed their task; the
-  caller decides what "completed" means (today: scored correct).
+  caller decides what "completed" means (the scorer's `ItemScore.completed`:
+  correct AND validly cited).
 - `estimate_spend(items, recent_item_costs) -> SpendEstimate` -- items x the
   average of recent per-item costs, printed before any billed call.
 

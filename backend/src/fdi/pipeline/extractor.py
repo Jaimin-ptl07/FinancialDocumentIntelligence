@@ -145,6 +145,10 @@ class ExtractContext:
     # rows. Optional, appended last -- every existing keyword-only
     # ExtractContext(...) construction site is unaffected.
     correlation_id: str | None = None
+    # The API job these calls are spent for, when there is one: what
+    # GET /jobs/{job_id}/usage reads by, since correlation_id is caller-
+    # supplied and cannot prove whose job a usage row belongs to.
+    api_job_id: str | None = None
 
 
 async def _record_llm_usage(
@@ -155,7 +159,7 @@ async def _record_llm_usage(
     (it is a synchronous route, not a Celery-dispatched stage)."""
     await RegistryRepository(ctx.session).record_llm_usage(
         str(uuid.uuid4()), doc_id=ctx.doc_id, stage_run_id=None,
-        source=source, correlation_id=ctx.correlation_id,
+        source=source, correlation_id=ctx.correlation_id, api_job_id=ctx.api_job_id,
         model=usage.model, input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens, duration_ms=usage.duration_ms,
     )

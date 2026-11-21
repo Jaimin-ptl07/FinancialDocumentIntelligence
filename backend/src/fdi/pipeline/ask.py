@@ -45,6 +45,7 @@ async def answer_question(
             await RegistryRepository(ctx.session).record_llm_usage(
                 str(uuid.uuid4()), doc_id=None, stage_run_id=None,
                 source="ask_agent", correlation_id=ctx.correlation_id,
+                api_job_id=ctx.api_job_id,
                 model=resp.usage.model, input_tokens=resp.usage.input_tokens,
                 output_tokens=resp.usage.output_tokens,
                 duration_ms=resp.usage.duration_ms,

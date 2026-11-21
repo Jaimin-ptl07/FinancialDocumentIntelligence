@@ -598,18 +598,19 @@ class DocumentCostView(BaseModel):
     by_source: list[CostBySourceView]
 
 
-class CorrelationUsageView(BaseModel):
-    """The LLM spend billed under one of the caller's job correlation ids
-    (S1.3: the eval harness's cost per item), priced into INR at read time
-    exactly as `DocumentCostView` is. All zeros while the job has made no
-    billed call yet."""
+class JobUsageView(BaseModel):
+    """The LLM spend one of the caller's API jobs has made (S1.3: the eval
+    harness's cost per item), priced into INR at read time exactly as
+    `DocumentCostView` is. All zeros while the job has made no billed call
+    yet."""
 
+    job_id: str
     correlation_id: str
     call_count: int
     input_tokens: int
     output_tokens: int
     duration_ms: int
-    cost_inr: float
+    total_cost_inr: float
     by_source: list[CostBySourceView]
 
 

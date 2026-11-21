@@ -50,7 +50,6 @@ from fdi.api.schemas import (
     ConceptLookupView,
     CorpusCostView,
     CorpusTotalsView,
-    CorrelationUsageView,
     CostBySourceView,
     DocumentCostSummaryView,
     DocumentCostView,
@@ -76,6 +75,7 @@ from fdi.api.schemas import (
     HybridSearchResultView,
     JobAccepted,
     JobListView,
+    JobUsageView,
     JobView,
     KeywordHitView,
     KeywordSearchRequest,
@@ -724,28 +724,29 @@ async def document_cost(doc_id: str, session: SessionDep) -> DocumentCostView:
     )
 
 
-@router.get("/usage/{correlation_id}", response_model=CorrelationUsageView)
-async def correlation_usage(
-    correlation_id: str, session: SessionDep, user_id: CurrentUserDep
-) -> CorrelationUsageView:
-    """The LLM spend billed under a correlation id the caller's own job
-    carries (S1.3). Ownership is the lookup's precondition: an id no job of
-    theirs carries -- someone else's, or nobody's -- is a plain 404, the
-    same answer either way, so ids do not leak."""
-    if not await JobRepository(session).owns_correlation_id_for_user(correlation_id, user_id):
-        raise HTTPException(status_code=404, detail=f"no job with correlation id {correlation_id}")
+@router.get("/jobs/{job_id}/usage", response_model=JobUsageView)
+async def get_job_usage(job_id: str, session: SessionDep, user_id: CurrentUserDep) -> JobUsageView:
+    """The LLM spend one of the caller's API jobs has made so far (S1.3:
+    the eval harness's cost per item). Ownership is part of the lookup, as
+    for GET /jobs/{id}: someone else's job is the same 404 as no job. Rows
+    are read by job, not correlation id -- that is caller-supplied, so an
+    Invitee could otherwise stamp a job with someone else's and read both."""
+    job = await JobRepository(session).get_for_user(job_id, user_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
     settings = get_settings()
     by_source = [
         _priced_source(r, settings)
-        for r in await RegistryRepository(session).correlation_cost_by_source(correlation_id)
+        for r in await RegistryRepository(session).job_cost_by_source(job.id)
     ]
-    return CorrelationUsageView(
-        correlation_id=correlation_id,
+    return JobUsageView(
+        job_id=job.id,
+        correlation_id=job.correlation_id,
         call_count=sum(s.call_count for s in by_source),
         input_tokens=sum(s.input_tokens for s in by_source),
         output_tokens=sum(s.output_tokens for s in by_source),
         duration_ms=sum(s.duration_ms for s in by_source),
-        cost_inr=sum(s.cost_inr for s in by_source),
+        total_cost_inr=sum(s.cost_inr for s in by_source),
         by_source=by_source,
     )
 

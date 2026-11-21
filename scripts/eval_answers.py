@@ -19,15 +19,16 @@ time (the per-Invitee concurrency limit), and calls a billed endpoint, so it
 refuses to start without `--limit N` or `--yes`. A failed or timed-out item
 is recorded with its reason and the run continues.
 
-COST. Each item's wall-clock latency (submit to answer) is measured here;
-its tokens and INR cost are read afterwards from `GET /usage/{correlation
-id}` -- the `llm_usage_event` rows billed under that item's job. Before the
-first billed call the run prints its expected spend: items x the average
-cost of the eval Invitee's most recent succeeded `/ask` jobs (the last
-`RECENT_JOBS`, read through the same endpoint). That source is live: it
+COST. Each item's wall-clock latency (submit to answer, so it includes up
+to one poll interval of waiting, and a failed item's time to fail) is
+measured here; its tokens and INR cost are read afterwards from `GET
+/jobs/{id}/usage` -- the `llm_usage_event` rows that item's job billed.
+Before the first billed call the run prints its expected spend: items x the
+average cost of the eval Invitee's most recent succeeded `/ask` jobs (the
+last `RECENT_JOBS`, read through the same endpoint). That source is live: it
 prices at the stack's current configured rates and reflects today's model
-and prompt, not a stale report. A first run has no history and says so --
-run a small `--limit` first to seed it.
+and prompt, not a stale report. A first run has no history, so it has no
+estimate: it then needs `--limit`, and `--yes` alone is refused.
 
 Exit code is always 0: this is a measurement tool, not a gate. The report it
 writes is the number.
@@ -127,13 +128,13 @@ def dump(body: object) -> str:
 
 @dataclass(frozen=True)
 class MeasuredAnswer:
-    """An item's answer plus what producing it cost. `correlation_id` is the
-    job's (None when no job was ever accepted); `cost.usage` is None when
-    its usage could not be read."""
+    """An item's answer plus what producing it cost. `job_id` is None when no
+    job was ever accepted; `cost.usage` is None when its usage could not be
+    read."""
 
     answer: EndpointAnswer
     cost: ItemCost
-    correlation_id: str | None
+    job_id: str | None
 
 
 class AskJobAdapter:
@@ -160,7 +161,6 @@ class AskJobAdapter:
         self._timeout = timeout
         self._sleep = sleep
         self._clock = clock
-        self._correlation_id: str | None = None
 
     async def login(self, email: str, password: str) -> None:
         r = await self._client.post("/auth/login", json={"email": email, "password": password})
@@ -168,25 +168,23 @@ class AskJobAdapter:
         self._client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
     async def measure(self, item: BenchmarkItem) -> MeasuredAnswer:
-        """`answer`, timed wall-clock, then priced from the usage billed
-        under its job's correlation id."""
-        self._correlation_id = None
+        """`answer`, timed wall-clock, then priced from the usage its job
+        billed."""
         started = self._clock()
-        answer = await self.answer(item)
+        answer, job_id = await self._attempt(item)
         latency = self._clock() - started
-        cid = self._correlation_id
-        usage = await self.usage(cid) if cid is not None else None
+        usage = await self.usage(job_id) if job_id is not None else None
         return MeasuredAnswer(
             answer=answer,
             cost=ItemCost(item_id=item.id, kind=item.kind, latency_s=latency, usage=usage),
-            correlation_id=cid,
+            job_id=job_id,
         )
 
-    async def usage(self, correlation_id: str) -> ItemUsage | None:
-        """What was billed under one of our jobs' correlation ids; None when
-        the stack would not say (the item is then reported unpriced)."""
+    async def usage(self, job_id: str) -> ItemUsage | None:
+        """What one of our jobs billed; None when the stack would not say
+        (the item is then reported unpriced)."""
         try:
-            r = await self._client.get(f"/usage/{correlation_id}")
+            r = await self._client.get(f"/jobs/{job_id}/usage")
         except httpx.HTTPError:
             return None
         if r.status_code != 200:
@@ -194,7 +192,7 @@ class AskJobAdapter:
         body = r.json()
         return ItemUsage(input_tokens=int(body["input_tokens"]),
                          output_tokens=int(body["output_tokens"]),
-                         cost_inr=float(body["cost_inr"]))
+                         cost_inr=float(body["total_cost_inr"]))
 
     async def recent_item_costs(self, jobs: int = RECENT_JOBS) -> list[float]:
         """The INR cost of each of our latest `jobs` succeeded /ask jobs that
@@ -203,32 +201,43 @@ class AskJobAdapter:
         r.raise_for_status()
         costs = []
         for job in r.json()["jobs"]:
-            cid = job.get("correlation_id")
-            if job.get("status") != "succeeded" or not cid:
+            if job.get("status") != "succeeded":
                 continue
-            usage = await self.usage(cid)
+            usage = await self.usage(job["job_id"])
             if usage is not None and (usage.input_tokens or usage.output_tokens):
                 costs.append(usage.cost_inr)
         return costs
 
     async def answer(self, item: BenchmarkItem) -> EndpointAnswer:
-        try:
-            return await self._answer(item)
-        except httpx.HTTPError as exc:
-            return EndpointAnswer(item_id=item.id, answer=None,
-                               error=f"{type(exc).__name__}: {exc}")
+        answer, _job_id = await self._attempt(item)
+        return answer
 
-    async def _answer(self, item: BenchmarkItem) -> EndpointAnswer:
+    async def _attempt(self, item: BenchmarkItem) -> tuple[EndpointAnswer, str | None]:
+        """The answer, and the job that produced it (None when /ask accepted
+        no job). Never raises."""
+
         def failed(error: str) -> EndpointAnswer:
             return EndpointAnswer(item_id=item.id, answer=None, error=error)
 
-        submitted = await self._client.post("/ask", json={"question": item.question})
-        if submitted.status_code != 202:
-            return failed(f"POST /ask returned {submitted.status_code}: {submitted.text}")
-        job_id = submitted.json()["job_id"]
-        self._correlation_id = submitted.json().get("correlation_id")
+        def http_failure(exc: httpx.HTTPError) -> EndpointAnswer:
+            return failed(f"{type(exc).__name__}: {exc}")
 
-        deadline = time.monotonic() + self._timeout
+        try:
+            submitted = await self._client.post("/ask", json={"question": item.question})
+        except httpx.HTTPError as exc:
+            return http_failure(exc), None
+        if submitted.status_code != 202:
+            return failed(f"POST /ask returned {submitted.status_code}: {submitted.text}"), None
+        job_id = str(submitted.json()["job_id"])
+        try:
+            return await self._await_answer(item, job_id, failed), job_id
+        except httpx.HTTPError as exc:
+            return http_failure(exc), job_id
+
+    async def _await_answer(
+        self, item: BenchmarkItem, job_id: str, failed: Callable[[str], EndpointAnswer]
+    ) -> EndpointAnswer:
+        deadline = self._clock() + self._timeout
         while True:
             polled = await self._client.get(f"/jobs/{job_id}")
             if polled.status_code != 200:
@@ -238,7 +247,7 @@ class AskJobAdapter:
                 return failed(f"job {job_id} failed: {job.get('error')}")
             if job["status"] == "succeeded":
                 break
-            if time.monotonic() >= deadline:
+            if self._clock() >= deadline:
                 return failed(
                     f"timed out after {self._timeout:g}s; job {job_id} still {job['status']}"
                 )
@@ -347,7 +356,7 @@ def _item_cost_fields(m: MeasuredAnswer | None) -> dict[str, object]:
     """An item's latency/usage columns; usage fields are None when unread."""
     usage = m.cost.usage if m else None
     return {
-        "correlation_id": m.correlation_id if m else None,
+        "job_id": m.job_id if m else None,
         "latency_s": m.cost.latency_s if m else None,
         "input_tokens": usage.input_tokens if usage else None,
         "output_tokens": usage.output_tokens if usage else None,
@@ -411,7 +420,9 @@ def render_cost_markdown(
     if cost.items_without_usage:
         lines.append(f"- **items whose usage could not be read** (not in the cost): "
                      f"{cost.items_without_usage}")
-    lines += ["", "| kind | items | P50 latency (s) | P95 latency (s) |", "|---|---:|---:|---:|"]
+    lines += ["", "Latency is submit to answer, failed items included; it can run up to one "
+              "poll interval over the job's own time.",
+              "", "| kind | items | P50 latency (s) | P95 latency (s) |", "|---|---:|---:|---:|"]
     lines += [latency_row(kind, s) for kind, s in cost.latency_by_kind.items()]
     lines.append(latency_row("**overall**", cost.latency_overall))
     lines += ["", "| item | status | latency (s) | input tokens | output tokens | cost |",
@@ -431,7 +442,7 @@ def render_cost_markdown(
 def spend_line(estimate: SpendEstimate) -> str:
     if estimate.total_cost_inr is None or estimate.average_cost_inr is None:
         return (f"{estimate.items} item(s) will call /ask, a billed endpoint; no recent /ask "
-                "usage to estimate from (a first run? try a small --limit first).")
+                "usage to estimate from (a first run).")
     return (f"expected spend: INR {estimate.total_cost_inr:.2f} = {estimate.items} item(s) x "
             f"INR {estimate.average_cost_inr:.4f}, the average of {estimate.sample_size} "
             "recent /ask job(s).")
@@ -461,7 +472,8 @@ def render_markdown(
         "## Task completion",
         "",
         "Completed = every gold value stated AND at least one citation on a gold "
-        "evidence page.",
+        "evidence page. Only citations carrying a `doc_key` and page can be valid; "
+        "today's /ask table and concept citations carry neither, so they never count.",
         "",
         "| kind | run | completed | completion | supported | evidence support "
         "| citations | valid | citation validity |",
@@ -531,7 +543,12 @@ async def _run(
         items = len(benchmark.items) if args.limit is None else min(args.limit,
                                                                      len(benchmark.items))
         # Printed before the first billed call, which run_eval makes.
-        print(spend_line(estimate_spend(items, recent)))
+        estimate = estimate_spend(items, recent)
+        print(spend_line(estimate))
+        if estimate.total_cost_inr is None and args.limit is None:
+            print("--yes needs an expected spend, and there is none yet: run a small "
+                  "--limit first to seed one.")
+            return
         report = await run_eval(
             benchmark, adapter, limit=args.limit, stamp=stamp, out_dir=args.out_dir
         )

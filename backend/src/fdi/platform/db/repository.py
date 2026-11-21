@@ -226,11 +226,12 @@ class RegistryRepository:
         input_tokens: int,
         output_tokens: int,
         duration_ms: int,
+        api_job_id: str | None = None,
     ) -> None:
         self._s.add(
             LlmUsageEvent(
                 id=id, doc_id=doc_id, stage_run_id=stage_run_id, source=source,
-                correlation_id=correlation_id, model=model,
+                correlation_id=correlation_id, api_job_id=api_job_id, model=model,
                 input_tokens=input_tokens, output_tokens=output_tokens,
                 duration_ms=duration_ms,
             )
@@ -560,10 +561,11 @@ class RegistryRepository:
         events.sort(key=lambda e: e["created_at"], reverse=True)
         return events
 
-    async def correlation_cost_by_source(self, correlation_id: str) -> list[CostBySource]:
-        """Every LLM usage source billed under one correlation id -- one
-        API job's spend, whatever document (or none, for /ask) it touched.
-        OCR is not included: no API job runs OCR inline."""
+    async def job_cost_by_source(self, api_job_id: str) -> list[CostBySource]:
+        """Every LLM usage source one API job spent on, whatever document (or
+        none, for /ask) it touched. Keyed by the job, never its correlation
+        id: that is caller-supplied, so two Invitees' jobs can share one. OCR
+        is not included: no API job runs OCR inline."""
         rows = (
             await self._s.execute(
                 select(
@@ -573,7 +575,7 @@ class RegistryRepository:
                     func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
                     func.coalesce(func.sum(LlmUsageEvent.duration_ms), 0),
                 )
-                .where(LlmUsageEvent.correlation_id == correlation_id)
+                .where(LlmUsageEvent.api_job_id == api_job_id)
                 .group_by(LlmUsageEvent.source)
                 .order_by(LlmUsageEvent.source)
             )
@@ -1146,17 +1148,6 @@ class JobRepository:
     async def get_for_user(self, job_id: str, user_id: str) -> ApiJob | None:
         stmt = select(ApiJob).where(ApiJob.id == job_id, ApiJob.user_id == user_id)
         return (await self._s.execute(stmt)).scalar_one_or_none()
-
-    async def owns_correlation_id_for_user(self, correlation_id: str, user_id: str) -> bool:
-        """Whether this user has a job carrying `correlation_id` -- the gate
-        in front of reading that id's usage, so a route reads only spend the
-        caller's own job made."""
-        stmt = select(
-            sqlalchemy.exists().where(
-                ApiJob.correlation_id == correlation_id, ApiJob.user_id == user_id
-            )
-        )
-        return bool((await self._s.execute(stmt)).scalar())
 
     async def list_for_user(
         self, user_id: str, *, kind: str | None = None, limit: int = 50

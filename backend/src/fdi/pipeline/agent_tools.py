@@ -53,6 +53,10 @@ class AgentContext:
     # appended last -- every existing keyword-only AgentContext(...)
     # construction site is unaffected.
     correlation_id: str | None = None
+    # The API job these calls are spent for, when there is one: what
+    # GET /jobs/{job_id}/usage reads by, since correlation_id is caller-
+    # supplied and cannot prove whose job a usage row belongs to.
+    api_job_id: str | None = None
 
 
 # --------------------------------------------------------------------------
