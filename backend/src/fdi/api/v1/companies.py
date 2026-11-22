@@ -144,7 +144,7 @@ def _change_out(c: ChangeView) -> ChangeOut:
 def _refused(exc: CompanyCurationError) -> HTTPException:
     if isinstance(exc, CompanyConflict):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
 
 
 def _not_found(company_id: str) -> HTTPException:
