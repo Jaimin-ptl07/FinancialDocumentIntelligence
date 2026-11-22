@@ -153,13 +153,17 @@ class LlmUsageEvent(Base):
     so every mapping call raised CheckViolationError while recording the
     usage it had ALREADY spent money on, and the stage died mid-run. A
     billing ledger that rejects a real charge is worse than one that
-    misses it -- it takes the work down with it."""
+    misses it -- it takes the work down with it.
+
+    `eval_judge` (migration 0013) is the answer-quality eval's optional LLM
+    judge: eval spend, recorded under its own source so it never reads as
+    product spend."""
 
     __tablename__ = "llm_usage_event"
     __table_args__ = (
         CheckConstraint(
             "source IN ('semantic_classify','fog_mapping','extract_document',"
-            "'ask_agent')",
+            "'ask_agent','eval_judge')",
             name="ck_llm_usage_event_source",
         ),
     )

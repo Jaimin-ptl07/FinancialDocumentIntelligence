@@ -238,6 +238,18 @@ class RegistryRepository:
         )
         await self._s.flush()
 
+    async def recent_llm_usage(self, source: str, *, limit: int) -> list[tuple[int, int]]:
+        """(input_tokens, output_tokens) of the latest `limit` calls billed
+        under `source`, newest first. Tokens, not INR: the caller prices them
+        at its configured rates."""
+        rows = await self._s.execute(
+            select(LlmUsageEvent.input_tokens, LlmUsageEvent.output_tokens)
+            .where(LlmUsageEvent.source == source)
+            .order_by(LlmUsageEvent.created_at.desc())
+            .limit(limit)
+        )
+        return [(int(i), int(o)) for i, o in rows.all()]
+
     async def runs_for_document(self, doc_id: str) -> dict[str, RunFacts]:
         rows = (
             await self._s.execute(

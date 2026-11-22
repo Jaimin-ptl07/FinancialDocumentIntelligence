@@ -39,9 +39,11 @@ class AzureOpenAIAgentClient:
         # the same "SDK stub is narrower than what the wire protocol actually
         # accepts" mismatch fdi.platform.ocr.py's begin_analyze_document call
         # already carries a type: ignore[call-overload] for.
+        # No tools (the eval's LLM judge): Azure rejects an empty `tools` list
+        # and a `tool_choice` with nothing to choose from, so send neither.
+        tooling: dict[str, object] = {"tools": tools, "tool_choice": "auto"} if tools else {}
         resp = self._sdk.chat.completions.create(  # type: ignore[call-overload]
-            model=self._deployment, messages=messages, tools=tools,
-            tool_choice="auto", temperature=0,
+            model=self._deployment, messages=messages, temperature=0, **tooling,
         )
         duration_ms = int((time.perf_counter() - start) * 1000)
         usage_obj = resp.usage

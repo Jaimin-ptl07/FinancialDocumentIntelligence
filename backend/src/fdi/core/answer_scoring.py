@@ -44,6 +44,18 @@ Each unit kind (rupees, percent, ratio) takes its own headline figures, so
 "₹49,454 crore over ₹2,71,423 crore gives 18.22%" answers a margin of 18.22
 -- the inputs it shows do not crowd the margin out.
 
+RESEARCH ITEMS
+--------------
+A `research` answer walks through a note or a narrative passage and states
+many figures; its required figures are part of that walk, not its headline.
+So for a research item EVERY figure of the gold's unit kind is a candidate,
+wherever it appears -- each gold value still needs a different figure. A
+research item with no gold values is correct whenever it answers. Its
+deterministic score is the required figures and the evidence hit (the gold
+evidence is the note page, so citing only the statement face is not
+research done); whether its free-text `required_claims` are supported is
+the optional LLM judge's call (`fdi.core.judge`), reported apart.
+
 CORRECT IS NOT COMPLETED
 ------------------------
 A citation is valid only when its Report `doc_key` and page are one of the
@@ -329,7 +341,7 @@ def _unit_kind(unit: str) -> str:
     return unit if unit in (PERCENT, RATIO) else "INR"
 
 
-def _headline_figures(text: str, unit: str) -> list[_Figure]:
+def _candidate_figures(text: str, unit: str) -> list[_Figure]:
     """The answer's candidate figures for a gold value in `unit`, in order: a
     percentage for a percent gold, an unmarked number for a ratio, and for a
     rupee gold an amount -- the marked ones when there are any."""
@@ -480,7 +492,9 @@ def _score_item(item: BenchmarkItem, answer: EndpointAnswer) -> ItemScore:
     missing: list[GoldValue] = []
     for unit_kind in dict.fromkeys(_unit_kind(g.unit) for g in item.gold.values):
         golds = [g for g in item.gold.values if _unit_kind(g.unit) == unit_kind]
-        unclaimed = _headline_figures(answer.answer, unit_kind)[: len(golds)]
+        candidates = _candidate_figures(answer.answer, unit_kind)
+        # Only the headline figures, except in research (see RESEARCH ITEMS).
+        unclaimed = candidates if item.kind == "research" else candidates[: len(golds)]
         for gold in golds:
             hit = next((f for f in unclaimed if _matches(f, gold)), None)
             if hit is None:

@@ -12,8 +12,10 @@ Each kind names the fields it cannot be scored without (`_check_kind`):
 `fact_lookup`, `cross_company`, `calculation` and `multi_year` are answerable
 with at least one gold value; `cross_company` also needs two or more
 `doc_keys`, one per Company compared; `calculation` records the hand
-`gold.formula` its gold was derived by; `unanswerable` has no gold values
-and no gold evidence.
+`gold.formula` its gold was derived by; `research` is answerable with at
+least one gold evidence location (the note or narrative page the answer is
+printed on) and at least one `gold.required_claims`; `unanswerable` has no
+gold values, no gold evidence and no required claims.
 
 A malformed item is REJECTED at load with a precise reason. `parse_groundtruth`
 skips a bad file instead, but there the cost is a smaller denominator that the
@@ -75,13 +77,18 @@ class Gold:
     endpoint (S7) may name its tools differently.
 
     `formula` is how a `calculation` item's gold values were derived by
-    hand from ground-truth values, so the arithmetic can be re-checked."""
+    hand from ground-truth values, so the arithmetic can be re-checked.
+
+    `required_claims` are the free-text statements a complete `research`
+    answer must make. Only the optional LLM judge (`fdi.core.judge`) scores
+    them; the deterministic scorer never reads them."""
 
     answerable: bool
     values: tuple[GoldValue, ...] = ()
     evidence: tuple[Evidence, ...] = ()
     expected_tools: tuple[str, ...] | None = None
     formula: str | None = None
+    required_claims: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -174,8 +181,7 @@ _VALUED_KINDS = frozenset({"fact_lookup", "cross_company", "calculation", "multi
 
 
 def _check_kind(kind: str, gold: Gold, doc_keys: Sequence[object]) -> None:
-    """The fields `kind` cannot be scored without. `research` is not checked
-    here: its required evidence and claims arrive with its own items (S1.5)."""
+    """The fields `kind` cannot be scored without."""
     if kind in _VALUED_KINDS:
         if not gold.answerable:
             raise BenchmarkError(f"a {kind} item must be answerable")
@@ -190,6 +196,14 @@ def _check_kind(kind: str, gold: Gold, doc_keys: Sequence[object]) -> None:
         raise BenchmarkError(
             "a calculation item must record the 'gold.formula' its gold value was derived by"
         )
+    if kind == "research":
+        if not gold.answerable:
+            raise BenchmarkError("a research item must be answerable")
+        if not gold.evidence:
+            # Evidence location is the deterministic half of its score.
+            raise BenchmarkError("a research item needs at least one gold evidence location")
+        if not gold.required_claims:
+            raise BenchmarkError("a research item needs at least one required claim")
     if kind == "unanswerable":
         if gold.answerable:
             raise BenchmarkError("an unanswerable item must have 'gold.answerable' false")
@@ -197,6 +211,8 @@ def _check_kind(kind: str, gold: Gold, doc_keys: Sequence[object]) -> None:
             raise BenchmarkError("an unanswerable item has no gold values")
         if gold.evidence:
             raise BenchmarkError("an unanswerable item has no gold evidence")
+        if gold.required_claims:
+            raise BenchmarkError("an unanswerable item has no required claims")
 
 
 def _parse_gold(raw: object) -> Gold:
@@ -220,7 +236,28 @@ def _parse_gold(raw: object) -> Gold:
         evidence=tuple(_parse_evidence(i, e) for i, e in enumerate(raw_evidence)),
         expected_tools=_parse_expected_tools(raw.get("expected_tools")),
         formula=None if formula is None else str(formula),
+        required_claims=_parse_required_claims(raw.get("required_claims")),
     )
+
+
+def _parse_required_claims(raw: object) -> tuple[str, ...]:
+    """Absent is (). Present, a non-empty list of distinct claims: an empty
+    list would make every answer fully supported, and a repeated claim
+    would count twice in the judge's support rate."""
+    if raw is None:
+        return ()
+    where = "'gold.required_claims'"
+    if not isinstance(raw, list) or not raw:
+        raise BenchmarkError(f"{where} must be a non-empty list of claims")
+    claims: list[str] = []
+    for index, claim in enumerate(raw):
+        if not _text(claim):
+            raise BenchmarkError(f"{where} #{index} must be a non-empty string")
+        assert isinstance(claim, str)
+        if claim in claims:
+            raise BenchmarkError(f"{where} states {claim!r} twice")
+        claims.append(claim)
+    return tuple(claims)
 
 
 def _parse_expected_tools(raw: object) -> tuple[str, ...] | None:

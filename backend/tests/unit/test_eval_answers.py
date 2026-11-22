@@ -4,9 +4,10 @@ calls a billed endpoint without an explicit item limit."""
 import json
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -21,12 +22,14 @@ from fdi.core.benchmark import (
     GoldValue,
 )
 from fdi.core.eval_cost import ItemCost, ItemUsage, summarise_cost
+from fdi.core.judge import parse_judgement
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from eval_answers import (  # noqa: E402
     BENCHMARK_DIR,
     AskJobAdapter,
+    JudgedItem,
     MeasuredAnswer,
     dump,
     generate_fact_lookup,
@@ -61,7 +64,7 @@ def test_the_committed_benchmark_loads_with_one_item_per_ground_truth_value() ->
     assert bench.version == "v0"
     assert sum(item.kind == "fact_lookup" for item in bench.items) == gt_values
     assert {item.kind for item in bench.items} == {
-        "fact_lookup", "cross_company", "calculation", "unanswerable",
+        "fact_lookup", "cross_company", "calculation", "research", "unanswerable",
     }
     assert not any("RITES" in item.question for item in bench.items)
 
@@ -69,7 +72,9 @@ def test_the_committed_benchmark_loads_with_one_item_per_ground_truth_value() ->
 def test_hand_keyed_items_point_only_at_ground_truth_pages() -> None:
     """Hand-keyed gold rests on `docs/groundtruth/`: every evidence location
     is a page a ground-truth file was read from, and every cross_company
-    figure is a ground-truth value printed on that Report's page."""
+    figure is a ground-truth value printed on that Report's page. Research
+    items are the exception: their evidence is a note or narrative page,
+    keyed from the Report itself (docs/groundtruth/README.md)."""
     printed: dict[tuple[str, int], set[float]] = {}
     for gt in _groundtruth():
         page = re.search(r"PDF page (\d+)", str(gt["_source"]))
@@ -77,7 +82,8 @@ def test_hand_keyed_items_point_only_at_ground_truth_pages() -> None:
         key = (ISSUER_DOC_KEYS[str(gt["issuer"])], int(page[1]))
         printed.setdefault(key, set()).update(gt["values"].values())  # type: ignore[attr-defined]
 
-    hand_keyed = [i for i in load_benchmark(BENCHMARK_DIR).items if i.kind != "fact_lookup"]
+    hand_keyed = [i for i in load_benchmark(BENCHMARK_DIR).items
+                  if i.kind not in ("fact_lookup", "research")]
     for item in hand_keyed:
         assert {(e.doc_key, e.page) for e in item.gold.evidence} <= set(printed), item.id
     for item in (i for i in hand_keyed if i.kind == "cross_company"):
@@ -502,3 +508,199 @@ def test_with_no_recent_usage_yes_alone_is_refused_before_any_billed_call(
     )
     assert "run a small --limit first" in capsys.readouterr().out
     assert not (tmp_path / "out").exists()
+
+
+# --------------------------------------------------------------------------
+# The optional LLM judge: off by default, its own columns, its own spend.
+# --------------------------------------------------------------------------
+
+
+def _research_benchmark(directory: Path) -> Path:
+    """r0 answered (and judged); r1's /ask job fails, so its claims are
+    unsupported without a judge call; f0 has no claims and is never judged."""
+
+    def research(n: int) -> dict[str, object]:
+        return {
+            "id": f"research:acme:r{n}", "kind": "research",
+            "question": f"What does ACME's other income note say? (r{n})",
+            "gold": {"answerable": True,
+                     "evidence": [{"doc_key": "acme-2025-26", "page": 31}],
+                     "required_claims": ["Interest is the largest component.",
+                                         "Dividends rose."]},
+        }
+
+    directory.mkdir()
+    (directory / "research.json").write_text(json.dumps(
+        {"version": "v-test", "items": [research(0), research(1)]}), encoding="utf-8")
+    (directory / "fact_lookup.json").write_text(json.dumps({"version": "v-test", "items": [{
+        "id": "fact_lookup:acme:f0", "kind": "fact_lookup", "question": "Total assets?",
+        "gold": {"answerable": True,
+                 "values": [{"value": 100.0, "unit": "INR crore", "tolerance": 0.5}],
+                 "evidence": [{"doc_key": "acme-2025-26", "page": 7}]},
+    }]}), encoding="utf-8")
+    return directory
+
+
+def _research_stack() -> httpx.MockTransport:
+    """Recent /ask history: one job at 0.30 INR. Every job this run submits
+    bills 0.25 INR; f0 and r0 succeed, r1's job fails. r0's tool trace is
+    the evidence it cited."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/auth/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        if path == "/jobs" and request.method == "GET":
+            return httpx.Response(200, json={"jobs": [{"job_id": "o1", "status": "succeeded"}]})
+        if path.endswith("/usage"):
+            cost = 0.30 if path == "/jobs/o1/usage" else 0.25
+            return httpx.Response(200, json={"input_tokens": 1_000, "output_tokens": 50,
+                                             "total_cost_inr": cost})
+        if path == "/ask":
+            question = json.loads(request.content)["question"]
+            job = "jr1" if "(r1)" in question else ("jr0" if "(r0)" in question else "jf0")
+            return httpx.Response(202, json={"job_id": job})
+        if path == "/jobs/jr1":
+            return httpx.Response(200, json={"status": "failed", "error": "boom"})
+        if path in ("/jobs/jr0", "/jobs/jf0"):
+            return httpx.Response(200, json={"status": "succeeded"})
+        if path == "/jobs/jr0/result":
+            return httpx.Response(200, json={
+                "answer": "Interest is the largest component of other income.",
+                "citations": [{"doc_key": "acme-2025-26", "page": 31}],
+                "tool_trace": [
+                    {"round": 0, "tool": "search", "arguments": {"query": "other income"},
+                     "result": {"results": [{"doc_key": "acme-2025-26", "page": 31,
+                                             "text": "Interest 13,302"}]}, "error": None},
+                    # Retrieved but cites nothing: not evidence the judge may use.
+                    {"round": 0, "tool": "search", "arguments": {"query": "dividends"},
+                     "result": {"results": []}, "error": None},
+                    {"round": 1, "tool": "get_tables", "arguments": {},
+                     "result": {"error": "no such doc"}, "error": "no such doc"},
+                ],
+            })
+        if path == "/jobs/jf0/result":
+            return httpx.Response(200, json={
+                "answer": "Total assets were ₹100 crore.",
+                "citations": [{"doc_key": "acme-2025-26", "page": 7}], "tool_trace": [],
+            })
+        raise AssertionError(f"unexpected {request.method} {path}")
+
+    return httpx.MockTransport(handle)
+
+
+class _FakeJudge:
+    """Supports claim 0 only; each call bills 0.04 INR. Recent history: two
+    judge calls at 0.02 and 0.06 INR."""
+
+    name = "fake-judge"
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str, str, tuple[str, ...]]] = []
+
+    async def recent_costs(self) -> list[float]:
+        return [0.02, 0.06]
+
+    async def judge(
+        self, item: BenchmarkItem, answer: str, evidence: Sequence[str]
+    ) -> JudgedItem:
+        self.seen.append((item.id, answer, tuple(evidence)))
+        reply = json.dumps({"claims": [{"index": 0, "supported": True, "reason": "in note"},
+                                       {"index": 1, "supported": False, "reason": "absent"}]})
+        return JudgedItem(judgement=parse_judgement(item, reply),
+                          usage=ItemUsage(input_tokens=3_000, output_tokens=60, cost_inr=0.04))
+
+
+def _run_research(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str, *extra: str,
+    judge: _FakeJudge | None = None,
+) -> tuple[dict[str, Any], str, str]:
+    out_dir = tmp_path / name
+    capsys.readouterr()
+    main(["run", "--endpoint", "http://fdi.test", "--out-dir", str(out_dir), "--limit", "3",
+          "--email", "e", "--password", "p", "--benchmark",
+          str(_research_benchmark(tmp_path / f"{name}-bench")), *extra],
+         transport=_research_stack(), judge=judge)
+    body = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    summary = (out_dir / "report.md").read_text(encoding="utf-8")
+    return body, summary, capsys.readouterr().out
+
+
+def test_without_the_flag_there_is_no_judge_call_and_no_judge_column(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    judge = _FakeJudge()
+    body, summary, _ = _run_research(tmp_path, capsys, "plain", judge=judge)
+    assert judge.seen == []
+    assert "judge" not in body
+    assert all("judge" not in item for item in body["items"])
+    assert "LLM judge" not in summary
+    assert body["cost"]["judge_cost_inr"] == 0.0
+
+
+def test_the_judge_sees_answered_items_with_claims_and_their_cited_evidence(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    judge = _FakeJudge()
+    _run_research(tmp_path, capsys, "judged", "--judge", judge=judge)
+    # Only r0: f0 has no claims, and r1 never answered.
+    assert [(item_id, answer) for item_id, answer, _ in judge.seen] == [
+        ("research:acme:r0", "Interest is the largest component of other income."),
+    ]
+    evidence = judge.seen[0][2]
+    assert len(evidence) == 1 and "Interest 13,302" in evidence[0]
+
+
+def test_judge_columns_sit_beside_unchanged_deterministic_columns(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    plain, _, _ = _run_research(tmp_path, capsys, "plain")
+    judged, summary, _ = _run_research(tmp_path, capsys, "judged", "--judge", judge=_FakeJudge())
+
+    def deterministic(body: dict[str, Any]) -> object:
+        return (body["overall"], body["by_kind"],
+                [{k: v for k, v in i.items() if k not in ("latency_s", "judge", "judge_cost_inr")}
+                 for i in body["items"]])
+
+    assert deterministic(judged) == deterministic(plain)
+
+    # r0: 1 of 2 claims; r1 (failed): 0 of 2, unjudged. f0: no claims, no column.
+    research = judged["judge"]["by_kind"]["research"]
+    assert (research["items"], research["judge_errors"], research["claims"],
+            research["supported_claims"], research["fully_supported"]) == (2, 0, 4, 1, 0)
+    assert research["claim_support_rate"] == 0.25
+    assert set(judged["judge"]["by_kind"]) == {"research"}
+    r0 = next(i for i in judged["items"] if i["item_id"] == "research:acme:r0")
+    assert [v["supported"] for v in r0["judge"]["verdicts"]] == [True, False]
+    f0 = next(i for i in judged["items"] if i["item_id"] == "fact_lookup:acme:f0")
+    assert "judge" not in f0
+    assert judged["stamp"]["judge"] == "fake-judge"
+
+    section = summary.split("## LLM judge")[1].split("\n## ")[0]
+    assert "| research | 2 | 0 | 4 | 1 | 25.0% | 0 | 0.0% |" in section
+
+
+def test_judge_spend_is_estimated_up_front_and_counted_in_the_totals(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    """Estimate: 3 items x 0.30 = 0.90 for /ask, plus 2 items with claims x
+    mean(0.02, 0.06) = 0.08 for the judge -- 0.98. Actual: three /ask jobs
+    at 0.25 (r1's failed job billed too) = 0.75, and one judge call, 0.04."""
+    body, summary, printed = _run_research(tmp_path, capsys, "judged", "--judge",
+                                           judge=_FakeJudge())
+    assert "expected spend: INR 0.98" in printed
+    assert "judge INR 0.08 = 2 item(s) x INR 0.0400" in printed
+    cost = body["cost"]
+    assert cost["cost_inr"] == pytest.approx(0.75)
+    assert cost["judge_cost_inr"] == pytest.approx(0.04)
+    assert cost["total_cost_inr"] == pytest.approx(0.79)
+    r0 = next(i for i in body["items"] if i["item_id"] == "research:acme:r0")
+    assert r0["judge_cost_inr"] == pytest.approx(0.04)
+    assert "judge**: INR 0.0400" in summary
+    assert "total**: INR 0.7900" in summary
+
+
+def test_the_judge_is_refused_in_retrieval_mode(capsys: pytest.CaptureFixture[str]) -> None:
+    main(["run", "--endpoint", "http://127.0.0.1:9", "--out-dir", "unused",
+          "--mode", "retrieval", "--judge"], judge=_FakeJudge())
+    assert "--judge scores answers" in capsys.readouterr().out

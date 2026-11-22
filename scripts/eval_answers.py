@@ -50,6 +50,25 @@ counted:
     uv run --directory backend python ../scripts/eval_answers.py run \\
         --mode retrieval --endpoint http://localhost:9514 --out-dir ../eval-runs
 
+LLM JUDGE. `run --judge` (answers mode only; off by default) also asks an
+Azure OpenAI judge whether each answered item's `required_claims` (the
+research kind) are supported, from the evidence that answer cited -- the
+results of the tool calls in its /ask trace -- and nothing else
+(`fdi.core.judge`). The judge's verdicts go in their own report columns
+(`judge` in report.json, "LLM judge" in report.md); every deterministic
+column is exactly what it would be without the flag. An item whose /ask
+failed is not sent to the judge: its claims are unsupported. The judge
+reuses the stack's own client and FDI_GPT_* settings and records each call
+in `llm_usage_event` under the `eval_judge` source, so this needs the
+stack's environment (database included) on the machine that runs it. Its
+spend is in the up-front estimate (items with claims x the average of the
+latest `RECENT_JOBS` judge calls; none yet means no estimate, so `--limit`)
+and in the run's total, never in cost per completed task -- that is what
+an Invitee's task costs, and the judge is no part of it:
+
+    uv run --directory backend python ../scripts/eval_answers.py run \\
+        --endpoint http://localhost:9514 --limit 5 --judge --out-dir ../eval-runs
+
 Exit code is always 0: this is a measurement tool, not a gate. The report it
 writes is the number.
 """
@@ -63,13 +82,18 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 import httpx
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fdi.core.agent import extract_citations
 from fdi.core.answer_scoring import (
     Citation,
     EndpointAnswer,
@@ -94,6 +118,17 @@ from fdi.core.eval_cost import (
     estimate_spend,
     summarise_cost,
 )
+from fdi.core.judge import (
+    ItemJudgement,
+    JudgeReport,
+    JudgeSummary,
+    judge_error,
+    judge_messages,
+    not_judged,
+    parse_judgement,
+    summarise_judgements,
+)
+from fdi.core.pricing import llm_cost_inr
 from fdi.core.report_diff import ReportDiff, diff_reports
 from fdi.core.retrieval_scoring import (
     RetrievalHit,
@@ -103,6 +138,11 @@ from fdi.core.retrieval_scoring import (
     scorable,
     score_retrieval,
 )
+from fdi.pipeline.agent import AgentClient
+from fdi.platform.agent import AzureOpenAIAgentClient
+from fdi.platform.config import Settings
+from fdi.platform.db.engine import make_engine, make_session_factory
+from fdi.platform.db.repository import RegistryRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 GT_DIR = ROOT / "docs" / "groundtruth"
@@ -162,11 +202,14 @@ def dump(body: object) -> str:
 class MeasuredAnswer:
     """An item's answer plus what producing it cost. `job_id` is None when no
     job was ever accepted; `cost.usage` is None when its usage could not be
-    read."""
+    read. `evidence` is what the answer cited from, as text: each tool
+    result in its trace (/ask's citations are drawn from those results), for
+    the LLM judge."""
 
     answer: EndpointAnswer
     cost: ItemCost
     job_id: str | None
+    evidence: tuple[str, ...] = ()
 
 
 class AskJobAdapter:
@@ -203,13 +246,14 @@ class AskJobAdapter:
         """`answer`, timed wall-clock, then priced from the usage its job
         billed."""
         started = self._clock()
-        answer, job_id = await self._attempt(item)
+        answer, job_id, evidence = await self._attempt(item)
         latency = self._clock() - started
         usage = await self.usage(job_id) if job_id is not None else None
         return MeasuredAnswer(
             answer=answer,
             cost=ItemCost(item_id=item.id, kind=item.kind, latency_s=latency, usage=usage),
             job_id=job_id,
+            evidence=evidence,
         )
 
     async def usage(self, job_id: str) -> ItemUsage | None:
@@ -241,12 +285,14 @@ class AskJobAdapter:
         return costs
 
     async def answer(self, item: BenchmarkItem) -> EndpointAnswer:
-        answer, _job_id = await self._attempt(item)
+        answer, _job_id, _evidence = await self._attempt(item)
         return answer
 
-    async def _attempt(self, item: BenchmarkItem) -> tuple[EndpointAnswer, str | None]:
-        """The answer, and the job that produced it (None when /ask accepted
-        no job). Never raises."""
+    async def _attempt(
+        self, item: BenchmarkItem
+    ) -> tuple[EndpointAnswer, str | None, tuple[str, ...]]:
+        """The answer, the job that produced it (None when /ask accepted no
+        job), and the evidence it cited. Never raises."""
 
         def failed(error: str) -> EndpointAnswer:
             return EndpointAnswer(item_id=item.id, answer=None, error=error)
@@ -257,48 +303,52 @@ class AskJobAdapter:
         try:
             submitted = await self._client.post("/ask", json={"question": item.question})
         except httpx.HTTPError as exc:
-            return http_failure(exc), None
+            return http_failure(exc), None, ()
         if submitted.status_code != 202:
-            return failed(f"POST /ask returned {submitted.status_code}: {submitted.text}"), None
+            return failed(f"POST /ask returned {submitted.status_code}: {submitted.text}"), None, ()
         job_id = str(submitted.json()["job_id"])
         try:
-            return await self._await_answer(item, job_id, failed), job_id
+            answer, evidence = await self._await_answer(item, job_id, failed)
         except httpx.HTTPError as exc:
-            return http_failure(exc), job_id
+            answer, evidence = http_failure(exc), ()
+        return answer, job_id, evidence
 
     async def _await_answer(
-        self, item: BenchmarkItem, job_id: str, failed: Callable[[str], EndpointAnswer]
-    ) -> EndpointAnswer:
+        self,
+        item: BenchmarkItem,
+        job_id: str,
+        failed: Callable[[str], EndpointAnswer],
+    ) -> tuple[EndpointAnswer, tuple[str, ...]]:
         deadline = self._clock() + self._timeout
         while True:
             polled = await self._client.get(f"/jobs/{job_id}")
             if polled.status_code != 200:
-                return failed(f"GET /jobs/{job_id} returned {polled.status_code}")
+                return failed(f"GET /jobs/{job_id} returned {polled.status_code}"), ()
             job = polled.json()
             if job["status"] == "failed":
-                return failed(f"job {job_id} failed: {job.get('error')}")
+                return failed(f"job {job_id} failed: {job.get('error')}"), ()
             if job["status"] == "succeeded":
                 break
             if self._clock() >= deadline:
                 return failed(
                     f"timed out after {self._timeout:g}s; job {job_id} still {job['status']}"
-                )
+                ), ()
             await self._sleep(self._poll_interval)
 
         result = await self._client.get(f"/jobs/{job_id}/result")
         if result.status_code != 200:
-            return failed(f"GET /jobs/{job_id}/result returned {result.status_code}")
+            return failed(f"GET /jobs/{job_id}/result returned {result.status_code}"), ()
         body = result.json()
         answer = body.get("answer")
         if not isinstance(answer, str):
-            return failed(f"job {job_id} result carries no answer text")
+            return failed(f"job {job_id} result carries no answer text"), ()
         raw = body.get("citations")
         return EndpointAnswer(
             item_id=item.id, answer=answer,
             citations=tuple(_citation(c) for c in raw if isinstance(c, Mapping))
             if isinstance(raw, list) else (),
             tool_trace=_tool_names(body.get("tool_trace")),
-        )
+        ), _tool_results(body.get("tool_trace"))
 
 
 def _tool_names(raw: object) -> tuple[str, ...]:
@@ -309,6 +359,26 @@ def _tool_names(raw: object) -> tuple[str, ...]:
     return tuple(
         e["tool"] for e in raw if isinstance(e, Mapping) and isinstance(e.get("tool"), str)
     )
+
+
+def _tool_results(raw: object) -> tuple[str, ...]:
+    """The CITED evidence of an `/ask` answer, as JSON text: each tool result
+    in its trace that yields at least one citation, by the same
+    `extract_citations` /ask builds its citations with. A result that cites
+    nothing -- an empty search, a failed call -- was retrieved, not cited,
+    and the judge must not credit a claim to it."""
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        json.dumps(e["result"], ensure_ascii=False, default=str) for e in raw
+        if isinstance(e, Mapping) and isinstance(e.get("tool"), str)
+        and extract_citations(str(e["tool"]), _arguments(e), e.get("result"))
+    )
+
+
+def _arguments(entry: Mapping[str, object]) -> Mapping[str, object]:
+    arguments = entry.get("arguments")
+    return arguments if isinstance(arguments, Mapping) else {}
 
 
 def _citation(raw: Mapping[str, object]) -> Citation:
@@ -382,6 +452,110 @@ def _retrieval_hit(raw: Mapping[str, object]) -> RetrievalHit:
 
 
 # --------------------------------------------------------------------------
+# The optional LLM judge.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class JudgedItem:
+    """One judge call's verdicts and what it billed (None when it billed
+    nothing readable, e.g. the call itself failed)."""
+
+    judgement: ItemJudgement
+    usage: ItemUsage | None
+
+
+class Judge(Protocol):
+    """Judges a research answer's required claims. `name` stamps the
+    report; `recent_costs` is the INR cost of the latest judge calls, for the
+    spend estimate."""
+
+    name: str
+
+    async def recent_costs(self) -> list[float]: ...
+
+    async def judge(
+        self, item: BenchmarkItem, answer: str, evidence: Sequence[str]
+    ) -> JudgedItem: ...
+
+
+class AzureJudge:
+    """The judge on the stack's own Azure OpenAI client and FDI_GPT_*
+    settings. Every call is recorded in `llm_usage_event` under `eval_judge`,
+    correlated by this run's id, and priced at the configured rates. A
+    failed call is a judge error, never an exception."""
+
+    SOURCE = "eval_judge"
+
+    def __init__(
+        self,
+        settings: Settings,
+        client: AgentClient,
+        run_id: str,
+        sessions: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
+        """`sessions` defaults to the stack's own database."""
+        self._settings = settings
+        self._client = client
+        self._run_id = run_id
+        self._sessions = sessions or make_session_factory(make_engine(settings.database_url))
+        self.name = f"azure-openai:{settings.gpt_deployment}"
+
+    @staticmethod
+    def from_environment(run_id: str) -> AzureJudge | str:
+        """The judge, or why it cannot be built here."""
+        try:
+            settings = Settings()
+        except ValidationError as exc:
+            return f"the stack's settings do not load here: {exc.error_count()} problem(s)"
+        client = AzureOpenAIAgentClient.from_settings(settings)
+        if client is None:
+            return "FDI_GPT_ENDPOINT / FDI_GPT_KEY are not set"
+        return AzureJudge(settings, client, run_id)
+
+    def _price(self, input_tokens: int, output_tokens: int) -> float:
+        s = self._settings
+        return llm_cost_inr(
+            input_tokens, output_tokens, input_usd_per_mtok=s.llm_input_cost_per_mtok_usd,
+            output_usd_per_mtok=s.llm_output_cost_per_mtok_usd, usd_to_inr=s.usd_to_inr_rate,
+        )
+
+    async def recent_costs(self) -> list[float]:
+        async with self._sessions() as session:
+            recent = await RegistryRepository(session).recent_llm_usage(
+                self.SOURCE, limit=RECENT_JOBS
+            )
+        return [self._price(i, o) for i, o in recent]
+
+    async def judge(
+        self, item: BenchmarkItem, answer: str, evidence: Sequence[str]
+    ) -> JudgedItem:
+        try:
+            response = await asyncio.to_thread(
+                self._client.complete, judge_messages(item, answer, evidence), []
+            )
+        except Exception as exc:  # noqa: BLE001 -- any judge failure is a judge error
+            return JudgedItem(
+                judge_error(item, f"judge call failed: {type(exc).__name__}: {exc}"), usage=None
+            )
+        usage = response.usage
+        priced = None
+        if usage is not None:
+            async with self._sessions() as session:
+                await RegistryRepository(session).record_llm_usage(
+                    str(uuid.uuid4()), doc_id=None, stage_run_id=None, source=self.SOURCE,
+                    correlation_id=self._run_id, model=usage.model,
+                    input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                    duration_ms=usage.duration_ms,
+                )
+                await session.commit()
+            priced = ItemUsage(input_tokens=usage.input_tokens,
+                               output_tokens=usage.output_tokens,
+                               cost_inr=self._price(usage.input_tokens, usage.output_tokens))
+        return JudgedItem(parse_judgement(item, response.content or ""), usage=priced)
+
+
+# --------------------------------------------------------------------------
 # run
 # --------------------------------------------------------------------------
 
@@ -416,20 +590,37 @@ async def run_eval(
     limit: int | None,
     stamp: Mapping[str, object],
     out_dir: Path,
+    judge: Judge | None = None,
 ) -> EvalReport:
     """Answer the first `limit` items (all when None) one at a time, score
-    them, and write `report.json` + `report.md` into `out_dir`."""
+    them, have `judge` (when given) judge those with required claims, and
+    write `report.json` + `report.md` into `out_dir`."""
     items = benchmark.items if limit is None else benchmark.items[:limit]
     measured: list[MeasuredAnswer] = []
+    judgements: list[ItemJudgement] = []
     for n, item in enumerate(items, start=1):
         m = await adapter.measure(item)
         print(f"[{n}/{len(items)}] {item.id}: {'error' if m.answer.error else 'answered'}")
+        if judge is not None and item.gold.required_claims:
+            m, judgement = await _judge_item(judge, item, m)
+            judgements.append(judgement)
         measured.append(m)
     report = score_run(benchmark, [m.answer for m in measured])
     completed = {i.item_id for i in report.items if i.completed}
     cost = summarise_cost([m.cost for m in measured], completed)
-    write_reports(out_dir, report, stamp, {m.answer.item_id: m for m in measured}, cost)
+    judged = None if judge is None else summarise_judgements(benchmark, judgements)
+    write_reports(out_dir, report, stamp, {m.answer.item_id: m for m in measured}, cost, judged)
     return report
+
+
+async def _judge_item(
+    judge: Judge, item: BenchmarkItem, m: MeasuredAnswer
+) -> tuple[MeasuredAnswer, ItemJudgement]:
+    """An answer that never came is not sent to the judge: nothing to pay for."""
+    if m.answer.error is not None or m.answer.answer is None:
+        return m, not_judged(item, m.answer.error or "no answer returned")
+    judged = await judge.judge(item, m.answer.answer, m.evidence)
+    return replace(m, cost=replace(m.cost, judge_usage=judged.usage)), judged.judgement
 
 
 def write_reports(
@@ -438,12 +629,13 @@ def write_reports(
     stamp: Mapping[str, object],
     measured: Mapping[str, MeasuredAnswer],
     cost: CostSummary,
+    judge: JudgeReport | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.json").write_text(dump(report_json(report, stamp, measured, cost)),
-                                         encoding="utf-8")
-    (out_dir / "report.md").write_text(render_markdown(report, stamp, measured, cost),
-                                       encoding="utf-8")
+    (out_dir / "report.json").write_text(
+        dump(report_json(report, stamp, measured, cost, judge)), encoding="utf-8")
+    (out_dir / "report.md").write_text(
+        render_markdown(report, stamp, measured, cost, judge), encoding="utf-8")
 
 
 def _item_cost_fields(m: MeasuredAnswer | None) -> dict[str, object]:
@@ -463,7 +655,11 @@ def report_json(
     stamp: Mapping[str, object],
     measured: Mapping[str, MeasuredAnswer],
     cost: CostSummary,
+    judge: JudgeReport | None = None,
 ) -> dict[str, object]:
+    """`judge` adds the judge columns -- a top-level `judge` summary and a
+    per-item `judge` -- and only them: no deterministic field changes."""
+
     def summary(s: KindSummary) -> dict[str, object]:
         return {
             **asdict(s), "accuracy": s.accuracy, "citation_validity": s.citation_validity,
@@ -480,19 +676,40 @@ def report_json(
         m = measured.get(item_id)
         return list(m.answer.tool_trace) if m else []
 
-    return {
+    judgements = {j.item_id: j for j in judge.items} if judge else {}
+
+    def judge_fields(item_id: str) -> dict[str, object]:
+        j = judgements.get(item_id)
+        if j is None:
+            return {}
+        m = measured.get(item_id)
+        usage = m.cost.judge_usage if m else None
+        return {"judge": asdict(j), "judge_cost_inr": usage.cost_inr if usage else None}
+
+    body: dict[str, object] = {
         "stamp": dict(stamp),
         "benchmark_size": report.benchmark_size,
         "overall": summary(report.overall),
         "by_kind": {kind: summary(s) for kind, s in report.by_kind.items()},
-        "cost": asdict(cost),
+        "cost": {**asdict(cost), "total_cost_inr": cost.total_cost_inr},
         "items": [
             {**asdict(i), "citation_validity": i.citation_validity,
              "answer": answer(i.item_id), "tools_called": tools_called(i.item_id),
-             **_item_cost_fields(measured.get(i.item_id))}
+             **_item_cost_fields(measured.get(i.item_id)), **judge_fields(i.item_id)}
             for i in report.items
         ],
     }
+    if judge is not None:
+        body["judge"] = {
+            "overall": _judge_summary_json(judge.overall),
+            "by_kind": {kind: _judge_summary_json(s) for kind, s in judge.by_kind.items()},
+        }
+    return body
+
+
+def _judge_summary_json(s: JudgeSummary) -> dict[str, object]:
+    return {**asdict(s), "claim_support_rate": s.claim_support_rate,
+            "full_support_rate": s.full_support_rate}
 
 
 def _seconds(value: float | None) -> str:
@@ -504,7 +721,10 @@ def _inr(value: float | None) -> str:
 
 
 def render_cost_markdown(
-    report: EvalReport, measured: Mapping[str, MeasuredAnswer], cost: CostSummary
+    report: EvalReport,
+    measured: Mapping[str, MeasuredAnswer],
+    cost: CostSummary,
+    judged: bool = False,
 ) -> list[str]:
     def latency_row(kind: str, s: LatencySummary) -> str:
         return f"| {kind} | {s.count} | {_seconds(s.p50_s)} | {_seconds(s.p95_s)} |"
@@ -516,6 +736,13 @@ def render_cost_markdown(
         f"- **completed**: {cost.completed} of {report.overall.run}",
         f"- **cost per completed task**: {_inr(cost.cost_per_completed_task_inr)}",
     ]
+    if judged:
+        lines += [
+            f"- **judge**: {_inr(cost.judge_cost_inr)} ({cost.judge_input_tokens} input + "
+            f"{cost.judge_output_tokens} output tokens; eval spend, not in cost per "
+            "completed task)",
+            f"- **total**: {_inr(cost.total_cost_inr)}",
+        ]
     if cost.items_without_usage:
         lines.append(f"- **items whose usage could not be read** (not in the cost): "
                      f"{cost.items_without_usage}")
@@ -579,12 +806,23 @@ def render_tool_selection_markdown(
 
 
 def spend_line(estimate: SpendEstimate) -> str:
-    if estimate.total_cost_inr is None or estimate.average_cost_inr is None:
-        return (f"{estimate.items} item(s) will call /ask, a billed endpoint; no recent /ask "
+    e = estimate
+    if e.average_cost_inr is None:
+        return (f"{e.items} item(s) will call /ask, a billed endpoint; no recent /ask "
                 "usage to estimate from (a first run).")
-    return (f"expected spend: INR {estimate.total_cost_inr:.2f} = {estimate.items} item(s) x "
-            f"INR {estimate.average_cost_inr:.4f}, the average of {estimate.sample_size} "
-            "recent /ask job(s).")
+    ask_total = e.items * e.average_cost_inr
+    ask = (f"{e.items} item(s) x INR {e.average_cost_inr:.4f}, the average of "
+           f"{e.sample_size} recent /ask job(s)")
+    if not e.judge_items:
+        return f"expected spend: INR {ask_total:.2f} = {ask}."
+    if e.total_cost_inr is None or e.judge_average_cost_inr is None:
+        return (f"/ask: INR {ask_total:.2f} = {ask}; {e.judge_items} item(s) will also call "
+                "the LLM judge, with no recent judge calls to estimate it from (a first "
+                "judged run).")
+    return (f"expected spend: INR {e.total_cost_inr:.2f} -- /ask INR {ask_total:.2f} = "
+            f"{ask}; judge INR {e.judge_items * e.judge_average_cost_inr:.2f} = "
+            f"{e.judge_items} item(s) x INR {e.judge_average_cost_inr:.4f}, the average of "
+            f"{e.judge_sample_size} recent judge call(s).")
 
 
 def render_markdown(
@@ -592,6 +830,7 @@ def render_markdown(
     stamp: Mapping[str, object],
     measured: Mapping[str, MeasuredAnswer],
     cost: CostSummary,
+    judge: JudgeReport | None = None,
 ) -> str:
     lines = ["# Answer-quality eval", ""]
     lines += [f"- **{key}**: `{value}`" for key, value in stamp.items()]
@@ -640,8 +879,41 @@ def render_markdown(
         lines += [f"| `{i.item_id}` | {i.citations} | {i.valid_citations} |"
                   for i in unsupported]
     lines += render_tool_selection_markdown(report, measured)
-    lines += render_cost_markdown(report, measured, cost)
+    if judge is not None:
+        lines += render_judge_markdown(judge)
+    lines += render_cost_markdown(report, measured, cost, judged=judge is not None)
     return "\n".join(lines) + "\n"
+
+
+def render_judge_markdown(judge: JudgeReport) -> list[str]:
+    def pct(value: float | None) -> str:
+        return "-" if value is None else f"{value:.1%}"
+
+    lines = [
+        "", "## LLM judge", "",
+        "An LLM's opinion, not a score: whether each required claim is made by the answer "
+        "AND supported by the evidence it cited, judged from that evidence alone. Nothing "
+        "above reads it. A judge error is the judge's failure, left out of the rates; an "
+        "item that never answered supports no claim.",
+        "", "| kind | items | judge errors | claims | supported | claim support "
+        "| fully supported | full support |", "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    rows = [*judge.by_kind.items(), ("**overall**", judge.overall)]
+    lines += [
+        f"| {kind} | {s.items} | {s.judge_errors} | {s.claims} | {s.supported_claims} "
+        f"| {pct(s.claim_support_rate)} | {s.fully_supported} | {pct(s.full_support_rate)} |"
+        for kind, s in rows
+    ]
+    shortfalls: list[tuple[str, str, str]] = []
+    for j in judge.items:
+        if j.error is not None:
+            shortfalls.append((j.item_id, "(not judged)", j.error))
+        shortfalls += [(j.item_id, v.claim, v.reason) for v in j.verdicts if not v.supported]
+    if shortfalls:
+        lines += ["", "| item | unsupported claim | why |", "|---|---|---|"]
+        lines += [f"| `{item_id}` | {claim.replace('|', '/')} | {why.replace('|', '/')} |"
+                  for item_id, claim, why in shortfalls]
+    return lines
 
 
 async def run_retrieval_eval(
@@ -803,6 +1075,7 @@ async def _run(
     args: argparse.Namespace,
     benchmark: Benchmark,
     transport: httpx.AsyncBaseTransport | None = None,
+    judge: Judge | None = None,
 ) -> None:
     email = args.email or os.environ.get("FDI_EVAL_EMAIL")
     password = args.password or os.environ.get("FDI_EVAL_PASSWORD")
@@ -820,6 +1093,17 @@ async def _run(
     if args.mode == "retrieval":
         await _run_retrieval(args, benchmark, stamp, email, password, transport)
         return
+    # Off unless asked for, whatever a caller injected.
+    if not args.judge:
+        judge = None
+    elif judge is None:
+        built = AzureJudge.from_environment(run_id=str(uuid.uuid4()))
+        if isinstance(built, str):
+            print(f"cannot start the LLM judge: {built}")
+            return
+        judge = built
+    if judge is not None:
+        stamp["judge"] = judge.name
     async with httpx.AsyncClient(
         base_url=args.endpoint, timeout=60.0, transport=transport
     ) as client:
@@ -830,17 +1114,20 @@ async def _run(
         except httpx.HTTPError as exc:
             print(f"could not reach the stack as the eval Invitee: {exc}")
             return
-        items = len(benchmark.items) if args.limit is None else min(args.limit,
-                                                                     len(benchmark.items))
+        to_run = benchmark.items if args.limit is None else benchmark.items[: args.limit]
+        judged_items = sum(1 for i in to_run if i.gold.required_claims) if judge else 0
+        recent_judge = await judge.recent_costs() if judge and judged_items else []
         # Printed before the first billed call, which run_eval makes.
-        estimate = estimate_spend(items, recent)
+        estimate = estimate_spend(len(to_run), recent, judged_items=judged_items,
+                                  recent_judge_costs=recent_judge)
         print(spend_line(estimate))
         if estimate.total_cost_inr is None and args.limit is None:
             print("--yes needs an expected spend, and there is none yet: run a small "
                   "--limit first to seed one.")
             return
         report = await run_eval(
-            benchmark, adapter, limit=args.limit, stamp=stamp, out_dir=args.out_dir
+            benchmark, adapter, limit=args.limit, stamp=stamp, out_dir=args.out_dir,
+            judge=judge,
         )
     o = report.overall
     print(f"{o.correct}/{o.run} correct ({o.accuracy:.1%}), {o.failed} failed; "
@@ -875,9 +1162,13 @@ async def _run_retrieval(
 
 
 def main(
-    argv: Sequence[str] | None = None, *, transport: httpx.AsyncBaseTransport | None = None
+    argv: Sequence[str] | None = None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    judge: Judge | None = None,
 ) -> int:
-    """`transport` replaces the network, for tests; None is the real one."""
+    """`transport` replaces the network and `judge` the Azure judge `--judge`
+    turns on, for tests; None is the real one."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -898,6 +1189,9 @@ def main(
     run.add_argument("--mode", choices=("answers", "retrieval"), default="answers",
                      help="answers: /ask (billed); retrieval: POST /retrieve only, "
                           "Recall@K and MRR, no model call")
+    run.add_argument("--judge", action="store_true",
+                     help="also have an LLM judge score required claims (billed; separate "
+                          "report columns)")
 
     diff = sub.add_parser("diff", help="compare two report.json files item by item")
     diff.add_argument("old", type=Path, help="the earlier report.json")
@@ -916,6 +1210,9 @@ def main(
         _diff(args)
         return 0
 
+    if args.judge and args.mode != "answers":
+        print("--judge scores answers; retrieval mode has none to judge")
+        return 0
     try:
         benchmark = load_benchmark(args.benchmark)
     except BenchmarkError as exc:
@@ -929,7 +1226,7 @@ def main(
     if args.limit is not None and args.limit < 1:
         print("--limit must be at least 1")
         return 0
-    asyncio.run(_run(args, benchmark, transport))
+    asyncio.run(_run(args, benchmark, transport, judge))
     return 0
 
 
