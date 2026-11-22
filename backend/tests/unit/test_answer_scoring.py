@@ -315,3 +315,85 @@ def test_a_failed_item_is_not_completed_whatever_it_cites() -> None:
         item_id="q1", answer=None, error="HTTP 500", citations=(_GOLD_PAGE,),
     )])
     assert not report.items[0].completed
+
+
+# --------------------------------------------------------------------------
+# Tool selection: only for items that name expected tools.
+# --------------------------------------------------------------------------
+
+
+def _tools_bench(*items: tuple[str, str, list[str] | None]) -> Benchmark:
+    def item(item_id: str, kind: str, tools: list[str] | None) -> dict[str, object]:
+        gold: dict[str, object] = {
+            "answerable": True, "values": [{"value": 10.0, "unit": "INR crore"}],
+        }
+        if tools is not None:
+            gold["expected_tools"] = tools
+        return {"id": item_id, "kind": kind, "question": "q?", "gold": gold}
+
+    return parse_benchmark({"version": "v-test", "items": [item(*i) for i in items]})
+
+
+def test_tool_selection_is_the_share_of_expected_tools_called_whatever_the_order() -> None:
+    """Order, repeats and extra tools do not count: the plan called `search`
+    (twice) and an unasked-for `document_structure`, but never `get_tables`."""
+    bench = _tools_bench(("q1", "research", ["get_tables", "search"]))
+    report = score_run(bench, [EndpointAnswer(
+        item_id="q1", answer="10", tool_trace=("search", "document_structure", "search"),
+    )])
+    item = report.items[0]
+    assert item.tool_selection == 0.5
+    assert item.missing_tools == ("get_tables",)
+
+
+def test_calling_every_expected_tool_scores_one() -> None:
+    bench = _tools_bench(("q1", "research", ["search", "get_tables"]))
+    report = score_run(bench, [EndpointAnswer(
+        item_id="q1", answer="10", tool_trace=("get_tables", "search"),
+    )])
+    assert (report.items[0].tool_selection, report.items[0].missing_tools) == (1.0, ())
+
+
+def test_an_item_without_expected_tools_has_no_tool_selection_and_is_not_counted() -> None:
+    bench = _tools_bench(
+        ("f0", "fact_lookup", ["search"]), ("f1", "fact_lookup", None),
+        ("c0", "cross_company", None),
+    )
+    report = score_run(bench, [
+        EndpointAnswer(item_id="f0", answer="10", tool_trace=("search",)),
+        EndpointAnswer(item_id="f1", answer="10"),
+        EndpointAnswer(item_id="c0", answer="10"),
+    ])
+    assert [i.tool_selection for i in report.items] == [1.0, None, None]
+    # f1 called nothing, but named no tools: it neither helps nor hurts.
+    assert report.by_kind["fact_lookup"].tool_selection_items == 1
+    assert report.by_kind["fact_lookup"].tool_selection_accuracy == 1.0
+    assert report.by_kind["cross_company"].tool_selection_items == 0
+    assert report.by_kind["cross_company"].tool_selection_accuracy is None
+
+
+def test_a_failed_item_that_names_tools_scores_zero_tool_selection() -> None:
+    bench = _tools_bench(("q1", "research", ["search"]))
+    report = score_run(bench, [EndpointAnswer(
+        item_id="q1", answer=None, error="timed out", tool_trace=("search",),
+    )])
+    assert report.items[0].tool_selection == 0.0
+    assert report.items[0].missing_tools == ("search",)
+
+
+def test_tool_selection_accuracy_is_the_mean_over_items_that_name_tools() -> None:
+    """r0: 1 of 2 = 0.5; r1: 1 of 1 = 1.0; f0: failed = 0.0; f1: none named."""
+    bench = _tools_bench(
+        ("r0", "research", ["search", "get_tables"]), ("r1", "research", ["concept_lookup"]),
+        ("f0", "fact_lookup", ["search"]), ("f1", "fact_lookup", None),
+    )
+    report = score_run(bench, [
+        EndpointAnswer(item_id="r0", answer="10", tool_trace=("search",)),
+        EndpointAnswer(item_id="r1", answer="10", tool_trace=("concept_lookup",)),
+        EndpointAnswer(item_id="f0", answer=None, error="HTTP 500"),
+        EndpointAnswer(item_id="f1", answer="10"),
+    ])
+    assert report.by_kind["research"].tool_selection_accuracy == 0.75
+    assert report.by_kind["fact_lookup"].tool_selection_accuracy == 0.0
+    assert report.overall.tool_selection_items == 3
+    assert report.overall.tool_selection_accuracy == 0.5

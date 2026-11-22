@@ -12,13 +12,14 @@ import pytest
 
 from fdi.core.answer_scoring import Citation, EndpointAnswer, EvalReport, score_run
 from fdi.core.benchmark import Benchmark, BenchmarkItem, Evidence, Gold, GoldValue
-from fdi.core.eval_cost import summarise_cost
+from fdi.core.eval_cost import ItemCost, summarise_cost
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from eval_answers import (  # noqa: E402
     BENCHMARK_DIR,
     AskJobAdapter,
+    MeasuredAnswer,
     dump,
     generate_fact_lookup,
     load_benchmark,
@@ -170,6 +171,33 @@ async def test_the_ask_adapter_skips_citation_values_of_the_wrong_type() -> None
     assert answer.citations == (Citation(),)
 
 
+async def test_the_ask_adapter_keeps_the_tool_names_of_the_trace_in_call_order() -> None:
+    """The wire shape is AskToolTraceEntryView; only the tool name is the
+    observation. An entry with no usable name is dropped, never guessed."""
+
+    def entry(round_num: int, tool: object) -> dict[str, object]:
+        return {"round": round_num, "tool": tool, "arguments": {"query": "revenue"},
+                "result": {"hits": []}, "error": None}
+
+    result = {
+        "answer": "Revenue was ₹2,71,423 crore.", "citations": [],
+        "tool_trace": [entry(0, "search"), entry(0, "get_tables"), entry(1, "search"),
+                       entry(1, None), "not an entry"],
+    }
+    async with httpx.AsyncClient(transport=_ask_stack(result), base_url="http://t") as http:
+        answer = await AskJobAdapter(http, poll_interval=0.0).answer(_ITEM)
+
+    assert answer.tool_trace == ("search", "get_tables", "search")
+
+
+async def test_an_ask_result_with_no_tool_trace_key_called_no_tools() -> None:
+    result = {"answer": "Revenue was ₹2,71,423 crore."}
+    async with httpx.AsyncClient(transport=_ask_stack(result), base_url="http://t") as http:
+        answer = await AskJobAdapter(http, poll_interval=0.0).answer(_ITEM)
+
+    assert answer.tool_trace == ()
+
+
 _NO_COST = summarise_cost([], ())
 
 
@@ -204,6 +232,98 @@ def test_the_markdown_summary_has_a_completion_table_and_lists_unsupported_answe
     unsupported = summary.split("## Correct but not completed")[1].split("\n## ")[0]
     assert "`q2`" in unsupported
     assert "`q1`" not in unsupported
+
+
+def _tool_report() -> tuple[EvalReport, dict[str, MeasuredAnswer]]:
+    """r1 names two tools and called one of them; q1 names none."""
+    bench = Benchmark(version="v-test", items=(
+        _ITEM,
+        replace(_ITEM, id="r1", kind="research",
+                gold=replace(_ITEM.gold, expected_tools=("search", "get_tables"))),
+    ))
+    answers = [
+        EndpointAnswer(item_id="q1", answer="₹2,71,423 crore", tool_trace=("search",)),
+        EndpointAnswer(item_id="r1", answer="₹2,71,423 crore",
+                       tool_trace=("search", "document_structure")),
+    ]
+    measured = {
+        a.item_id: MeasuredAnswer(answer=a, cost=ItemCost(a.item_id, "k", 1.0, None), job_id=None)
+        for a in answers
+    }
+    return score_run(bench, answers), measured
+
+
+def test_the_json_report_carries_tool_selection_only_where_tools_are_expected() -> None:
+    report, measured = _tool_report()
+    body = json.loads(dump(report_json(report, {}, measured, _NO_COST)))
+    q1, r1 = body["items"]
+    assert (q1["tool_selection"], q1["tools_called"]) == (None, ["search"])
+    assert (r1["tool_selection"], r1["missing_tools"]) == (0.5, ["get_tables"])
+    assert r1["tools_called"] == ["search", "document_structure"]
+    assert body["by_kind"]["fact_lookup"]["tool_selection_accuracy"] is None
+    assert body["by_kind"]["research"]["tool_selection_accuracy"] == 0.5
+    assert body["overall"]["tool_selection_items"] == 1
+    assert body["overall"]["tool_selection_accuracy"] == 0.5
+
+
+def test_the_markdown_summary_has_a_tool_selection_table_with_absent_kinds_dashed() -> None:
+    report, measured = _tool_report()
+    summary = render_markdown(report, {}, measured, _NO_COST)
+    section = summary.split("## Tool selection")[1].split("\n## ")[0]
+    assert "| fact_lookup | 0 | - |" in section
+    assert "| research | 1 | 50.0% |" in section
+    assert "| **overall** | 1 | 50.0% |" in section
+    assert "| `r1` | 50.0% | get_tables | search, document_structure |" in section
+
+
+def test_the_markdown_summary_has_no_tool_selection_section_when_no_item_names_tools() -> None:
+    assert "## Tool selection" not in render_markdown(_two_item_report(), {}, {}, _NO_COST)
+
+
+def _written_report(path: Path, report: EvalReport, version: str = "v-test") -> str:
+    stamp = {"benchmark_version": version, "git_commit": "abc", "mode": "ask"}
+    path.write_text(dump(report_json(report, stamp, {}, _NO_COST)), encoding="utf-8")
+    return str(path)
+
+
+def test_diff_prints_what_changed_between_two_written_reports(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    """OLD: q1 completed, q2 correct but cited off its page. NEW: q2 gains
+    its gold citation (fixed) and q1 loses its number (regressed)."""
+    bench = Benchmark(version="v-test", items=(_ITEM, replace(_ITEM, id="q2")))
+    gold = Citation(doc_key="tcs-2025-26", page=362)
+    new = score_run(bench, [
+        EndpointAnswer(item_id="q1", answer="₹2,55,324 crore", citations=(gold,)),
+        EndpointAnswer(item_id="q2", answer="₹2,71,423 crore", citations=(gold,)),
+    ])
+    out = tmp_path / "diff.md"
+    code = main(["diff", _written_report(tmp_path / "old.json", _two_item_report()),
+                 _written_report(tmp_path / "new.json", new), "--out", str(out)])
+    assert code == 0
+
+    printed = capsys.readouterr().out
+    assert "| fact_lookup | 1 | 1 | 0 | 0 | 0 | +0 |" in printed
+    assert "| `q2` | fact_lookup | correct | correct |" in printed.split("## Fixed")[1]
+    assert "| `q1` | fact_lookup | correct | wrong |" in printed.split("## Regressed")[1]
+    assert out.read_text(encoding="utf-8") in printed
+
+
+def test_diff_refuses_reports_of_different_benchmark_versions_unless_forced(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    old = _written_report(tmp_path / "old.json", _two_item_report(), version="v0")
+    new = _written_report(tmp_path / "new.json", _two_item_report(), version="v1")
+
+    assert main(["diff", old, new]) == 0
+    printed = capsys.readouterr().out
+    assert "cannot compare" in printed
+    assert "OLD 'v0', NEW 'v1'" in printed
+
+    main(["diff", old, new, "--force"])
+    printed = capsys.readouterr().out
+    assert "| **overall** | 0 | 0 | 2 | 0 | 0 | +0 |" in printed
+    assert "forced past" in printed
 
 
 async def test_an_ask_result_with_no_citations_key_has_no_citations() -> None:
