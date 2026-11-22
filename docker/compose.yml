@@ -94,6 +94,11 @@ x-backend-build: &backend-build
 services:
   postgres:
     image: postgres:18.4
+    # A real init as PID 1, not the postmaster. A healthcheck that outlives its
+    # timeout leaves pg_isready orphaned; reparented to a PID-1 postmaster, its
+    # nonzero exit reads as a crashed backend and every connection is reset
+    # mid-write ("untracked child process ... exited with exit code 2").
+    init: true
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
