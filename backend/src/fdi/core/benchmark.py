@@ -56,9 +56,16 @@ class Evidence:
 
 @dataclass(frozen=True)
 class Gold:
+    """`expected_tools` names the answering endpoint's tools a good plan
+    calls for this item; None (not empty) when the item does not say, so
+    tool selection is not scored for it. The names are not checked against
+    `/ask`'s tool registry: that lives outside `fdi.core`, and a later
+    endpoint (S7) may name its tools differently."""
+
     answerable: bool
     values: tuple[GoldValue, ...] = ()
     evidence: tuple[Evidence, ...] = ()
+    expected_tools: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,7 +173,28 @@ def _parse_gold(raw: object) -> Gold:
         answerable=answerable,
         values=tuple(_parse_value(i, v) for i, v in enumerate(raw_values)),
         evidence=tuple(_parse_evidence(i, e) for i, e in enumerate(raw_evidence)),
+        expected_tools=_parse_expected_tools(raw.get("expected_tools")),
     )
+
+
+def _parse_expected_tools(raw: object) -> tuple[str, ...] | None:
+    """Absent is None. Present, it is a set of tool names written as a list:
+    an empty list would score every plan as perfect, and a repeated name
+    suggests a typo for a different tool."""
+    if raw is None:
+        return None
+    where = "'gold.expected_tools'"
+    if not isinstance(raw, list) or not raw:
+        raise BenchmarkError(f"{where} must be a non-empty list of tool names")
+    names: list[str] = []
+    for index, name in enumerate(raw):
+        if not _text(name):
+            raise BenchmarkError(f"{where} #{index} must be a non-empty string")
+        assert isinstance(name, str)
+        if name in names:
+            raise BenchmarkError(f"{where} names {name!r} twice")
+        names.append(name)
+    return tuple(names)
 
 
 def _parse_value(index: int, raw: object) -> GoldValue:

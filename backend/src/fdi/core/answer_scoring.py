@@ -46,6 +46,25 @@ number that cites the wrong page, or nothing, is a failed task. Citation
 validity, evidence support and completion are reported beside accuracy,
 never blended into it.
 
+TOOL SELECTION
+--------------
+Scored only for an item whose gold names `expected_tools`; elsewhere it is
+ABSENT (None), never 0, and the item is outside every tool-selection
+denominator. An item's tool selection is the share of its expected tools
+the endpoint called at least once -- set recall:
+
+    |expected ∩ called| / |expected|
+
+Order and repeats are ignored: the benchmark names which tools a good plan
+needs, not a script, and two `search`es are not a better plan than one.
+Extra tools are not penalised either: looking at a Report's structure
+before reading its tables is sound exploration, and an exact-set rule would
+score that as a planning failure. Over-calling shows up where it costs --
+latency and tokens -- not here. A failed item that names tools scores 0.0,
+whatever partial trace it carries: an endpoint that never answered did not
+carry its plan out. A kind's (and the run's) tool-selection accuracy is the
+mean over its items that name tools; None when none do.
+
 Pure (`fdi.core` law): no I/O, no LLM, deterministic.
 """
 
@@ -53,7 +72,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from fdi.core.benchmark import UNIT_SCALES, Benchmark, BenchmarkItem, GoldValue
@@ -79,12 +98,15 @@ class Citation:
 class EndpointAnswer:
     """What the answering endpoint returned for one item, already normalised
     by its adapter so the scorer never sees a wire format. `error` is set
-    when the endpoint failed or timed out; `answer` is then usually None."""
+    when the endpoint failed or timed out; `answer` is then usually None.
+    `tool_trace` is the names of the tools the endpoint called, in call
+    order, repeats kept."""
 
     item_id: str
     answer: str | None
     error: str | None = None
     citations: tuple[Citation, ...] = ()
+    tool_trace: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,7 +118,11 @@ class ItemScore:
     evidence locations; "cited something" is not "cited the source". The
     item is `supported` when at least one citation is valid, and `completed`
     -- the task outcome (§16.2) -- when it is correct AND supported. A
-    correct number nobody can trace to its source is a failed task."""
+    correct number nobody can trace to its source is a failed task.
+
+    `tool_selection` is the share of the item's expected tools that were
+    called, `missing_tools` the ones that were not; None and () when the
+    item names no expected tools."""
 
     item_id: str
     kind: str
@@ -106,6 +132,8 @@ class ItemScore:
     valid_citations: int
     supported: bool
     completed: bool
+    tool_selection: float | None = None
+    missing_tools: tuple[str, ...] = ()
 
     @property
     def citation_validity(self) -> float:
@@ -126,6 +154,9 @@ class KindSummary:
     valid_citations: int
     supported: int
     completed: int
+    # Over items that name expected tools only; see TOOL SELECTION.
+    tool_selection_items: int = 0
+    tool_selection_total: float = 0.0
 
     @property
     def accuracy(self) -> float:
@@ -146,6 +177,14 @@ class KindSummary:
     def completion_rate(self) -> float:
         """Completed tasks (correct AND supported) over items run."""
         return self.completed / self.run if self.run else 0.0
+
+    @property
+    def tool_selection_accuracy(self) -> float | None:
+        """Mean tool selection over items that name expected tools; None --
+        not 0.0 -- when none do."""
+        if not self.tool_selection_items:
+            return None
+        return self.tool_selection_total / self.tool_selection_items
 
 
 @dataclass(frozen=True)
@@ -269,7 +308,8 @@ def score_run(benchmark: Benchmark, answers: Sequence[EndpointAnswer]) -> EvalRe
     Answers for ids the benchmark does not hold are ignored."""
     by_id = {a.item_id: a for a in answers}
     scores = tuple(
-        _score_item(item, by_id[item.id]) for item in benchmark.items if item.id in by_id
+        _with_tool_selection(_score_item(item, by_id[item.id]), item, by_id[item.id])
+        for item in benchmark.items if item.id in by_id
     )
     kinds = sorted({s.kind for s in scores})
     return EvalReport(
@@ -281,8 +321,22 @@ def score_run(benchmark: Benchmark, answers: Sequence[EndpointAnswer]) -> EvalRe
     )
 
 
+def _with_tool_selection(
+    score: ItemScore, item: BenchmarkItem, answer: EndpointAnswer
+) -> ItemScore:
+    expected = item.gold.expected_tools
+    if expected is None:
+        return score
+    called = set() if score.status == "failed" else set(answer.tool_trace)
+    missing = tuple(t for t in expected if t not in called)
+    return replace(
+        score, tool_selection=1.0 - len(missing) / len(expected), missing_tools=missing
+    )
+
+
 def _summarise(scores: Sequence[ItemScore]) -> KindSummary:
     statuses = [s.status for s in scores]
+    tool_scores = [s.tool_selection for s in scores if s.tool_selection is not None]
     return KindSummary(
         run=len(statuses), correct=statuses.count("correct"),
         wrong=statuses.count("wrong"), failed=statuses.count("failed"),
@@ -290,6 +344,8 @@ def _summarise(scores: Sequence[ItemScore]) -> KindSummary:
         valid_citations=sum(s.valid_citations for s in scores),
         supported=sum(s.supported for s in scores),
         completed=sum(s.completed for s in scores),
+        tool_selection_items=len(tool_scores),
+        tool_selection_total=sum(tool_scores),
     )
 
 

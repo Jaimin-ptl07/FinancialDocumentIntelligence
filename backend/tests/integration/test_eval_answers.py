@@ -213,6 +213,9 @@ async def test_run_eval_scores_ask_answers_end_to_end(
     assert body["items"][1]["reason"] == "100 INR crore not stated"
     assert body["items"][0]["completed"] is True
     assert body["items"][2]["completed"] is False
+    # The real /ask tool trace, normalised to tool names: q0 searched once.
+    assert body["items"][0]["tools_called"] == ["search"]
+    assert body["items"][1]["tools_called"] == []
     assert body["by_kind"]["fact_lookup"]["completion_rate"] == 0.25
     # Usage was read back through the real GET /jobs/{id}/usage: the
     # fake model reports none, so each item is priced, at zero.

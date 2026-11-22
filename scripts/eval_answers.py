@@ -1,6 +1,6 @@
 """Measure answer quality: run the benchmark against an answering endpoint.
 
-The retrieval/agent counterpart of `score_pipeline.py`. Two commands:
+The retrieval/agent counterpart of `score_pipeline.py`. Three commands:
 
     # (Re)generate the fact_lookup items from docs/groundtruth/ -- never typed.
     uv run --directory backend python ../scripts/eval_answers.py generate
@@ -9,6 +9,12 @@ The retrieval/agent counterpart of `score_pipeline.py`. Two commands:
     FDI_EVAL_EMAIL=eval@... FDI_EVAL_PASSWORD=... \\
     uv run --directory backend python ../scripts/eval_answers.py run \\
         --endpoint http://localhost:9514 --limit 5 --out-dir ../eval-runs
+
+    # What changed between two runs, item by item (fixed / regressed /
+    # unchanged by task completion), per kind. Refuses reports of different
+    # benchmark versions or modes unless --force.
+    uv run --directory backend python ../scripts/eval_answers.py diff \\
+        OLD/report.json NEW/report.json [--force] [--out diff.md]
 
 The eval Invitee is an ordinary account created with the admin CLI; using a
 dedicated one keeps eval usage separable from real Invitees' and subject to
@@ -73,6 +79,7 @@ from fdi.core.eval_cost import (
     estimate_spend,
     summarise_cost,
 )
+from fdi.core.report_diff import ReportDiff, ReportDiffError, diff_reports
 
 ROOT = Path(__file__).resolve().parents[1]
 GT_DIR = ROOT / "docs" / "groundtruth"
@@ -265,7 +272,18 @@ class AskJobAdapter:
             item_id=item.id, answer=answer,
             citations=tuple(_citation(c) for c in raw if isinstance(c, Mapping))
             if isinstance(raw, list) else (),
+            tool_trace=_tool_names(body.get("tool_trace")),
         )
+
+
+def _tool_names(raw: object) -> tuple[str, ...]:
+    """The tools an `/ask` tool trace (AskToolTraceEntryView entries) called,
+    in call order, repeats kept. An entry with no string `tool` is dropped."""
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        e["tool"] for e in raw if isinstance(e, Mapping) and isinstance(e.get("tool"), str)
+    )
 
 
 def _citation(raw: Mapping[str, object]) -> Citation:
@@ -375,11 +393,16 @@ def report_json(
             **asdict(s), "accuracy": s.accuracy, "citation_validity": s.citation_validity,
             "evidence_support_rate": s.evidence_support_rate,
             "completion_rate": s.completion_rate,
+            "tool_selection_accuracy": s.tool_selection_accuracy,
         }
 
     def answer(item_id: str) -> str | None:
         m = measured.get(item_id)
         return m.answer.answer if m else None
+
+    def tools_called(item_id: str) -> list[str]:
+        m = measured.get(item_id)
+        return list(m.answer.tool_trace) if m else []
 
     return {
         "stamp": dict(stamp),
@@ -389,7 +412,7 @@ def report_json(
         "cost": asdict(cost),
         "items": [
             {**asdict(i), "citation_validity": i.citation_validity,
-             "answer": answer(i.item_id),
+             "answer": answer(i.item_id), "tools_called": tools_called(i.item_id),
              **_item_cost_fields(measured.get(i.item_id))}
             for i in report.items
         ],
@@ -436,6 +459,37 @@ def render_cost_markdown(
             f"| {usage.output_tokens if usage else '-'} "
             f"| {_inr(usage.cost_inr if usage else None)} |"
         )
+    return lines
+
+
+def render_tool_selection_markdown(
+    report: EvalReport, measured: Mapping[str, MeasuredAnswer]
+) -> list[str]:
+    """Nothing when no item run names expected tools."""
+    if not report.overall.tool_selection_items:
+        return []
+
+    def pct(value: float | None) -> str:
+        return "-" if value is None else f"{value:.1%}"
+
+    lines = [
+        "", "## Tool selection", "",
+        "Share of an item's expected tools that /ask called (order, repeats and extra "
+        "tools ignored), averaged over the items that name expected tools; `-` where "
+        "none do.",
+        "", "| kind | items | tool selection |", "|---|---:|---:|",
+    ]
+    rows = [*report.by_kind.items(), ("**overall**", report.overall)]
+    lines += [f"| {kind} | {s.tool_selection_items} | {pct(s.tool_selection_accuracy)} |"
+              for kind, s in rows]
+    lines += ["", "| item | tool selection | missing | called |", "|---|---:|---|---|"]
+    for i in report.items:
+        if i.tool_selection is None:
+            continue
+        m = measured.get(i.item_id)
+        called = ", ".join(m.answer.tool_trace) if m and m.answer.tool_trace else "-"
+        lines.append(f"| `{i.item_id}` | {pct(i.tool_selection)} "
+                     f"| {', '.join(i.missing_tools) or '-'} | {called} |")
     return lines
 
 
@@ -498,8 +552,67 @@ def render_markdown(
                   "| item | citations | valid |", "|---|---:|---:|"]
         lines += [f"| `{i.item_id}` | {i.citations} | {i.valid_citations} |"
                   for i in unsupported]
+    lines += render_tool_selection_markdown(report, measured)
     lines += render_cost_markdown(report, measured, cost)
     return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------
+# diff
+# --------------------------------------------------------------------------
+
+
+def render_diff_markdown(diff: ReportDiff, old_name: str, new_name: str) -> str:
+    def side(name: str, version: str | None, mode: str | None) -> str:
+        return f"`{name}` (benchmark `{version}`, mode `{mode}`)"
+
+    lines = [
+        "# Answer-quality report diff", "",
+        f"- **old**: {side(old_name, diff.old_version, diff.old_mode)}",
+        f"- **new**: {side(new_name, diff.new_version, diff.new_mode)}",
+    ]
+    lines += [f"- **forced past**: {m}" for m in diff.mismatches]
+    lines += [
+        "",
+        "Fixed / regressed = task completion (correct AND a valid citation) gained / lost; "
+        "an item whose completion did not change is unchanged, whatever its status did.",
+        "", "| kind | fixed | regressed | unchanged | only old | only new | net |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    rows = [*diff.by_kind.items(), ("**overall**", diff.overall)]
+    lines += [
+        f"| {kind} | {s.fixed} | {s.regressed} | {s.unchanged} | {s.only_old} "
+        f"| {s.only_new} | {s.net:+d} |"
+        for kind, s in rows
+    ]
+    for change, title in (("fixed", "Fixed"), ("regressed", "Regressed"),
+                          ("only_old", "Only in old"), ("only_new", "Only in new")):
+        changed = [c for c in diff.items if c.change == change]
+        if not changed:
+            continue
+        lines += ["", f"## {title}", "",
+                  "| item | kind | old status | new status |", "|---|---|---|---|"]
+        lines += [f"| `{c.item_id}` | {c.kind} | {c.old_status or '-'} | {c.new_status or '-'} |"
+                  for c in changed]
+    return "\n".join(lines) + "\n"
+
+
+def _diff(args: argparse.Namespace) -> None:
+    try:
+        old, new = (json.loads(Path(p).read_text(encoding="utf-8")) for p in (args.old, args.new))
+    except (OSError, ValueError) as exc:
+        print(f"cannot read the reports: {exc}")
+        return
+    try:
+        diff = diff_reports(old, new, force=args.force)
+    except ReportDiffError as exc:
+        print(f"cannot compare: {exc}")
+        return
+    text = render_diff_markdown(diff, str(args.old), str(args.new))
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8")
+    print(text, end="")
 
 
 def git_commit() -> str:
@@ -578,12 +691,22 @@ def main(
     run.add_argument("--yes", action="store_true", help="answer every item (billed)")
     run.add_argument("--timeout", type=float, default=300.0, help="seconds per item")
     run.add_argument("--poll-interval", type=float, default=2.0)
+
+    diff = sub.add_parser("diff", help="compare two report.json files item by item")
+    diff.add_argument("old", type=Path, help="the earlier report.json")
+    diff.add_argument("new", type=Path, help="the later report.json")
+    diff.add_argument("--force", action="store_true",
+                      help="compare even across benchmark versions or modes")
+    diff.add_argument("--out", type=Path, help="also write the markdown here")
     args = parser.parse_args(argv)
 
     if args.command == "generate":
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(dump(generate_fact_lookup()), encoding="utf-8")
         print(f"wrote {args.out}")
+        return 0
+    if args.command == "diff":
+        _diff(args)
         return 0
 
     try:

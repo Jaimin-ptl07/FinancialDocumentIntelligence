@@ -53,6 +53,12 @@ def test_a_well_formed_item_parses() -> None:
     assert item.gold.evidence[0].page == 167
 
 
+def test_expected_tools_are_optional_and_parse_in_order() -> None:
+    assert parse_benchmark(_body()).items[0].gold.expected_tools is None
+    bench = parse_benchmark(_body(_gold(expected_tools=["search", "get_tables"])))
+    assert bench.items[0].gold.expected_tools == ("search", "get_tables")
+
+
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
@@ -85,6 +91,18 @@ def test_a_well_formed_item_parses() -> None:
          "item 'fact_lookup:TCS:PATR': gold evidence #0 'page' must be an integer >= 1"),
         (_body(_gold(evidence=[{"page": 3}])),
          "item 'fact_lookup:TCS:PATR': gold evidence #0 'doc_key' must be a non-empty string"),
+        (_body(_gold(expected_tools="search")),
+         "item 'fact_lookup:TCS:PATR': 'gold.expected_tools' must be a non-empty list "
+         "of tool names"),
+        (_body(_gold(expected_tools=[])),
+         "item 'fact_lookup:TCS:PATR': 'gold.expected_tools' must be a non-empty list "
+         "of tool names"),
+        (_body(_gold(expected_tools=["search", " "])),
+         "item 'fact_lookup:TCS:PATR': 'gold.expected_tools' #1 must be a non-empty string"),
+        (_body(_gold(expected_tools=["search", 7])),
+         "item 'fact_lookup:TCS:PATR': 'gold.expected_tools' #1 must be a non-empty string"),
+        (_body(_gold(expected_tools=["search", "get_tables", "search"])),
+         "item 'fact_lookup:TCS:PATR': 'gold.expected_tools' names 'search' twice"),
     ],
 )
 def test_a_malformed_benchmark_is_rejected_with_its_reason(body: object, reason: str) -> None:
