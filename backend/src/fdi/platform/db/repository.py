@@ -3,7 +3,7 @@ theirs, not ours."""
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import TypedDict
 
 import sqlalchemy
@@ -1076,10 +1076,41 @@ class CompanyRepository:
         )
         await self._s.flush()
 
+    async def set_report_metadata(
+        self,
+        doc_id: str,
+        *,
+        fiscal_year: str | None,
+        period_start: date | None,
+        period_end: date | None,
+        report_type: str,
+        link_status: str,
+        link_method: str | None,
+    ) -> None:
+        """What a Report covers and how it was filed (S2.2). Overwrites: the
+        issuer artifact is the source, re-resolving rewrites the same values."""
+        await self._s.execute(
+            sqlalchemy.update(Document)
+            .where(Document.id == doc_id)
+            .values(
+                fiscal_year=fiscal_year,
+                period_start=period_start,
+                period_end=period_end,
+                report_type=report_type,
+                link_status=link_status,
+                link_method=link_method,
+            )
+        )
+        await self._s.flush()
+
     async def latest_documents(self, company_id: str) -> list[Document]:
         """The Company's Reports: one row per `doc_key`, its highest version
         filed under this Company -- a re-upload is a new version of the same
-        Report, not a second Report. Ranked as `list_latest_per_doc_key`."""
+        Report, not a second Report. Ranked as `list_latest_per_doc_key`.
+
+        THE one ordering of a Company's Reports: newest Fiscal year first (by
+        period end), a Report with no Fiscal year yet after every dated one,
+        then newest upload first."""
         group = func.coalesce(Document.doc_key, Document.id)
         ranked = (
             select(
@@ -1102,7 +1133,11 @@ class CompanyRepository:
             await self._s.execute(
                 select(Document)
                 .where(Document.id.in_(select(ranked.c.id).where(ranked.c.rn == 1)))
-                .order_by(Document.created_at.desc(), Document.id)
+                .order_by(
+                    Document.period_end.desc().nullslast(),
+                    Document.created_at.desc(),
+                    Document.id,
+                )
             )
         ).scalars().all()
         return list(rows)

@@ -2,10 +2,11 @@
 truth, and this keeps wall-clock out of artifact bodies (Global Constraint 6)."""
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -45,7 +46,13 @@ class StageStatus(enum.StrEnum):
 
 class Document(Base):
     __tablename__ = "document"
-    __table_args__ = (UniqueConstraint("checksum", name="uq_document_checksum"),)
+    __table_args__ = (
+        UniqueConstraint("checksum", name="uq_document_checksum"),
+        CheckConstraint(
+            "link_status IN ('linked','awaiting_confirmation','unidentified')",
+            name="ck_document_link_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -59,6 +66,15 @@ class Document(Base):
     company_id: Mapped[str | None] = mapped_column(
         ForeignKey("company.id"), nullable=True, index=True
     )
+    # Report metadata (S2.2, migration 0015), written by the company registry
+    # from the issuer artifact. Statement bases are NOT here: they are read
+    # from the basis segmentation ("bases present").
+    fiscal_year: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    report_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    link_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    link_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

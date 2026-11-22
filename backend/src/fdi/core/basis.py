@@ -250,6 +250,18 @@ def basis_regions(basis_artifact: Mapping[str, object]) -> list[tuple[str, int, 
     return out
 
 
+_STATEMENT_BASES = ("standalone", "consolidated")
+
+
+def bases_present(basis_artifact: Mapping[str, object]) -> list[str]:
+    """Which statement bases a Report contains -- "standalone",
+    "consolidated", or both, in that order -- as its basis segmentation
+    found them. A Report's bases are read from here, never stored on the
+    Report. Total: a malformed or anchorless artifact yields []."""
+    found = {basis for basis, _, _ in basis_regions(basis_artifact)}
+    return [basis for basis in _STATEMENT_BASES if basis in found]
+
+
 def resolve_effective_basis(
     basis_artifact: Mapping[str, object], preference: str
 ) -> str:

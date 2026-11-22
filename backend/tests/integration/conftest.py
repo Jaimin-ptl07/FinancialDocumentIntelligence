@@ -284,7 +284,9 @@ def job_services(session_factory, store, **overrides):
 # `session_factory`/`store` here are the defaults; a module defining its own
 # fixture of the same name overrides them, as most stage tests do.
 
-COMPANY_CHAIN = ("ocr", "normalize", "ast", "structure", "graph", "provenance", "issuer")
+COMPANY_CHAIN = (
+    "ocr", "normalize", "ast", "structure", "graph", "provenance", "basis", "issuer",
+)
 
 
 @pytest.fixture
@@ -314,16 +316,24 @@ def _paragraph(content: str, page: int, role: str | None = None) -> dict[str, ob
 
 
 async def ingest(
-    session_factory, store, *, doc_key: str, lines: list[str], through: str = "issuer"
+    session_factory,
+    store,
+    *,
+    doc_key: str,
+    lines: list[str],
+    through: str = "issuer",
+    headings: dict[int, str] | None = None,
 ) -> str:
-    """Intake a Report whose page N carries `lines[N-1]`, and run the stage
-    chain up to and including `through`."""
+    """Intake a Report whose page N carries `lines[N-1]` -- preceded by the
+    section heading `headings[N]`, if any -- and run the stage chain up to and
+    including `through`."""
     from fdi.pipeline.intake import intake_document
     from fdi.pipeline.ocr import FakeOcrClient
     from fdi.pipeline.registry import StageRegistry
     from fdi.pipeline.resolver import DagResolver
     from fdi.pipeline.run import run_stage
     from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.basis import BasisStage
     from fdi.pipeline.stages.graph import GraphStage
     from fdi.pipeline.stages.issuer import IssuerStage
     from fdi.pipeline.stages.normalize import NormalizeStage
@@ -339,17 +349,22 @@ async def ingest(
         session_factory=session_factory,
         store=store,
     )
+    headings = headings or {}
+    paragraphs = [_paragraph("Annual Report", 1, "title")]
+    for n, line in enumerate(lines, start=1):
+        if n in headings:
+            paragraphs.append(_paragraph(headings[n], n, "sectionHeading"))
+        paragraphs.append(_paragraph(line, n))
     ocr = FakeOcrClient({
         "content": " ".join(lines),
         "pages": [{"pageNumber": n, "lines": [], "words": []} for n in range(1, len(lines) + 1)],
-        "paragraphs": [_paragraph("Annual Report", 1, "title")]
-        + [_paragraph(line, n) for n, line in enumerate(lines, start=1)],
+        "paragraphs": paragraphs,
         "tables": [],
     })
     reg = StageRegistry()
     for stage in (
         OcrStage(), NormalizeStage(), AstStage(), StructureStage(),
-        GraphStage(), ProvenanceStage(), IssuerStage(),
+        GraphStage(), ProvenanceStage(), BasisStage(), IssuerStage(),
     ):
         reg.register(stage)
     resolver = DagResolver(reg.all())

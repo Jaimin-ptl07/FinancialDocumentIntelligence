@@ -25,6 +25,7 @@ TCS = [
     "We have examined the relevant registers, records, forms, returns and disclosures "
     "received from the Directors of Tata Consultancy Services Limited having CIN "
     f"{TCS_CIN} and having registered office at 9th Floor, Nirmal Building, Mumbai",
+    "Consolidated Balance Sheet as at March 31, 2026, for the year ended March 31, 2026",
 ]
 RIL = [
     "Reliance Industries Limited had a record year. Reliance Industries Limited grew.",
@@ -35,7 +36,14 @@ RIL = [
     "4th Floor, Court House, Lokmanya Tilak Marg, Mumbai",
     "To, The Members, Reliance Retail Ventures Limited CIN: U51909MH2006PLC166166 "
     "4th Floor, Court House, Lokmanya Tilak Marg, Mumbai",
+    "Year ended 31st March, 2026 Year ended 31st March, 2025",
+    "Year ended 31st March, 2026 Year ended 31st March, 2025",
 ]
+# RIL holds both statement sets; the others' fixtures hold one or none.
+RIL_STATEMENTS = {
+    5: "Standalone Statement of Profit and Loss for the year ended 31st March, 2026",
+    6: "Consolidated Statement of Profit and Loss for the year ended 31st March, 2026",
+}
 REMC = [
     "REMC Limited (A Joint Venture of Indian Railways and RITES Limited)",
     "We have examined the compliance of conditions of Corporate Governance by REMC "
@@ -48,13 +56,15 @@ async def test_backfill_files_every_corpus_report_under_its_company(
 ) -> None:
     suffix = uuid.uuid4().hex[:8]
     docs = {}
-    for doc_key, lines in (
-        (f"tcs-2025-26-{suffix}", TCS),
-        (f"ril-2025-26-{suffix}", RIL),
-        (f"rites-2024-25-{suffix}", REMC),
+    for doc_key, lines, headings in (
+        (f"tcs-2025-26-{suffix}", TCS, None),
+        (f"ril-2025-26-{suffix}", RIL, RIL_STATEMENTS),
+        (f"rites-2024-25-{suffix}", REMC, None),
     ):
+        # Ingested before the issuer stage existed: the chain stops at basis.
         docs[doc_key] = await ingest(
-            session_factory, store, doc_key=doc_key, lines=lines, through="provenance"
+            session_factory, store, doc_key=doc_key, lines=lines, through="basis",
+            headings=headings,
         )
 
     links = await backfill_companies(session_factory=session_factory, store=store)
@@ -63,10 +73,16 @@ async def test_backfill_files_every_corpus_report_under_its_company(
     async with session_factory() as s:
         registry = CompanyRegistry(s, store)
         by_doc = {}
+        covers = {}
         for doc_key, doc_id in docs.items():
             company = await registry.get_company(filed[doc_id].company_id)
             assert company is not None, f"{doc_key} was not filed: {filed[doc_id].reason}"
-            by_doc[doc_key.rsplit("-", 1)[0]] = (company.cin, company.name)
+            short = doc_key.rsplit("-", 1)[0]
+            by_doc[short] = (company.cin, company.name)
+            (report,) = [
+                r for r in await registry.company_reports(company.id) if r.doc_id == doc_id
+            ]
+            covers[short] = (report.fiscal_year, report.bases_present)
         remc_id = filed[docs[f"rites-2024-25-{suffix}"]].company_id
         remc_reports = await registry.company_reports(remc_id)
 
@@ -74,6 +90,11 @@ async def test_backfill_files_every_corpus_report_under_its_company(
         "tcs-2025-26": (TCS_CIN, "Tata Consultancy Services Limited"),
         "ril-2025-26": (RIL_CIN, "Reliance Industries Limited"),
         "rites-2024-25": (REMC_CIN, "REMC Limited"),
+    }
+    assert covers == {
+        "tcs-2025-26": ("FY2025-26", ()),
+        "ril-2025-26": ("FY2025-26", ("standalone", "consolidated")),
+        "rites-2024-25": ("FY2024-25", ()),
     }
     assert f"rites-2024-25-{suffix}" in [r.doc_key for r in remc_reports]
 
