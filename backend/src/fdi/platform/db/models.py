@@ -54,6 +54,25 @@ class Document(Base):
     content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     doc_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     version: Mapped[int | None] = mapped_column(nullable=True)
+    # The Company this Report is filed under (ADR-0003); None until the
+    # issuer stage + company registry have identified it.
+    company_id: Mapped[str | None] = mapped_column(
+        ForeignKey("company.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Company(Base):
+    """A Company, identified by its CIN (ADR-0003). One CIN, one Company."""
+
+    __tablename__ = "company"
+    __table_args__ = (UniqueConstraint("cin", name="uq_company_cin"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cin: Mapped[str] = mapped_column(String(21), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

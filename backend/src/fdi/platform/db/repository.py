@@ -8,6 +8,7 @@ from typing import TypedDict
 
 import sqlalchemy
 from sqlalchemy import Float, case, distinct, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
@@ -15,6 +16,7 @@ from fdi.core.facts import RunFacts
 from fdi.platform.db.models import (
     ApiJob,
     AppUser,
+    Company,
     Document,
     EvalCaseResult,
     EvalRun,
@@ -1027,6 +1029,83 @@ class DocumentRepository:
         if version is not None:
             stmt = stmt.where(Document.version == version)
         return list((await self._s.execute(stmt)).scalars().all())
+
+
+class CompanyRepository:
+    """Company registry persistence (ADR-0003). The caller owns the
+    transaction. `fdi.pipeline.companies.CompanyRegistry` is the only
+    caller: everything else goes through it, never these tables."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get(self, company_id: str) -> Company | None:
+        return await self._s.get(Company, company_id)
+
+    async def get_or_create_by_cin(self, *, cin: str, name: str) -> tuple[Company, bool]:
+        """(the Company with this CIN, whether this call created it).
+
+        `INSERT .. ON CONFLICT DO NOTHING` then a read, not read-then-insert:
+        two uploads of the same new issuer resolving at once must end with ONE
+        Company, and `uq_company_cin` is what decides the race -- the loser's
+        insert is a no-op and its read finds the winner's row."""
+        inserted = (
+            await self._s.execute(
+                pg_insert(Company)
+                .values(id=str(uuid.uuid4()), cin=cin, name=name)
+                .on_conflict_do_nothing(constraint="uq_company_cin")
+                .returning(Company.id)
+            )
+        ).scalar_one_or_none()
+        company = (
+            await self._s.execute(select(Company).where(Company.cin == cin))
+        ).scalar_one()
+        return company, inserted is not None
+
+    async def all(self) -> list[Company]:
+        rows = (
+            await self._s.execute(select(Company).order_by(Company.name, Company.id))
+        ).scalars().all()
+        return list(rows)
+
+    async def link_document(self, doc_id: str, company_id: str) -> None:
+        await self._s.execute(
+            sqlalchemy.update(Document)
+            .where(Document.id == doc_id)
+            .values(company_id=company_id)
+        )
+        await self._s.flush()
+
+    async def latest_documents(self, company_id: str) -> list[Document]:
+        """The Company's Reports: one row per `doc_key`, its highest version
+        filed under this Company -- a re-upload is a new version of the same
+        Report, not a second Report. Ranked as `list_latest_per_doc_key`."""
+        group = func.coalesce(Document.doc_key, Document.id)
+        ranked = (
+            select(
+                Document.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=group,
+                    order_by=(
+                        Document.version.desc().nullslast(),
+                        Document.created_at.desc(),
+                        Document.id,
+                    ),
+                )
+                .label("rn"),
+            )
+            .where(Document.company_id == company_id)
+            .subquery()
+        )
+        rows = (
+            await self._s.execute(
+                select(Document)
+                .where(Document.id.in_(select(ranked.c.id).where(ranked.c.rn == 1)))
+                .order_by(Document.created_at.desc(), Document.id)
+            )
+        ).scalars().all()
+        return list(rows)
 
 
 class UserRepository:

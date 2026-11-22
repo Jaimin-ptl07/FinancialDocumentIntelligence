@@ -42,12 +42,14 @@ from minio import Minio
 
 from fdi.pipeline import candidates as _candidates  # noqa: F401 - registers eval candidates
 from fdi.pipeline import stages as _stages  # noqa: F401 - registers built-in stages
+from fdi.pipeline.companies import resolve_and_commit
 from fdi.pipeline.evaluation import CANDIDATES
 from fdi.pipeline.jobs import JobServices, execute_job
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.schema_store import load_schema
+from fdi.pipeline.stages.issuer import ISSUER_STAGE
 from fdi.platform.agent import AzureOpenAIAgentClient
 from fdi.platform.config import Settings, get_settings
 from fdi.platform.db.engine import make_engine, make_session_factory
@@ -136,12 +138,28 @@ async def _run_stage_async(
                 "fog.schema_load_failed",
                 doc_id=doc_id, stage=stage_name, error=repr(exc),
             )
-        return await run_stage(
+        successors = await run_stage(
             doc_id=doc_id, stage_name=stage_name, run_id=run_id,
             correlation_id=correlation_id, session_factory=session_factory,
             store=store, registry=REGISTRY, resolver=resolver, services=services,
             azure_model=get_settings().azure_di_model,
         )
+        if stage_name == ISSUER_STAGE:
+            # Stages have no Postgres access, so filing the Report under its
+            # Company happens here, once the issuer artifact exists. A failure
+            # leaves the Report unfiled (the backfill re-resolves it), never
+            # fails a stage that itself succeeded.
+            try:
+                link = await resolve_and_commit(
+                    session_factory=session_factory, store=store, doc_id=doc_id
+                )
+                log.info(
+                    "company.report_resolved",
+                    doc_id=doc_id, company_id=link.company_id, reason=link.reason,
+                )
+            except Exception as exc:  # noqa: BLE001 -- degrade, don't fail the stage
+                log.warning("company.resolve_failed", doc_id=doc_id, error=repr(exc))
+        return successors
     finally:
         await engine.dispose()
 
