@@ -78,6 +78,50 @@ class Company(Base):
     )
 
 
+class CompanyIdentifier(Base):
+    """A hand-entered name or code a Company is known by (S2.4): an NSE
+    symbol, BSE code, ISIN or alias. `key` is what makes two identifiers of a
+    kind the same (`fdi.core.company_names.identifier_key`), so "RIL" and
+    "r.i.l" cannot both be aliases; it is unique per kind across all
+    Companies -- one ticker, one Company."""
+
+    __tablename__ = "company_identifier"
+    __table_args__ = (
+        UniqueConstraint("kind", "key", name="uq_company_identifier_kind_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("company.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+
+
+class CompanyChange(Base):
+    """One manual change to a Company -- who made it and when (S2.4). Append
+    only: a removed identifier's row is gone, its removal stays here."""
+
+    __tablename__ = "company_change"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("company.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invitee_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # clock_timestamp(), not now(): two changes in one transaction still
+    # get distinct, ordered times.
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+
+
 class StageRun(Base):
     __tablename__ = "stage_run"
     __table_args__ = (

@@ -9,6 +9,7 @@ from typing import TypedDict
 import sqlalchemy
 from sqlalchemy import Float, case, distinct, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
@@ -17,6 +18,8 @@ from fdi.platform.db.models import (
     ApiJob,
     AppUser,
     Company,
+    CompanyChange,
+    CompanyIdentifier,
     Document,
     EvalCaseResult,
     EvalRun,
@@ -1067,6 +1070,103 @@ class CompanyRepository:
             await self._s.execute(select(Company).order_by(Company.name, Company.id))
         ).scalars().all()
         return list(rows)
+
+    # --- hand curation (S2.4) ------------------------------------------------
+
+    async def create(self, *, cin: str, name: str) -> Company | None:
+        """A new Company, or None when its CIN is already taken -- decided by
+        `uq_company_cin`, not by a read first, so two Invitees creating the
+        same Company at once still end with one."""
+        inserted = (
+            await self._s.execute(
+                pg_insert(Company)
+                .values(id=str(uuid.uuid4()), cin=cin, name=name)
+                .on_conflict_do_nothing(constraint="uq_company_cin")
+                .returning(Company.id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return None
+        return await self._s.get(Company, inserted)
+
+    async def update(self, company: Company, *, cin: str, name: str) -> bool:
+        """Set the Company's CIN and name; False (and nothing changed) when the
+        CIN belongs to another Company. A savepoint keeps the caller's
+        transaction usable after the constraint fires."""
+        try:
+            async with self._s.begin_nested():
+                await self._s.execute(
+                    sqlalchemy.update(Company)
+                    .where(Company.id == company.id)
+                    .values(cin=cin, name=name)
+                )
+        except IntegrityError:
+            return False
+        await self._s.refresh(company)
+        return True
+
+    async def add_identifier(
+        self, company_id: str, *, kind: str, value: str, key: str
+    ) -> CompanyIdentifier | None:
+        """The new identifier, or None when (kind, key) is already held -- by
+        this Company or another (`uq_company_identifier_kind_key`)."""
+        inserted = (
+            await self._s.execute(
+                pg_insert(CompanyIdentifier)
+                .values(
+                    id=str(uuid.uuid4()), company_id=company_id, kind=kind, value=value, key=key
+                )
+                .on_conflict_do_nothing(constraint="uq_company_identifier_kind_key")
+                .returning(CompanyIdentifier.id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return None
+        return await self._s.get(CompanyIdentifier, inserted)
+
+    async def remove_identifier(
+        self, company_id: str, identifier_id: str
+    ) -> CompanyIdentifier | None:
+        """The removed identifier, or None when the Company has no such one."""
+        row = await self._s.get(CompanyIdentifier, identifier_id)
+        if row is None or row.company_id != company_id:
+            return None
+        await self._s.delete(row)
+        await self._s.flush()
+        return row
+
+    async def identifiers(self, company_id: str | None = None) -> list[CompanyIdentifier]:
+        """One Company's identifiers, or every Company's when `company_id` is
+        None -- oldest first."""
+        stmt = select(CompanyIdentifier).order_by(
+            CompanyIdentifier.created_at, CompanyIdentifier.id
+        )
+        if company_id is not None:
+            stmt = stmt.where(CompanyIdentifier.company_id == company_id)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def record_change(
+        self, company_id: str, *, invitee_id: str, action: str, detail: dict[str, object]
+    ) -> None:
+        self._s.add(
+            CompanyChange(
+                id=str(uuid.uuid4()), company_id=company_id, invitee_id=invitee_id,
+                action=action, detail=detail,
+            )
+        )
+        await self._s.flush()
+
+    async def changes(self, company_id: str) -> list[tuple[CompanyChange, str]]:
+        """(change, the acting Invitee's email), oldest first."""
+        rows = (
+            await self._s.execute(
+                select(CompanyChange, AppUser.email)
+                .join(AppUser, AppUser.id == CompanyChange.invitee_id)
+                .where(CompanyChange.company_id == company_id)
+                .order_by(CompanyChange.at, CompanyChange.id)
+            )
+        ).all()
+        return [(change, email) for change, email in rows]
 
     async def link_document(self, doc_id: str, company_id: str) -> None:
         await self._s.execute(
