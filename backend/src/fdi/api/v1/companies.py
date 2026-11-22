@@ -5,15 +5,29 @@ are Public filings, so there is no per-user filtering here and none may be
 added through Workspaces (#16). All reads go through
 `fdi.pipeline.companies.CompanyRegistry`, never the tables."""
 
-from datetime import date
+from datetime import date, datetime
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
+from fdi.api.auth import require_access_token
 from fdi.api.deps import SessionDep, StoreDep
-from fdi.pipeline.companies import CompanyRegistry, CompanyView, ReportView
+from fdi.pipeline.companies import (
+    ChangeView,
+    CompanyConflict,
+    CompanyCurationError,
+    CompanyRegistry,
+    CompanyView,
+    IdentifierView,
+    ReportView,
+)
 
 router = APIRouter(prefix="/companies", tags=["companies"])
+
+# The acting Invitee, for the change log. The include-level gate already
+# decoded the token; FastAPI serves this from the same per-request cache.
+InviteeDep = Annotated[str, Depends(require_access_token)]
 
 
 class CompanyOut(BaseModel):
@@ -61,9 +75,175 @@ def _report_out(r: ReportView) -> ReportOut:
 
 
 @router.get("", response_model=CompanyListOut)
-async def list_companies(session: SessionDep, store: StoreDep) -> CompanyListOut:
-    companies = await CompanyRegistry(session, store).list_companies()
+async def list_companies(
+    session: SessionDep, store: StoreDep, q: str | None = None
+) -> CompanyListOut:
+    """Every Company, or with `q` those found by name, alias, exchange
+    identifier or CIN ("RIL", "Reliance Industries Ltd.")."""
+    registry = CompanyRegistry(session, store)
+    companies = (
+        await registry.search(q) if q is not None and q.strip()
+        else await registry.list_companies()
+    )
     return CompanyListOut(companies=[_company_out(c) for c in companies])
+
+
+# --- hand curation (S2.4): any Invitee; every change is logged with who/when --
+
+IdentifierType = Literal["nse_symbol", "bse_code", "isin", "alias"]
+
+
+class CompanyIn(BaseModel):
+    name: str
+    cin: str
+
+
+class CompanyPatch(BaseModel):
+    name: str | None = None
+    cin: str | None = None
+
+
+class IdentifierIn(BaseModel):
+    type: IdentifierType
+    value: str
+
+
+class IdentifierOut(BaseModel):
+    id: str
+    type: str
+    value: str
+
+
+class IdentifierListOut(BaseModel):
+    identifiers: list[IdentifierOut]
+
+
+class ChangeOut(BaseModel):
+    action: str
+    invitee_id: str
+    invitee_email: str
+    at: datetime
+    detail: dict[str, object]
+
+
+class ChangeListOut(BaseModel):
+    changes: list[ChangeOut]
+
+
+def _identifier_out(i: IdentifierView) -> IdentifierOut:
+    return IdentifierOut(id=i.id, type=i.kind, value=i.value)
+
+
+def _change_out(c: ChangeView) -> ChangeOut:
+    return ChangeOut(
+        action=c.action, invitee_id=c.invitee_id, invitee_email=c.invitee_email,
+        at=c.at, detail=c.detail,
+    )
+
+
+def _refused(exc: CompanyCurationError) -> HTTPException:
+    if isinstance(exc, CompanyConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+
+def _not_found(company_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"company {company_id} not found")
+
+
+@router.post("", response_model=CompanyOut, status_code=status.HTTP_201_CREATED)
+async def create_company(
+    body: CompanyIn, session: SessionDep, store: StoreDep, invitee_id: InviteeDep
+) -> CompanyOut:
+    """Add a Company by hand. A Report ingested later that prints this CIN is
+    filed under it. 409 when the CIN already has a Company."""
+    try:
+        company = await CompanyRegistry(session, store).create_company(
+            name=body.name, cin=body.cin, invitee_id=invitee_id
+        )
+    except CompanyCurationError as exc:
+        raise _refused(exc) from exc
+    await session.commit()
+    return _company_out(company)
+
+
+@router.patch("/{company_id}", response_model=CompanyOut)
+async def update_company(
+    company_id: str, body: CompanyPatch, session: SessionDep, store: StoreDep,
+    invitee_id: InviteeDep,
+) -> CompanyOut:
+    try:
+        company = await CompanyRegistry(session, store).update_company(
+            company_id, invitee_id=invitee_id, name=body.name, cin=body.cin
+        )
+    except CompanyCurationError as exc:
+        raise _refused(exc) from exc
+    if company is None:
+        raise _not_found(company_id)
+    await session.commit()
+    return _company_out(company)
+
+
+@router.get("/{company_id}/identifiers", response_model=IdentifierListOut)
+async def list_identifiers(
+    company_id: str, session: SessionDep, store: StoreDep
+) -> IdentifierListOut:
+    registry = CompanyRegistry(session, store)
+    if await registry.get_company(company_id) is None:
+        raise _not_found(company_id)
+    identifiers = await registry.identifiers(company_id)
+    return IdentifierListOut(identifiers=[_identifier_out(i) for i in identifiers])
+
+
+@router.post(
+    "/{company_id}/identifiers",
+    response_model=IdentifierOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_identifier(
+    company_id: str, body: IdentifierIn, session: SessionDep, store: StoreDep,
+    invitee_id: InviteeDep,
+) -> IdentifierOut:
+    """Add an NSE symbol, BSE code, ISIN or alias. 409 when any Company
+    already has that (type, value)."""
+    try:
+        identifier = await CompanyRegistry(session, store).add_identifier(
+            company_id, kind=body.type, value=body.value, invitee_id=invitee_id
+        )
+    except CompanyCurationError as exc:
+        raise _refused(exc) from exc
+    if identifier is None:
+        raise _not_found(company_id)
+    await session.commit()
+    return _identifier_out(identifier)
+
+
+@router.delete(
+    "/{company_id}/identifiers/{identifier_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def remove_identifier(
+    company_id: str, identifier_id: str, session: SessionDep, store: StoreDep,
+    invitee_id: InviteeDep,
+) -> Response:
+    removed = await CompanyRegistry(session, store).remove_identifier(
+        company_id, identifier_id, invitee_id=invitee_id
+    )
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"company {company_id} has no identifier {identifier_id}",
+        )
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{company_id}/changes", response_model=ChangeListOut)
+async def list_changes(company_id: str, session: SessionDep, store: StoreDep) -> ChangeListOut:
+    """Every manual change to the Company -- who made it and when."""
+    registry = CompanyRegistry(session, store)
+    if await registry.get_company(company_id) is None:
+        raise _not_found(company_id)
+    return ChangeListOut(changes=[_change_out(c) for c in await registry.changes(company_id)])
 
 
 @router.get("/{company_id}", response_model=CompanyOut)
