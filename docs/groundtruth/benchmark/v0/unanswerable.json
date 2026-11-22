@@ -1,0 +1,102 @@
+{
+  "version": "v0",
+  "kind": "unanswerable",
+  "_source": "Hand-keyed from docs/groundtruth/*.json and the PDF pages their _source names; never from pipeline or agent output. REMC Limited's doc_key is the historical rites-2024-25 (REMC is not RITES).",
+  "items": [
+    {
+      "id": "unanswerable:company-not-in-corpus:infosys-revenue",
+      "kind": "unanswerable",
+      "question": "What was Infosys's consolidated revenue from operations for FY2025-26?",
+      "gold": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable:company-not-in-corpus:wipro-profit",
+      "kind": "unanswerable",
+      "question": "What was Wipro's consolidated profit after tax for FY2025-26?",
+      "gold": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable:company-not-in-corpus:hdfc-bank-net-interest-income",
+      "kind": "unanswerable",
+      "question": "What was HDFC Bank's net interest income for FY2025-26?",
+      "gold": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable:company-not-in-corpus:larsen-and-toubro-total-income",
+      "kind": "unanswerable",
+      "question": "What was Larsen & Toubro's consolidated total income for FY2025-26?",
+      "gold": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable:company-not-in-corpus:hindustan-unilever-eps",
+      "kind": "unanswerable",
+      "question": "What was Hindustan Unilever's basic earnings per share for FY2025-26?",
+      "gold": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable:year-not-covered:TCS-FY2027-28-total-income",
+      "kind": "unanswerable",
+      "question": "What was TCS's consolidated total income for FY2027-28?",
+      "gold": {
+        "answerable": false
+      },
+      "doc_keys": [
+        "tcs-2025-26"
+      ]
+    },
+    {
+      "id": "unanswerable:year-not-covered:REMC-FY2025-26-profit",
+      "kind": "unanswerable",
+      "question": "What was REMC Limited's profit after tax for FY2025-26?",
+      "gold": {
+        "answerable": false
+      },
+      "doc_keys": [
+        "rites-2024-25"
+      ]
+    },
+    {
+      "id": "unanswerable:basis-not-reported:RIL-FY2025-26-standalone-profit",
+      "kind": "unanswerable",
+      "question": "What was RIL's standalone profit after tax for FY2025-26?",
+      "gold": {
+        "answerable": false
+      },
+      "doc_keys": [
+        "ril-2025-26"
+      ]
+    },
+    {
+      "id": "unanswerable:concept-not-disclosed:TCS-FY2025-26-extraordinary-items",
+      "kind": "unanswerable",
+      "question": "What were TCS's consolidated extraordinary items for FY2025-26?",
+      "gold": {
+        "answerable": false
+      },
+      "doc_keys": [
+        "tcs-2025-26"
+      ]
+    },
+    {
+      "id": "unanswerable:concept-not-disclosed:RIL-FY2025-26-extraordinary-items",
+      "kind": "unanswerable",
+      "question": "What were RIL's consolidated extraordinary items for FY2025-26?",
+      "gold": {
+        "answerable": false
+      },
+      "doc_keys": [
+        "ril-2025-26"
+      ]
+    }
+  ]
+}

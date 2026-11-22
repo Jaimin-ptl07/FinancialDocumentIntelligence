@@ -271,7 +271,7 @@ def test_an_item_with_no_valid_citation_is_unsupported() -> None:
 
 def test_support_and_completion_rates_aggregate_per_kind_and_overall() -> None:
     def item(item_id: str, kind: str) -> dict[str, object]:
-        return {"id": item_id, "kind": kind, "question": "?",
+        return {"id": item_id, "kind": kind, "question": "?", "doc_keys": ["acme", "zenith"],
                 "gold": {"answerable": True,
                          "values": [{"value": 10.0, "unit": "INR crore", "tolerance": 0.5}],
                          "evidence": [{"doc_key": "acme", "page": 3}]}}
@@ -329,7 +329,8 @@ def _tools_bench(*items: tuple[str, str, list[str] | None]) -> Benchmark:
         }
         if tools is not None:
             gold["expected_tools"] = tools
-        return {"id": item_id, "kind": kind, "question": "q?", "gold": gold}
+        return {"id": item_id, "kind": kind, "question": "q?", "doc_keys": ["acme", "zenith"],
+                "gold": gold}
 
     return parse_benchmark({"version": "v-test", "items": [item(*i) for i in items]})
 
@@ -397,3 +398,105 @@ def test_tool_selection_accuracy_is_the_mean_over_items_that_name_tools() -> Non
     assert report.by_kind["fact_lookup"].tool_selection_accuracy == 0.0
     assert report.overall.tool_selection_items == 3
     assert report.overall.tool_selection_accuracy == 0.5
+
+
+# --------------------------------------------------------------------------
+# Calculation items: margins are percentages, simple ratios are bare numbers.
+# --------------------------------------------------------------------------
+
+# TCS consolidated FY2025-26: PATR 49,454 / total income 2,71,423 = 18.2203%.
+_MARGIN = (18.22, "percent", 0.05)
+# Current assets 1,35,705 / current liabilities 60,914 = 2.2278.
+_CURRENT_RATIO = (2.228, "ratio", 0.005)
+
+
+def test_a_margin_is_matched_against_the_answers_percentages() -> None:
+    assert _status("TCS's net profit margin was 18.2%.", _MARGIN) == "correct"
+    assert _status("The margin works out to 18.22 per cent.", _MARGIN) == "correct"
+    assert _status("TCS's net profit margin was 19.5%.", _MARGIN) == "wrong"
+
+
+def test_a_margin_ignores_the_amounts_it_was_computed_from() -> None:
+    answer = ("Profit after tax of ₹49,454 crore over total income of ₹2,71,423 crore "
+              "gives a net margin of 18.22%.")
+    assert _status(answer, _MARGIN) == "correct"
+
+
+def test_a_margin_answered_only_as_amounts_is_wrong() -> None:
+    assert _status("Profit was ₹49,454 crore on ₹2,71,423 crore.", _MARGIN) == "wrong"
+
+
+def test_a_ratio_is_matched_against_the_answers_unmarked_figures() -> None:
+    answer = "The current ratio is 2.23 times (₹1,35,705 crore / ₹60,914 crore)."
+    assert _status(answer, _CURRENT_RATIO) == "correct"
+    assert _status("The current ratio is 2.5.", _CURRENT_RATIO) == "wrong"
+
+
+def test_a_ratio_is_never_a_percentage() -> None:
+    assert _status("Current assets are 222.8% of current liabilities.", _CURRENT_RATIO) == "wrong"
+
+
+# --------------------------------------------------------------------------
+# Unanswerable items: refusing correctly is the right answer.
+# --------------------------------------------------------------------------
+
+_UNANSWERABLE = parse_benchmark({
+    "version": "v-test",
+    "items": [{"id": "u1", "kind": "unanswerable",
+               "question": "What was Infosys's revenue for FY2025-26?",
+               "gold": {"answerable": False}}],
+})
+
+
+def _refusal(answer: str | None, *citations: Citation, error: str | None = None) -> ItemScore:
+    report = score_run(_UNANSWERABLE, [
+        EndpointAnswer(item_id="u1", answer=answer, error=error, citations=citations)
+    ])
+    return report.items[0]
+
+
+def test_an_unanswerable_item_answered_with_a_figure_is_wrong_and_names_it() -> None:
+    item = _refusal("Infosys reported revenue of ₹1,62,990 crore for FY2025-26.")
+    assert item.status == "wrong"
+    assert "₹1,62,990 crore" in item.reason
+    assert not item.completed
+
+
+def test_a_bare_unmarked_figure_is_still_an_asserted_figure() -> None:
+    item = _refusal("I could not find it, but revenue was about 1,62,990.")
+    assert item.status == "wrong"
+    assert "1,62,990" in item.reason
+
+
+def test_a_plain_not_found_with_no_figure_is_correct_and_completed_without_a_citation() -> None:
+    """There is no gold evidence to cite, so completion cannot demand one."""
+    item = _refusal("I could not find Infosys's revenue in the available Reports.")
+    assert item.status == "correct"
+    assert item.completed
+    assert (item.citations, item.valid_citations, item.supported) == (0, 0, False)
+
+
+def test_years_and_references_in_a_refusal_are_not_figures() -> None:
+    item = _refusal(
+        "Infosys is not among the ingested Reports: the corpus holds no FY2025-26 "
+        "report for it, for the year ended 31 March 2026 (see page 12, Note 4)."
+    )
+    assert item.status == "correct"
+
+
+def test_a_refusal_must_say_the_information_was_not_found() -> None:
+    item = _refusal("Infosys is an Indian IT services company headquartered in Bengaluru.")
+    assert item.status == "wrong"
+    assert item.reason == "no statement that the information was not found"
+    assert not item.completed
+
+
+def test_a_percentage_in_a_refusal_is_an_asserted_figure() -> None:
+    item = _refusal("Not found in the Reports, though its margin is typically 21%.")
+    assert item.status == "wrong"
+    assert "21%" in item.reason
+
+
+def test_a_failed_endpoint_on_an_unanswerable_item_is_still_failed() -> None:
+    item = _refusal(None, error="HTTP 500")
+    assert (item.status, item.reason, item.completed) == ("failed", "HTTP 500", False)

@@ -1,0 +1,211 @@
+{
+  "version": "v0",
+  "kind": "cross_company",
+  "_source": "Hand-keyed from docs/groundtruth/*.json and the PDF pages their _source names; never from pipeline or agent output. REMC Limited's doc_key is the historical rites-2024-25 (REMC is not RITES).",
+  "items": [
+    {
+      "id": "cross_company:TCS-RIL-FY2025-26-consolidated:total_income",
+      "kind": "cross_company",
+      "question": "Compare TCS's and RIL's consolidated total income (revenue from operations plus other income) for FY2025-26. State each Company's figure.",
+      "doc_keys": [
+        "tcs-2025-26",
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 271423.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 328513.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          },
+          {
+            "doc_key": "ril-2025-26",
+            "page": 145
+          }
+        ]
+      }
+    },
+    {
+      "id": "cross_company:TCS-RIL-FY2025-26-consolidated:total_expenses",
+      "kind": "cross_company",
+      "question": "Compare TCS's and RIL's consolidated total expenses for FY2025-26. State each Company's figure.",
+      "doc_keys": [
+        "tcs-2025-26",
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 201410.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 309990.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          },
+          {
+            "doc_key": "ril-2025-26",
+            "page": 145
+          }
+        ]
+      }
+    },
+    {
+      "id": "cross_company:TCS-RIL-FY2025-26-consolidated:other_comprehensive_income",
+      "kind": "cross_company",
+      "question": "Compare TCS's and RIL's consolidated other comprehensive income for FY2025-26. State each Company's figure.",
+      "doc_keys": [
+        "tcs-2025-26",
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 2750.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 144.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          },
+          {
+            "doc_key": "ril-2025-26",
+            "page": 145
+          }
+        ]
+      }
+    },
+    {
+      "id": "cross_company:TCS-RIL-FY2025-26-consolidated:total_comprehensive_income",
+      "kind": "cross_company",
+      "question": "Compare TCS's and RIL's consolidated total comprehensive income for the year FY2025-26. State each Company's figure.",
+      "doc_keys": [
+        "tcs-2025-26",
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 52204.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 13982.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          },
+          {
+            "doc_key": "ril-2025-26",
+            "page": 145
+          }
+        ]
+      }
+    },
+    {
+      "id": "cross_company:TCS-RIL-FY2025-26-consolidated:basic_eps",
+      "kind": "cross_company",
+      "question": "Compare TCS's and RIL's consolidated basic earnings per share for FY2025-26. State each Company's figure.",
+      "doc_keys": [
+        "tcs-2025-26",
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 136.01,
+            "unit": "INR",
+            "tolerance": 0.005
+          },
+          {
+            "value": 19.59,
+            "unit": "INR",
+            "tolerance": 0.005
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          },
+          {
+            "doc_key": "ril-2025-26",
+            "page": 145
+          }
+        ]
+      }
+    },
+    {
+      "id": "cross_company:TCS-FY2025-26-REMC-FY2024-25:basic_eps",
+      "kind": "cross_company",
+      "question": "Compare TCS's consolidated basic earnings per share for FY2025-26 with REMC Limited's basic earnings per share for FY2024-25. State each Company's figure.",
+      "doc_keys": [
+        "tcs-2025-26",
+        "rites-2024-25"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 136.01,
+            "unit": "INR",
+            "tolerance": 0.005
+          },
+          {
+            "value": 7.55,
+            "unit": "INR",
+            "tolerance": 0.005
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          },
+          {
+            "doc_key": "rites-2024-25",
+            "page": 61
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -37,6 +37,13 @@ the gold sign. An unsigned figure matches on magnitude: "current tax was
 ₹2,681.75 lakh" correctly answers a value REMC prints as (2,681.75), because
 the sign there is presentation, and the words carry the direction.
 
+A `calculation` item's gold may be dimensionless. A "percent" gold (a margin,
+a tax rate) is matched only against the answer's percentages, never
+rescaled; a "ratio" gold only against its unmarked, non-percentage numbers.
+Each unit kind (rupees, percent, ratio) takes its own headline figures, so
+"₹49,454 crore over ₹2,71,423 crore gives 18.22%" answers a margin of 18.22
+-- the inputs it shows do not crowd the margin out.
+
 CORRECT IS NOT COMPLETED
 ------------------------
 A citation is valid only when its Report `doc_key` and page are one of the
@@ -65,6 +72,23 @@ whatever partial trace it carries: an endpoint that never answered did not
 carry its plan out. A kind's (and the run's) tool-selection accuracy is the
 mean over its items that name tools; None when none do.
 
+UNANSWERABLE ITEMS
+------------------
+An item whose gold is not answerable (`unanswerable`: a concept the Reports
+do not disclose, a Company not in the corpus) is correct only when the
+answer asserts NO figure AND says explicitly that the information was not
+found ("could not find", "is not disclosed", "not among the ingested
+Reports"). Any figure -- marked, bare or a percentage -- is a hallucination
+and scores wrong, the reason quoting it; only page / Note / fiscal-year
+references and a bare calendar year are not figures. A refusal that never
+says "not found" is an evasion and scores wrong too.
+
+Such an item has no gold evidence, so no citation can be valid and it is
+never `supported`. Completion therefore does NOT demand a valid citation
+for it: a correct refusal is the whole task, and requiring a citation that
+cannot exist would make the kind uncompletable. An endpoint that failed is
+still `failed`, never a correct refusal.
+
 Pure (`fdi.core` law): no I/O, no LLM, deterministic.
 """
 
@@ -75,7 +99,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from fdi.core.benchmark import UNIT_SCALES, Benchmark, BenchmarkItem, GoldValue
+from fdi.core.benchmark import (
+    PERCENT,
+    RATIO,
+    UNIT_SCALES,
+    Benchmark,
+    BenchmarkItem,
+    GoldValue,
+)
 from fdi.core.numbers import parse_amount
 
 ItemStatus = Literal["correct", "wrong", "failed"]
@@ -118,7 +149,8 @@ class ItemScore:
     evidence locations; "cited something" is not "cited the source". The
     item is `supported` when at least one citation is valid, and `completed`
     -- the task outcome (§16.2) -- when it is correct AND supported. A
-    correct number nobody can trace to its source is a failed task.
+    correct number nobody can trace to its source is a failed task. An
+    unanswerable item has nothing to cite: it completes when correct.
 
     `tool_selection` is the share of the item's expected tools that were
     called, `missing_tools` the ones that were not; None and () when the
@@ -228,8 +260,9 @@ _AMOUNT = re.compile(
     r"(?P<digits>\d[\d,]*(?:\.\d+)?)"
     r"(?P<close>\))?"
     r"(?:\s*(?P<scale>" + "|".join(p for p, _ in _SCALES) + r"))?"
-    r"(?P<after>\s*(?:%|per\s*cent|percent|[" + _DASHES + r"]\d)|\s+(?:january|february|"
-    r"march|april|may|june|july|august|september|october|november|december)\b)?",
+    r"(?:(?P<percent>\s*(?:%|per\s*cent))"
+    r"|(?P<after>\s*[" + _DASHES + r"]\d|\s+(?:january|february|"
+    r"march|april|may|june|july|august|september|october|november|december)\b))?",
     re.IGNORECASE,
 )
 # A reference, not an amount: "page 362", "Note 4", "p. 29", "FY2025".
@@ -238,6 +271,24 @@ _REFERENCE = re.compile(
 )
 
 _MIN_SIGNIFICANT_FIGURES = 3
+
+_CALENDAR_YEAR = re.compile(r"(?:19|20)\d\d")
+
+# An explicit statement that the answer is not in the Reports: "could not
+# find", "is not disclosed", "no information on", "not among the ingested
+# Reports". A refusal that never says so is an evasion, not a correct answer.
+_NOT_FOUND = re.compile(
+    r"\b(?:could|can|did|does|do|was|is|are|were)\s*(?:not|n['’]t)\s+"
+    r"(?:find|locate|see|identify|contain|include|cover|disclose|report|have|hold|mention|"
+    r"(?:be\s+)?(?:found|located|available|disclosed|reported|included|covered|present|"
+    r"among|in\b))"
+    r"|\bcannot\s+(?:find|locate|answer|be\s+(?:found|answered|determined))"
+    r"|\bunable\s+to\s+(?:find|locate|answer|determine|identify)"
+    r"|\bnot\s+(?:found|available|disclosed|reported|present|among|in\s+the\s+(?:corpus|"
+    r"ingested|available|provided))"
+    r"|\bno\s+(?:information|data|record|figure|mention|disclosure|such|relevant|report)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -250,6 +301,8 @@ class _Figure:
     significant: int
     signed: bool
     marked: bool
+    percent: bool
+    text: str
 
 
 def _scale_of(word: str | None) -> float | None:
@@ -261,8 +314,34 @@ def _scale_of(word: str | None) -> float | None:
     return None
 
 
-def _headline_figures(text: str) -> list[_Figure]:
-    """The answer's amounts in order: the marked ones when there are any."""
+def _unit_kind(unit: str) -> str:
+    """PERCENT, RATIO, or "INR" for every rupee unit (rescalable into each other)."""
+    return unit if unit in (PERCENT, RATIO) else "INR"
+
+
+def _headline_figures(text: str, unit: str) -> list[_Figure]:
+    """The answer's candidate figures for a gold value in `unit`, in order: a
+    percentage for a percent gold, an unmarked number for a ratio, and for a
+    rupee gold an amount -- the marked ones when there are any."""
+    figures = _figures(text)
+    if unit == PERCENT:
+        return [f for f in figures if f.percent]
+    amounts = [f for f in figures if not f.percent]
+    if unit == RATIO:
+        return [f for f in amounts if not f.marked]
+    marked = [f for f in amounts if f.marked]
+    return marked or amounts
+
+
+def _asserted_figures(text: str) -> list[_Figure]:
+    """Every figure the answer states, marked or not, percentages included,
+    except a bare calendar year ("as at 31 March 2026"), which asserts
+    nothing about an amount."""
+    return [f for f in _figures(text) if not _CALENDAR_YEAR.fullmatch(f.text)]
+
+
+def _figures(text: str) -> list[_Figure]:
+    """Every figure in `text`, in order, references excluded."""
     figures: list[_Figure] = []
     for m in _AMOUNT.finditer(text):
         if m.group("after") or _REFERENCE.search(text[: m.start()]):
@@ -283,13 +362,15 @@ def _headline_figures(text: str) -> list[_Figure]:
             significant=len(digits.replace(",", "").replace(".", "").lstrip("0")),
             signed=bracketed or minus,
             marked=bool(m.group("currency")) or scale is not None,
+            percent=bool(m.group("percent")),
+            text=m.group(0).strip(),
         ))
-    marked = [f for f in figures if f.marked]
-    return marked or figures
+    return figures
 
 
 def _matches(figure: _Figure, gold: GoldValue) -> bool:
-    gold_scale = UNIT_SCALES[gold.unit]
+    # Percent and ratio gold are dimensionless: never rescaled.
+    gold_scale = UNIT_SCALES.get(gold.unit, 1.0)
     ratio = (figure.scale or gold_scale) / gold_scale
     value = figure.amount * ratio
     # The answer's own rounding, if it kept enough figures to mean something.
@@ -353,24 +434,41 @@ def _score_item(item: BenchmarkItem, answer: EndpointAnswer) -> ItemScore:
     gold_pages = {(e.doc_key, e.page) for e in item.gold.evidence}
     valid = sum((c.doc_key, c.page) in gold_pages for c in answer.citations)
 
+    # An unanswerable item has no gold evidence, so no citation can be valid
+    # and completion cannot demand one: a correct refusal is the whole task.
+    needs_citation = item.gold.answerable
+
     def score(status: ItemStatus, reason: str = "") -> ItemScore:
         return ItemScore(
             item_id=item.id, kind=item.kind, status=status, reason=reason,
             citations=len(answer.citations), valid_citations=valid,
-            supported=valid > 0, completed=status == "correct" and valid > 0,
+            supported=valid > 0,
+            completed=status == "correct" and (valid > 0 or not needs_citation),
         )
 
     if answer.error is not None or answer.answer is None:
         return score("failed", answer.error or "no answer returned")
-    # Each gold value must be matched by a DIFFERENT headline figure.
-    unclaimed = _headline_figures(answer.answer)[: len(item.gold.values)]
+    if not item.gold.answerable:
+        asserted = _asserted_figures(answer.answer)
+        if asserted:
+            return score("wrong", f"asserted a figure the Reports do not hold: {asserted[0].text}")
+        if not _NOT_FOUND.search(answer.answer):
+            return score("wrong", "no statement that the information was not found")
+        return score("correct")
+    # Each gold value must be matched by a DIFFERENT headline figure. Gold of
+    # one unit kind (rupees, percent, ratio) draws on its own headline
+    # figures, so a margin's inputs never crowd out the margin itself.
     missing: list[GoldValue] = []
-    for gold in item.gold.values:
-        hit = next((f for f in unclaimed if _matches(f, gold)), None)
-        if hit is None:
-            missing.append(gold)
-        else:
-            unclaimed.remove(hit)
+    for unit_kind in dict.fromkeys(_unit_kind(g.unit) for g in item.gold.values):
+        golds = [g for g in item.gold.values if _unit_kind(g.unit) == unit_kind]
+        unclaimed = _headline_figures(answer.answer, unit_kind)[: len(golds)]
+        for gold in golds:
+            hit = next((f for f in unclaimed if _matches(f, gold)), None)
+            if hit is None:
+                missing.append(gold)
+            else:
+                unclaimed.remove(hit)
+    missing.sort(key=item.gold.values.index)
     if missing:
         return score("wrong", "; ".join(f"{g.value:g} {g.unit} not stated" for g in missing))
     return score("correct")
