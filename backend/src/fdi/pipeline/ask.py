@@ -1,7 +1,8 @@
 """RT-8's agent loop: answer_question(question, ctx, agent_client,
 max_rounds=5) -> {answer, citations, tool_trace}. Plans (agent_client.
 complete), executes (execute_tool against ctx's real injected services),
-feeds results back, repeats up to max_rounds, then either returns the
+feeds results back (each bounded -- tool_message_content; the trace keeps
+the full result), repeats up to max_rounds, then either returns the
 LLM's final content or a locally-built best-effort answer on exhaustion
 (design spec decision 12 -- no extra "force a final answer" LLM call)."""
 
@@ -11,7 +12,7 @@ from collections.abc import Mapping
 
 import structlog
 
-from fdi.core.agent import dedup_citations, extract_citations
+from fdi.core.agent import dedup_citations, extract_citations, tool_message_content
 from fdi.pipeline.agent import AgentClient
 from fdi.pipeline.agent_tools import TOOL_SCHEMAS, AgentContext, execute_tool
 from fdi.platform.db.repository import RegistryRepository
@@ -75,7 +76,7 @@ async def answer_question(
             raw_citations.extend(extract_citations(tc.name, tc.arguments, result))
             messages.append({
                 "role": "tool", "tool_call_id": tc.id,
-                "content": json.dumps(result, default=str),
+                "content": tool_message_content(result),
             })
 
     log.warning("ask.max_rounds_exhausted", max_rounds=max_rounds)
