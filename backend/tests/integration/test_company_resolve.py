@@ -58,13 +58,11 @@ async def test_an_alias_resolves_to_the_company_and_its_reports_newest_fiscal_ye
 ) -> None:
     name, cin = unique_name(), fresh_cin()
     alias = f"{name.split()[0][:4].upper()}{uuid.uuid4().hex[:4].upper()}"
-    # INTEGRATOR (after S2.2 #49): ingest FY2025-26 FIRST and FY2024-25 second,
-    # so only Fiscal-year ordering -- not upload order -- can pass this test,
-    # and also assert each Report's fiscal_year label.
-    fy2425, company_id = await file_report(
-        session_factory, store, lines=annual_report(name, cin, 2025)
+    # The newer Fiscal year is uploaded first, so upload order alone can't pass.
+    fy2526, company_id = await file_report(
+        session_factory, store, lines=annual_report(name, cin, 2026)
     )
-    fy2526, _ = await file_report(session_factory, store, lines=annual_report(name, cin, 2026))
+    fy2425, _ = await file_report(session_factory, store, lines=annual_report(name, cin, 2025))
     async with session_factory() as s:
         await CompanyRegistry(s, store).add_identifier(
             company_id, kind="alias", value=alias, invitee_id=invitee_id
@@ -80,7 +78,10 @@ async def test_an_alias_resolves_to_the_company_and_its_reports_newest_fiscal_ye
     for resolution in (by_alias, by_name):
         assert resolution.company is not None
         assert (resolution.company.id, resolution.company.cin) == (company_id, cin)
-        assert [r.doc_id for r in resolution.reports] == [fy2526, fy2425]
+        assert [(r.doc_id, r.fiscal_year) for r in resolution.reports] == [
+            (fy2526, "FY2025-26"),
+            (fy2425, "FY2024-25"),
+        ]
         assert resolution.reports == listed
 
 
