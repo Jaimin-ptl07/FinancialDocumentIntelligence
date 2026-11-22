@@ -23,8 +23,9 @@ No silent path back in exists.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -215,3 +216,10 @@ def require_access_token(request: Request) -> str:
             detail="The access token is invalid or has expired.",
             headers={"WWW-Authenticate": BEARER_SCHEME},
         ) from None
+
+
+# The caller's (Invitee's) id, for routes that need identity: job ownership,
+# the Company change log, Workspace ownership. FastAPI caches a dependency
+# per request, so this is the same decode the include-level gate already
+# did -- not a second verification.
+CurrentUserDep = Annotated[str, Depends(require_access_token)]

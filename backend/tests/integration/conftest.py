@@ -390,3 +390,76 @@ def acme_report(cin: str) -> list[str]:
         "Acme Widgets Limited had a record year.",
         f"Acme Widgets Limited CIN: {cin} Registered Office: Mumbai",
     ]
+
+
+# --- Invitee-facing API clients and filed Reports (company registry tests) ---
+
+
+@pytest.fixture
+async def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
+    """`make_client(creds)` -> an app client logged in as `creds` (None: not
+    logged in), so one test can read as two different Invitees. Test modules
+    with their own `make_client` override this one."""
+    from contextlib import asynccontextmanager
+
+    from httpx import ASGITransport
+
+    @asynccontextmanager
+    async def _make(creds: tuple[str, str] | None):
+        for key, value in {
+            "FDI_DATABASE_URL": postgres_url,
+            "FDI_BROKER_URL": amqp_url,
+            "FDI_RESULT_BACKEND": redis_url,
+            "FDI_S3_ENDPOINT": minio_endpoint,
+            "FDI_S3_ACCESS_KEY": "minioadmin",
+            "FDI_S3_SECRET_KEY": "minioadmin",
+            "FDI_S3_BUCKET": "test-artifacts",
+            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
+        }.items():
+            monkeypatch.setenv(key, value)
+        get_settings.cache_clear()
+
+        from fdi.api.app import create_app
+
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                if creds is not None:
+                    await authenticate(client, creds)
+                yield client
+
+    return _make
+
+
+@pytest.fixture
+async def another_invitee(session_factory) -> tuple[str, str]:
+    """A second Invitee's (email, password), beside `invitee`."""
+    from fdi.platform.db.repository import UserRepository
+    from fdi.platform.security import hash_password
+
+    email = f"invitee-{uuid.uuid4().hex}@example.test"
+    async with session_factory() as s:
+        await UserRepository(s).create(email=email, password_hash=hash_password(INVITEE_PASSWORD))
+        await s.commit()
+    return email, INVITEE_PASSWORD
+
+
+async def file_report(session_factory, store) -> dict[str, str]:
+    """Ingest an Acme Report under a fresh CIN and file it under its Company
+    by the real path (`CompanyRegistry.resolve_report`)."""
+    from fdi.pipeline.companies import CompanyRegistry
+
+    cin = fresh_cin()
+    doc_key = f"acme-{uuid.uuid4()}"
+    doc_id = await ingest(session_factory, store, doc_key=doc_key, lines=acme_report(cin))
+    async with session_factory() as s:
+        link = await CompanyRegistry(s, store).resolve_report(doc_id)
+        await s.commit()
+    assert link.company_id is not None
+    return {"cin": cin, "doc_key": doc_key, "doc_id": doc_id, "company_id": link.company_id}
+
+
+@pytest.fixture
+async def filed_report(session_factory, store) -> dict[str, str]:
+    return await file_report(session_factory, store)

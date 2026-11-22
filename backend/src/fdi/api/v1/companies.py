@@ -6,12 +6,12 @@ added through Workspaces (#16). All reads go through
 `fdi.pipeline.companies.CompanyRegistry`, never the tables."""
 
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel
 
-from fdi.api.auth import require_access_token
+from fdi.api.auth import CurrentUserDep
 from fdi.api.deps import SessionDep, StoreDep
 from fdi.pipeline.companies import (
     ChangeView,
@@ -25,9 +25,6 @@ from fdi.pipeline.companies import (
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
-# The acting Invitee, for the change log. The include-level gate already
-# decoded the token; FastAPI serves this from the same per-request cache.
-InviteeDep = Annotated[str, Depends(require_access_token)]
 
 
 class CompanyOut(BaseModel):
@@ -46,6 +43,8 @@ class ReportOut(BaseModel):
     version: int | None
     filename: str | None
     fiscal_year: str | None
+    fiscal_year_confidence: str | None
+    fiscal_year_reason: str | None
     period_start: date | None
     period_end: date | None
     report_type: str | None
@@ -68,7 +67,9 @@ def _company_out(c: CompanyView) -> CompanyOut:
 def _report_out(r: ReportView) -> ReportOut:
     return ReportOut(
         doc_id=r.doc_id, doc_key=r.doc_key, version=r.version, filename=r.filename,
-        fiscal_year=r.fiscal_year, period_start=r.period_start, period_end=r.period_end,
+        fiscal_year=r.fiscal_year, fiscal_year_confidence=r.fiscal_year_confidence,
+        fiscal_year_reason=r.fiscal_year_reason,
+        period_start=r.period_start, period_end=r.period_end,
         report_type=r.report_type, link_status=r.link_status, link_method=r.link_method,
         bases_present=list(r.bases_present), processing_status=r.processing_status,
     )
@@ -153,7 +154,7 @@ def _not_found(company_id: str) -> HTTPException:
 
 @router.post("", response_model=CompanyOut, status_code=status.HTTP_201_CREATED)
 async def create_company(
-    body: CompanyIn, session: SessionDep, store: StoreDep, invitee_id: InviteeDep
+    body: CompanyIn, session: SessionDep, store: StoreDep, invitee_id: CurrentUserDep
 ) -> CompanyOut:
     """Add a Company by hand. A Report ingested later that prints this CIN is
     filed under it. 409 when the CIN already has a Company."""
@@ -170,7 +171,7 @@ async def create_company(
 @router.patch("/{company_id}", response_model=CompanyOut)
 async def update_company(
     company_id: str, body: CompanyPatch, session: SessionDep, store: StoreDep,
-    invitee_id: InviteeDep,
+    invitee_id: CurrentUserDep,
 ) -> CompanyOut:
     try:
         company = await CompanyRegistry(session, store).update_company(
@@ -202,7 +203,7 @@ async def list_identifiers(
 )
 async def add_identifier(
     company_id: str, body: IdentifierIn, session: SessionDep, store: StoreDep,
-    invitee_id: InviteeDep,
+    invitee_id: CurrentUserDep,
 ) -> IdentifierOut:
     """Add an NSE symbol, BSE code, ISIN or alias. 409 when any Company
     already has that (type, value)."""
@@ -223,7 +224,7 @@ async def add_identifier(
 )
 async def remove_identifier(
     company_id: str, identifier_id: str, session: SessionDep, store: StoreDep,
-    invitee_id: InviteeDep,
+    invitee_id: CurrentUserDep,
 ) -> Response:
     removed = await CompanyRegistry(session, store).remove_identifier(
         company_id, identifier_id, invitee_id=invitee_id

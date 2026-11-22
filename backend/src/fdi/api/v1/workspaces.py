@@ -6,12 +6,11 @@ same 404 as a missing one -- never 403, which would confirm it exists. All
 of it goes through `fdi.pipeline.workspaces.WorkspaceService`, never the
 tables; the Company routes never consult Workspaces."""
 
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from fdi.api.auth import require_access_token
+from fdi.api.auth import CurrentUserDep
 from fdi.api.deps import SessionDep
 from fdi.pipeline.workspaces import (
     UnknownCompany,
@@ -21,8 +20,6 @@ from fdi.pipeline.workspaces import (
 )
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
-
-CurrentUserDep = Annotated[str, Depends(require_access_token)]
 
 
 class WorkspaceIn(BaseModel):

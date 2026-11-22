@@ -344,6 +344,32 @@ def test_tcs_style_month_first_date_and_remc_period_ended_on() -> None:
     )
 
 
+def test_an_interim_or_later_period_does_not_move_the_fiscal_year_end() -> None:
+    # The Directors' Report, printed before the statements, mentions later
+    # and interim periods; only the 31 March year end is the Report's.
+    ast, prov = _report(
+        (
+            "Directors' Report",
+            [
+                "Revenue for the period ended 30th June 2026 grew 8%.",
+                "Results for the nine months period ended 31st December 2026 follow.",
+            ],
+            40,
+        ),
+        (
+            "Statement of Profit and Loss for the year ended 31st March 2026",
+            ["Revenue from operations 2,55,324"],
+            101,
+        ),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert (result["period_start"], result["period_end"]) == ("2025-04-01", "2026-03-31")
+    assert result["fiscal_year_candidates"][0]["evidence"]["page"] == 101
+
+
 def test_a_half_year_is_not_the_reports_fiscal_year() -> None:
     ast, prov = _report(
         ("Annual Report 2025-26", [], 1),

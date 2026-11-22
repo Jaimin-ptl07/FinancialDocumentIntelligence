@@ -173,6 +173,11 @@ class ReportView:
     version: int | None
     filename: str | None
     fiscal_year: str | None
+    # How sure the issuer stage is of `fiscal_year` ("high", "low" when the
+    # Report contradicts itself, "none" when no year is printed) and why --
+    # read from the issuer artifact, so an open Fiscal year is explained.
+    fiscal_year_confidence: str | None
+    fiscal_year_reason: str | None
     period_start: date | None
     period_end: date | None
     report_type: str | None
@@ -180,6 +185,10 @@ class ReportView:
     link_method: str | None
     bases_present: tuple[str, ...]
     processing_status: str
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _company_view(company: Company) -> CompanyView:
@@ -408,10 +417,14 @@ class CompanyRegistry:
     async def _report_view(self, doc: Document) -> ReportView:
         registry = RegistryRepository(self._s)
         basis = await read_artifact(registry, self._store, doc.id, BasisStage.name)
+        issuer = await read_artifact(registry, self._store, doc.id, IssuerStage.name) or {}
         latest = {stage: run.status for stage, run in (await registry.latest_runs(doc.id)).items()}
         return ReportView(
             doc_id=doc.id, doc_key=doc.doc_key, version=doc.version, filename=doc.filename,
-            fiscal_year=doc.fiscal_year, period_start=doc.period_start,
+            fiscal_year=doc.fiscal_year,
+            fiscal_year_confidence=_str_or_none(issuer.get("fiscal_year_confidence")),
+            fiscal_year_reason=_str_or_none(issuer.get("fiscal_year_reason")),
+            period_start=doc.period_start,
             period_end=doc.period_end, report_type=doc.report_type,
             link_status=doc.link_status, link_method=doc.link_method,
             bases_present=tuple(bases_present(basis)) if basis is not None else (),

@@ -252,8 +252,8 @@ def _evidence(occurrence: Mapping[str, object]) -> dict[str, object]:
 #
 # * the statements: "for the year ended 31st March 2026" -- the audited
 #   period. Statements also print the comparative year ("... 31st March
-#   2025"), and a Report never reports a period after its own, so the LATEST
-#   year end printed is the Report's;
+#   2025"), and a Report never reports a year after its own, so the LATEST
+#   31 March year end printed is the Report's;
 # * the cover: "Annual Report 2025-26" -- on the earliest page that prints it
 #   (running headers repeat it; the cover is the first).
 #
@@ -282,10 +282,12 @@ _DATE = (
     rf"|{_MONTH}\s+{_ORDINAL},?\s+(\d{{4}})"
     r"|(\d{1,2})[./-](\d{1,2})[./-](\d{4}))"
 )
-# "year ended" / "period ended (on)" -- not "half year ended" (an interim
-# period) and not "year ending" (a future one: outlook, not the audit).
+# "year ended" / "period ended (on)" -- not an interim period ("half year
+# ended", "nine months period ended", "quarter ended") and not "year ending"
+# (a future one: outlook, not the audit).
 _YEAR_ENDED_RE = re.compile(
-    rf"(?<!half )(?<!half-)\b(?:financial\s+)?(?:year|period)\s+ended\s+(?:on\s+)?{_DATE}",
+    r"(?<!half )(?<!half-)(?<!months )(?<!quarter )"
+    rf"\b(?:financial\s+)?(?:year|period)\s+ended\s+(?:on\s+)?{_DATE}",
     re.IGNORECASE,
 )
 _COVER_RE = re.compile(
@@ -356,7 +358,7 @@ def _fiscal_year(ast: Mapping[str, object], pages: Mapping[str, int]) -> dict[st
                     "statements", _period_ending(end), node_id, page,
                     _passage(text, match.start(), match.end()),
                 )
-                statements.setdefault(str(candidate["fiscal_year"]), candidate)
+                statements.setdefault(end.isoformat(), candidate)
             for match in _COVER_RE.finditer(text):
                 period = _cover_period(match)
                 if period is not None:
@@ -367,7 +369,14 @@ def _fiscal_year(ast: Mapping[str, object], pages: Mapping[str, int]) -> dict[st
                         )
                     )
 
-    by_end = sorted(statements.values(), key=lambda c: str(c["period_end"]), reverse=True)
+    # A Company's Fiscal year closes on 31 March (Companies Act 2013, s.2(41));
+    # any other end printed -- a later quarter in the Directors' Report, say --
+    # is not the Report's own unless no 31 March end is printed at all.
+    by_end = sorted(
+        statements.values(),
+        key=lambda c: (str(c["period_end"]).endswith("-03-31"), str(c["period_end"])),
+        reverse=True,
+    )
     # The Report's own title is the one it prints most (cover, running
     # headers); a one-off citation of an older Report loses. Ties go to the
     # earliest page, evidence is the earliest printing.

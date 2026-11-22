@@ -60,7 +60,7 @@ def upgrade() -> None:
             "company_id",
             sa.String(36),
             sa.ForeignKey(
-                "company.id", name="fk_company_change_company_id", ondelete="CASCADE"
+                "company.id", name="fk_company_change_company_id", ondelete="RESTRICT"
             ),
             nullable=False,
         ),

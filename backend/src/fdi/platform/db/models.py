@@ -120,13 +120,14 @@ class CompanyIdentifier(Base):
 
 class CompanyChange(Base):
     """One manual change to a Company -- who made it and when (S2.4). Append
-    only: a removed identifier's row is gone, its removal stays here."""
+    only: a removed identifier's row is gone, its removal stays here -- and a
+    Company with a history cannot be deleted out from under it (RESTRICT)."""
 
     __tablename__ = "company_change"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     company_id: Mapped[str] = mapped_column(
-        ForeignKey("company.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("company.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     invitee_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
     action: Mapped[str] = mapped_column(String(32), nullable=False)

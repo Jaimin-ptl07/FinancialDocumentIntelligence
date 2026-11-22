@@ -2,11 +2,7 @@
 
 Any Invitee may create a Company, rename it, and add or remove the aliases
 and exchange identifiers it is known by; every such change records who made
-it and when. Search finds a Company by any of those names. The client and
-second-Invitee fixtures are the S2.1 API tests' own, imported (hence F811:
-ruff reads each fixture parameter as a redefinition of the import)."""
-
-# ruff: noqa: F811
+it and when. Search finds a Company by any of those names."""
 
 import uuid
 
@@ -14,7 +10,6 @@ import pytest
 
 from fdi.pipeline.companies import CompanyRegistry
 from tests.integration.conftest import acme_report, fresh_cin, ingest
-from tests.integration.test_companies_api import another_invitee, make_client  # noqa: F401
 
 pytestmark = pytest.mark.integration
 

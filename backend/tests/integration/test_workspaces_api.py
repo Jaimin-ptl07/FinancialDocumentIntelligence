@@ -6,80 +6,13 @@ Invitee still sees every Company and its Reports. Someone else's Workspace is
 the same 404 as no Workspace, so its existence is not revealed."""
 
 import uuid
-from contextlib import asynccontextmanager
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
-from fdi.pipeline.companies import CompanyRegistry
-from fdi.platform.config import get_settings
-from fdi.platform.db.repository import UserRepository
-from fdi.platform.security import hash_password
-from tests.conftest import TEST_SIGNING_SECRET
-from tests.integration.conftest import (
-    INVITEE_PASSWORD,
-    acme_report,
-    authenticate,
-    fresh_cin,
-    ingest,
-)
+from tests.integration.conftest import file_report
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture
-async def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
-    @asynccontextmanager
-    async def _make(creds: tuple[str, str] | None):
-        for key, value in {
-            "FDI_DATABASE_URL": postgres_url,
-            "FDI_BROKER_URL": amqp_url,
-            "FDI_RESULT_BACKEND": redis_url,
-            "FDI_S3_ENDPOINT": minio_endpoint,
-            "FDI_S3_ACCESS_KEY": "minioadmin",
-            "FDI_S3_SECRET_KEY": "minioadmin",
-            "FDI_S3_BUCKET": "test-artifacts",
-            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
-        }.items():
-            monkeypatch.setenv(key, value)
-        get_settings.cache_clear()
-
-        from fdi.api.app import create_app
-
-        app = create_app()
-        async with app.router.lifespan_context(app):
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as client:
-                if creds is not None:
-                    await authenticate(client, creds)
-                yield client
-
-    return _make
-
-
-@pytest.fixture
-async def another_invitee(session_factory) -> tuple[str, str]:
-    email = f"invitee-{uuid.uuid4().hex}@example.test"
-    async with session_factory() as s:
-        await UserRepository(s).create(email=email, password_hash=hash_password(INVITEE_PASSWORD))
-        await s.commit()
-    return email, INVITEE_PASSWORD
-
-
-async def _file_report(session_factory, store) -> dict[str, str]:
-    cin = fresh_cin()
-    doc_key = f"acme-{uuid.uuid4()}"
-    doc_id = await ingest(session_factory, store, doc_key=doc_key, lines=acme_report(cin))
-    async with session_factory() as s:
-        link = await CompanyRegistry(s, store).resolve_report(doc_id)
-        await s.commit()
-    assert link.company_id is not None
-    return {"cin": cin, "doc_key": doc_key, "doc_id": doc_id, "company_id": link.company_id}
-
-
-@pytest.fixture
-async def filed_report(session_factory, store) -> dict[str, str]:
-    return await _file_report(session_factory, store)
 
 
 async def test_an_invitee_creates_a_workspace_and_finds_it_in_their_list(
@@ -103,8 +36,8 @@ async def test_an_invitee_creates_a_workspace_and_finds_it_in_their_list(
 async def test_an_invitee_adds_and_removes_companies(
     make_client, invitee, session_factory, store
 ) -> None:
-    acme = await _file_report(session_factory, store)
-    other = await _file_report(session_factory, store)
+    acme = await file_report(session_factory, store)
+    other = await file_report(session_factory, store)
     async with make_client(invitee) as client:
         ws = (await client.post("/api/v1/workspaces", json={"name": "Watchlist"})).json()
         base = f"/api/v1/workspaces/{ws['id']}/companies"
@@ -174,7 +107,7 @@ async def test_an_invitee_without_workspaces_still_sees_every_company_and_report
     make_client, invitee, another_invitee, filed_report, session_factory, store
 ) -> None:
     company_id = filed_report["company_id"]
-    elsewhere = await _file_report(session_factory, store)
+    elsewhere = await file_report(session_factory, store)
     # The owner's only Workspace holds some other Company, leaving this one out.
     async with make_client(invitee) as owner:
         ws = (await owner.post("/api/v1/workspaces", json={"name": "Elsewhere"})).json()
