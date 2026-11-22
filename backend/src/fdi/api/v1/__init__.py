@@ -8,6 +8,8 @@ every other protected route."""
 from fastapi import APIRouter
 
 from fdi.api.v1.companies import router as companies_router
+from fdi.api.v1.workspaces import router as workspaces_router
 
 v1_router = APIRouter(prefix="/api/v1")
 v1_router.include_router(companies_router)
+v1_router.include_router(workspaces_router)
