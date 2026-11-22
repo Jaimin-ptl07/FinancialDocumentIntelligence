@@ -2,6 +2,7 @@
 calls a billed endpoint without an explicit item limit."""
 
 import json
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import replace
@@ -11,8 +12,15 @@ import httpx
 import pytest
 
 from fdi.core.answer_scoring import Citation, EndpointAnswer, EvalReport, score_run
-from fdi.core.benchmark import Benchmark, BenchmarkItem, Evidence, Gold, GoldValue
-from fdi.core.eval_cost import summarise_cost
+from fdi.core.benchmark import (
+    ISSUER_DOC_KEYS,
+    Benchmark,
+    BenchmarkItem,
+    Evidence,
+    Gold,
+    GoldValue,
+)
+from fdi.core.eval_cost import ItemCost, ItemUsage, summarise_cost
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
@@ -41,16 +49,39 @@ def test_the_committed_fact_lookup_items_are_exactly_what_ground_truth_generates
     assert committed == dump(generate_fact_lookup())
 
 
+def _groundtruth() -> list[dict[str, object]]:
+    return [json.loads(p.read_text(encoding="utf-8"))
+            for p in (BENCHMARK_DIR.parents[1]).glob("*.json")]
+
+
 def test_the_committed_benchmark_loads_with_one_item_per_ground_truth_value() -> None:
-    gt_values = sum(
-        len(json.loads(p.read_text(encoding="utf-8"))["values"])
-        for p in (BENCHMARK_DIR.parents[1]).glob("*.json")
-    )
+    gt_values = sum(len(gt["values"]) for gt in _groundtruth())  # type: ignore[arg-type]
     bench = load_benchmark(BENCHMARK_DIR)
     assert bench.version == "v0"
-    assert len(bench.items) == gt_values
-    assert all(item.kind == "fact_lookup" for item in bench.items)
+    assert sum(item.kind == "fact_lookup" for item in bench.items) == gt_values
+    assert {item.kind for item in bench.items} == {
+        "fact_lookup", "cross_company", "calculation", "unanswerable",
+    }
     assert not any("RITES" in item.question for item in bench.items)
+
+
+def test_hand_keyed_items_point_only_at_ground_truth_pages() -> None:
+    """Hand-keyed gold rests on `docs/groundtruth/`: every evidence location
+    is a page a ground-truth file was read from, and every cross_company
+    figure is a ground-truth value printed on that Report's page."""
+    printed: dict[tuple[str, int], set[float]] = {}
+    for gt in _groundtruth():
+        page = re.search(r"PDF page (\d+)", str(gt["_source"]))
+        assert page is not None
+        key = (ISSUER_DOC_KEYS[str(gt["issuer"])], int(page[1]))
+        printed.setdefault(key, set()).update(gt["values"].values())  # type: ignore[attr-defined]
+
+    hand_keyed = [i for i in load_benchmark(BENCHMARK_DIR).items if i.kind != "fact_lookup"]
+    for item in hand_keyed:
+        assert {(e.doc_key, e.page) for e in item.gold.evidence} <= set(printed), item.id
+    for item in (i for i in hand_keyed if i.kind == "cross_company"):
+        on_pages = set().union(*(printed[(e.doc_key, e.page)] for e in item.gold.evidence))
+        assert {v.value for v in item.gold.values} <= on_pages, item.id
 
 
 def test_run_refuses_to_call_ask_without_a_limit_or_confirmation(
@@ -204,6 +235,36 @@ def test_the_markdown_summary_has_a_completion_table_and_lists_unsupported_answe
     unsupported = summary.split("## Correct but not completed")[1].split("\n## ")[0]
     assert "`q2`" in unsupported
     assert "`q1`" not in unsupported
+
+
+def test_every_report_metric_is_broken_down_by_kind() -> None:
+    """Accuracy, completion, latency AND spend each get a row per item kind."""
+    refusal = BenchmarkItem(id="u1", kind="unanswerable", question="Infosys's revenue?",
+                            gold=Gold(answerable=False))
+    bench = Benchmark(version="v-test", items=(_ITEM, refusal))
+    report = score_run(bench, [
+        EndpointAnswer(item_id="q1", answer="₹2,71,423 crore",
+                       citations=(Citation(doc_key="tcs-2025-26", page=362),)),
+        EndpointAnswer(item_id="u1", answer="Infosys is not in the available Reports."),
+    ])
+    cost = summarise_cost([
+        ItemCost("q1", "fact_lookup", 2.0, ItemUsage(1_000, 50, 0.30)),
+        ItemCost("u1", "unanswerable", 1.0, ItemUsage(400, 20, 0.10)),
+    ], {"q1", "u1"})
+
+    body = json.loads(dump(report_json(report, {}, {}, cost)))
+    assert set(body["by_kind"]) == {"fact_lookup", "unanswerable"}
+    assert body["by_kind"]["unanswerable"]["completed"] == 1
+    assert body["cost"]["spend_by_kind"]["unanswerable"]["cost_inr"] == pytest.approx(0.10)
+
+    summary = render_markdown(report, {}, {}, cost)
+    assert "| unanswerable | 1 | 1 | 0 | 0 | 100.0% |" in summary
+    assert "| unanswerable | 1 | 1 | 100.0% | 0 | 0.0% | 0 | 0 | 0.0% |" in summary
+    assert "| unanswerable | 1 | 1.00 | 1.00 |" in summary
+    assert ("| kind | input tokens | output tokens | cost | completed "
+            "| cost per completed task |") in summary
+    assert "| unanswerable | 400 | 20 | INR 0.1000 | 1 | INR 0.1000 |" in summary
+    assert "| **overall** | 1400 | 70 | INR 0.4000 | 2 | INR 0.2000 |" in summary
 
 
 async def test_an_ask_result_with_no_citations_key_has_no_citations() -> None:

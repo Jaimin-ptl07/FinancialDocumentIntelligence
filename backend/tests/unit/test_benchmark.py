@@ -78,7 +78,7 @@ def test_a_well_formed_item_parses() -> None:
          "item 'fact_lookup:TCS:PATR': gold value #0 'value' must be a number"),
         (_body(_gold(values=[{"value": 1.0, "unit": "USD"}])),
          "item 'fact_lookup:TCS:PATR': gold value #0 unknown unit 'USD' "
-         "(expected one of INR, INR crore, INR lakh)"),
+         "(expected one of INR, INR crore, INR lakh, percent, ratio)"),
         (_body(_gold(values=[{"value": 1.0, "unit": "INR", "tolerance": -1}])),
          "item 'fact_lookup:TCS:PATR': gold value #0 'tolerance' must be a number >= 0"),
         (_body(_gold(evidence=[{"doc_key": "tcs-2025-26", "page": 0}])),
@@ -197,4 +197,118 @@ def test_ground_truth_that_cannot_make_an_item_is_rejected(
 ) -> None:
     with pytest.raises(BenchmarkError) as exc:
         fact_lookup_benchmark("v0", [{**_TCS_GT, **patch}], _LABELS)
+    assert str(exc.value) == reason
+
+
+# --------------------------------------------------------------------------
+# Per-kind field rules: each kind names the fields it cannot be scored without.
+# --------------------------------------------------------------------------
+
+_CROSS = {
+    "id": "cross_company:q1",
+    "kind": "cross_company",
+    "question": "Compare TCS's and RIL's basic EPS.",
+    "doc_keys": ["tcs-2025-26", "ril-2025-26"],
+    "gold": {
+        "answerable": True,
+        "values": [{"value": 136.01, "unit": "INR"}, {"value": 19.59, "unit": "INR"}],
+        "evidence": [{"doc_key": "tcs-2025-26", "page": 167},
+                     {"doc_key": "ril-2025-26", "page": 145}],
+    },
+}
+_CALC = {
+    "id": "calculation:q1",
+    "kind": "calculation",
+    "question": "What was TCS's total tax expense?",
+    "doc_keys": ["tcs-2025-26"],
+    "gold": {
+        "answerable": True,
+        "formula": "CT + DT = 16388 + (-355) = 16033",
+        "values": [{"value": 16033.0, "unit": "INR crore"}],
+        "evidence": [{"doc_key": "tcs-2025-26", "page": 167}],
+    },
+}
+_UNANSWERABLE = {
+    "id": "unanswerable:q1",
+    "kind": "unanswerable",
+    "question": "What was Infosys's revenue for FY2025-26?",
+    "gold": {"answerable": False},
+}
+# No Company has two ingested Reports yet (S2); the schema accepts the kind now.
+_MULTI_YEAR = {
+    "id": "multi_year:q1",
+    "kind": "multi_year",
+    "question": "How did TCS's basic EPS change from FY2025-26 to FY2026-27?",
+    "doc_keys": ["tcs-2025-26", "tcs-2026-27"],
+    "gold": {
+        "answerable": True,
+        "values": [{"value": 136.01, "unit": "INR"}, {"value": 140.0, "unit": "INR"}],
+        "evidence": [{"doc_key": "tcs-2025-26", "page": 167}],
+    },
+}
+
+
+def _patched(base: dict[str, object], gold: dict[str, object] | None = None,
+             **patch: object) -> dict[str, object]:
+    """`base` with top-level fields replaced and gold fields merged; a gold
+    field patched to None is removed."""
+    item = copy.deepcopy(base)
+    item.update(patch)
+    if gold is not None:
+        merged = copy.deepcopy(item["gold"])
+        assert isinstance(merged, dict)
+        merged.update(gold)
+        item["gold"] = {k: v for k, v in merged.items() if v is not None}
+    return item
+
+
+def test_well_formed_items_of_every_hand_keyed_kind_parse() -> None:
+    bench = parse_benchmark(_body(_CROSS, _CALC, _UNANSWERABLE, _MULTI_YEAR))
+    cross, calc, unanswerable, multi = bench.items
+    assert cross.doc_keys == ("tcs-2025-26", "ril-2025-26")
+    assert [v.value for v in cross.gold.values] == [136.01, 19.59]
+    assert calc.gold.formula == "CT + DT = 16388 + (-355) = 16033"
+    assert unanswerable.gold.answerable is False
+    assert unanswerable.gold.values == ()
+    assert multi.kind == "multi_year"
+    assert len(multi.gold.values) == 2
+
+
+@pytest.mark.parametrize(
+    ("item", "reason"),
+    [
+        (_patched(_CROSS, doc_keys=["tcs-2025-26"]),
+         "item 'cross_company:q1': a cross_company item needs at least two doc_keys "
+         "(one per Company compared)"),
+        (_patched(_CROSS, doc_keys=["tcs-2025-26", "tcs-2025-26"]),
+         "item 'cross_company:q1': a cross_company item needs at least two doc_keys "
+         "(one per Company compared)"),
+        (_patched(_CROSS, gold={"values": []}),
+         "item 'cross_company:q1': a cross_company item needs at least one gold value"),
+        (_patched(_CROSS, gold={"answerable": False}),
+         "item 'cross_company:q1': a cross_company item must be answerable"),
+        (_patched(_CALC, gold={"formula": None}),
+         "item 'calculation:q1': a calculation item must record the 'gold.formula' "
+         "its gold value was derived by"),
+        (_patched(_CALC, gold={"formula": " "}),
+         "item 'calculation:q1': 'gold.formula' must be a non-empty string"),
+        (_patched(_CALC, gold={"values": []}),
+         "item 'calculation:q1': a calculation item needs at least one gold value"),
+        (_patched(_CALC, gold={"answerable": False}),
+         "item 'calculation:q1': a calculation item must be answerable"),
+        (_patched(_UNANSWERABLE, gold={"answerable": True}),
+         "item 'unanswerable:q1': an unanswerable item must have 'gold.answerable' false"),
+        (_patched(_UNANSWERABLE, gold={"values": [{"value": 1.0, "unit": "INR"}]}),
+         "item 'unanswerable:q1': an unanswerable item has no gold values"),
+        (_patched(_UNANSWERABLE, gold={"evidence": [{"doc_key": "tcs-2025-26", "page": 1}]}),
+         "item 'unanswerable:q1': an unanswerable item has no gold evidence"),
+        (_patched(_MULTI_YEAR, gold={"values": []}),
+         "item 'multi_year:q1': a multi_year item needs at least one gold value"),
+    ],
+)
+def test_a_hand_keyed_item_missing_what_its_kind_needs_is_rejected(
+    item: dict[str, object], reason: str
+) -> None:
+    with pytest.raises(BenchmarkError) as exc:
+        parse_benchmark(_body(item))
     assert str(exc.value) == reason

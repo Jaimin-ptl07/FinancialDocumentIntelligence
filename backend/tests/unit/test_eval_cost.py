@@ -49,6 +49,29 @@ def test_cost_per_completed_task_charges_every_item_run_to_the_completed_ones() 
     assert s.cost_per_completed_task_inr == pytest.approx(0.50)
 
 
+def test_tokens_spend_and_cost_per_completed_task_are_broken_down_by_kind() -> None:
+    # Lookups: 0.30 + 0.50 = 0.80 INR, one completed -> 0.80 each.
+    # Unanswerable: 0.10 priced + one unread, none completed -> no per-task cost.
+    items = [
+        _item("f1", "fact_lookup", 1.0, 0.30, (1_000, 50)),
+        _item("f2", "fact_lookup", 1.0, 0.50, (2_000, 70)),
+        _item("u1", "unanswerable", 1.0, 0.10, (400, 20)),
+        _item("u2", "unanswerable", 1.0, None),
+    ]
+    s = summarise_cost(items, completed={"f2"})
+
+    f = s.spend_by_kind["fact_lookup"]
+    assert (f.input_tokens, f.output_tokens, f.items_without_usage, f.completed) == (
+        3_000, 120, 0, 1)
+    assert f.cost_inr == pytest.approx(0.80)
+    assert f.cost_per_completed_task_inr == pytest.approx(0.80)
+    u = s.spend_by_kind["unanswerable"]
+    assert (u.input_tokens, u.output_tokens, u.items_without_usage, u.completed) == (
+        400, 20, 1, 0)
+    assert u.cost_inr == pytest.approx(0.10)
+    assert u.cost_per_completed_task_inr is None
+
+
 def test_nothing_completed_has_no_cost_per_completed_task() -> None:
     s = summarise_cost([_item("a", "fact_lookup", 1.0, 0.30)], completed=set())
     assert s.completed == 0

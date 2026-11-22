@@ -8,6 +8,13 @@ truth itself.) A benchmark file holds
 one item kind; an item is `id`, `kind`, `question`, an optional scope
 (`doc_keys`) and `gold`.
 
+Each kind names the fields it cannot be scored without (`_check_kind`):
+`fact_lookup`, `cross_company`, `calculation` and `multi_year` are answerable
+with at least one gold value; `cross_company` also needs two or more
+`doc_keys`, one per Company compared; `calculation` records the hand
+`gold.formula` its gold was derived by; `unanswerable` has no gold values
+and no gold evidence.
+
 A malformed item is REJECTED at load with a precise reason. `parse_groundtruth`
 skips a bad file instead, but there the cost is a smaller denominator that the
 report still shows; here a typo in a gold value would silently score a correct
@@ -30,6 +37,11 @@ KINDS = frozenset({
 
 # Gold units, in rupees per unit. "INR" is a per-share figure (EPS).
 UNIT_SCALES: Mapping[str, float] = {"INR": 1.0, "INR lakh": 1e5, "INR crore": 1e7}
+# Dimensionless gold, for `calculation` items: a margin or rate in per cent
+# (18.22 means 18.22%), and a simple ratio as a bare number (2.23 times).
+PERCENT = "percent"
+RATIO = "ratio"
+UNITS = frozenset({*UNIT_SCALES, PERCENT, RATIO})
 
 
 class BenchmarkError(ValueError):
@@ -56,9 +68,13 @@ class Evidence:
 
 @dataclass(frozen=True)
 class Gold:
+    """`formula` is how a `calculation` item's gold values were derived by
+    hand from ground-truth values, so the arithmetic can be re-checked."""
+
     answerable: bool
     values: tuple[GoldValue, ...] = ()
     evidence: tuple[Evidence, ...] = ()
+    formula: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,15 +155,41 @@ def _parse_item(item_id: str, raw: Mapping[str, object]) -> BenchmarkItem:
         raise BenchmarkError("'doc_keys' must be a list of non-empty strings")
 
     gold = _parse_gold(raw.get("gold"))
-    if kind == "fact_lookup":
-        if not gold.answerable:
-            raise BenchmarkError("a fact_lookup item must be answerable")
-        if not gold.values:
-            raise BenchmarkError("a fact_lookup item needs at least one gold value")
+    _check_kind(kind, gold, doc_keys)
     return BenchmarkItem(
         id=item_id, kind=kind, question=str(question), gold=gold,
         doc_keys=tuple(str(k) for k in doc_keys),
     )
+
+
+# Kinds whose gold is one or more figures the answer must state.
+_VALUED_KINDS = frozenset({"fact_lookup", "cross_company", "calculation", "multi_year"})
+
+
+def _check_kind(kind: str, gold: Gold, doc_keys: Sequence[object]) -> None:
+    """The fields `kind` cannot be scored without. `research` is not checked
+    here: its required evidence and claims arrive with its own items (S1.5)."""
+    if kind in _VALUED_KINDS:
+        if not gold.answerable:
+            raise BenchmarkError(f"a {kind} item must be answerable")
+        if not gold.values:
+            raise BenchmarkError(f"a {kind} item needs at least one gold value")
+    if kind == "cross_company" and len(set(doc_keys)) < 2:
+        raise BenchmarkError(
+            "a cross_company item needs at least two doc_keys (one per Company compared)"
+        )
+    if kind == "calculation" and gold.formula is None:
+        # Without it nobody can re-check the hand arithmetic the gold rests on.
+        raise BenchmarkError(
+            "a calculation item must record the 'gold.formula' its gold value was derived by"
+        )
+    if kind == "unanswerable":
+        if gold.answerable:
+            raise BenchmarkError("an unanswerable item must have 'gold.answerable' false")
+        if gold.values:
+            raise BenchmarkError("an unanswerable item has no gold values")
+        if gold.evidence:
+            raise BenchmarkError("an unanswerable item has no gold evidence")
 
 
 def _parse_gold(raw: object) -> Gold:
@@ -162,10 +204,14 @@ def _parse_gold(raw: object) -> Gold:
         raise BenchmarkError("'gold.values' must be a list")
     if not isinstance(raw_evidence, list):
         raise BenchmarkError("'gold.evidence' must be a list")
+    formula = raw.get("formula")
+    if formula is not None and not _text(formula):
+        raise BenchmarkError("'gold.formula' must be a non-empty string")
     return Gold(
         answerable=answerable,
         values=tuple(_parse_value(i, v) for i, v in enumerate(raw_values)),
         evidence=tuple(_parse_evidence(i, e) for i, e in enumerate(raw_evidence)),
+        formula=None if formula is None else str(formula),
     )
 
 
@@ -178,8 +224,8 @@ def _parse_value(index: int, raw: object) -> GoldValue:
         raise BenchmarkError(f"{where} 'value' must be a number")
     assert isinstance(value, int | float)
     unit = raw.get("unit")
-    if unit not in UNIT_SCALES:
-        known = ", ".join(sorted(UNIT_SCALES))
+    if unit not in UNITS:
+        known = ", ".join(sorted(UNITS))
         raise BenchmarkError(f"{where} unknown unit {unit!r} (expected one of {known})")
     tolerance = raw.get("tolerance", printed_precision(value))
     if not _number(tolerance) or not isinstance(tolerance, int | float) or tolerance < 0:

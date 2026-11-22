@@ -70,6 +70,7 @@ from fdi.core.eval_cost import (
     ItemUsage,
     LatencySummary,
     SpendEstimate,
+    SpendSummary,
     estimate_spend,
     summarise_cost,
 )
@@ -425,6 +426,15 @@ def render_cost_markdown(
               "", "| kind | items | P50 latency (s) | P95 latency (s) |", "|---|---:|---:|---:|"]
     lines += [latency_row(kind, s) for kind, s in cost.latency_by_kind.items()]
     lines.append(latency_row("**overall**", cost.latency_overall))
+
+    def spend_row(kind: str, s: SpendSummary | CostSummary) -> str:
+        return (f"| {kind} | {s.input_tokens} | {s.output_tokens} | {_inr(s.cost_inr)} "
+                f"| {s.completed} | {_inr(s.cost_per_completed_task_inr)} |")
+
+    lines += ["", "| kind | input tokens | output tokens | cost | completed "
+              "| cost per completed task |", "|---|---:|---:|---:|---:|---:|"]
+    lines += [spend_row(kind, s) for kind, s in cost.spend_by_kind.items()]
+    lines.append(spend_row("**overall**", cost))
     lines += ["", "| item | status | latency (s) | input tokens | output tokens | cost |",
               "|---|---|---:|---:|---:|---:|"]
     for i in report.items:
@@ -473,7 +483,9 @@ def render_markdown(
         "",
         "Completed = every gold value stated AND at least one citation on a gold "
         "evidence page. Only citations carrying a `doc_key` and page can be valid; "
-        "today's /ask table and concept citations carry neither, so they never count.",
+        "today's /ask table and concept citations carry neither, so they never count. "
+        "An unanswerable item has no gold evidence: it completes when it asserts no "
+        "figure and says the information was not found, and its support is always 0.",
         "",
         "| kind | run | completed | completion | supported | evidence support "
         "| citations | valid | citation validity |",
