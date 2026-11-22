@@ -54,6 +54,8 @@ build-backend = "hatchling.build"
 fdi-admin = "fdi.platform.admin_cli:main"
 # The deploy-day data-mirror check and graph/vector replay (T10 runbook).
 fdi-mirror = "fdi.workers.mirror_cli:main"
+# Files already-ingested Reports under their Companies (S2.1, ADR-0003).
+fdi-companies = "fdi.workers.companies_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fdi"]

@@ -18,6 +18,7 @@ from fdi.api.errors import install_error_handlers
 from fdi.api.limits import EXPOSED_HEADERS, RateLimits
 from fdi.api.middleware import CorrelationIdMiddleware
 from fdi.api.routes import public_router, router
+from fdi.api.v1 import v1_router
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.platform.agent import AzureOpenAIAgentClient
@@ -274,6 +275,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(public_router)
     app.include_router(router, dependencies=[Depends(require_access_token)])
+    app.include_router(v1_router, dependencies=[Depends(require_access_token)])
     return app
 
 

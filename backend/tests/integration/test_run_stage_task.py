@@ -130,3 +130,54 @@ async def test_run_stage_async_round_trip(
     store = ArtifactStore(minio_client, bucket="test-artifacts")
     key = artifact_key(doc_id, "ping", 1, root_input_hash(None))
     assert await store.exists(key)
+
+
+@pytest.mark.integration
+async def test_completing_the_issuer_stage_files_the_report_under_its_company(
+    stub_fdi_env: None,
+    session_factory: async_sessionmaker[AsyncSession],
+    minio_client: Minio,
+    postgres_url: str,
+) -> None:
+    """The worker resolves the Report against the company registry as soon as
+    the issuer stage completes -- stages have no Postgres access, so the
+    linking is the task's job, not the stage's."""
+    from fdi.pipeline.companies import CompanyRegistry
+    from fdi.platform.storage.artifact_store import ArtifactStore
+    from fdi.workers.tasks import _run_stage_async
+
+    store = ArtifactStore(minio_client, bucket="test-artifacts")
+    await store.ensure_bucket()
+    n = uuid.uuid4().int
+    cin = f"L{n % 10**5:05d}KA2001PLC{(n // 10**5) % 10**6:06d}"
+    doc_id = str(uuid.uuid4())
+    upstream = {
+        "ast": {"sections": [{"heading": "Notice", "paragraphs": [
+            f"Gamma Mills Limited CIN: {cin} Registered Office: Bengaluru"
+        ]}]},
+        "provenance": {"node_provenance": [
+            {"node_id": "s0", "page": 2}, {"node_id": "s0p0", "page": 2}
+        ]},
+    }
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        await repo.create_document(doc_id)
+        for stage, body in upstream.items():
+            run_id = str(uuid.uuid4())
+            key = f"test/{doc_id}/{stage}.json"
+            await store.put_json(key, body)
+            await repo.start_run(run_id, doc_id, stage, 1, stage, "c1")
+            await repo.finish_run(run_id, stage, key)
+        await s.commit()
+
+    await _run_stage_async(
+        doc_id, "issuer", str(uuid.uuid4()), "c1",
+        db_url=postgres_url, client=minio_client, store_bucket="test-artifacts",
+    )
+
+    async with session_factory() as s:
+        registry = CompanyRegistry(s, store)
+        (company,) = [c for c in await registry.list_companies() if c.cin == cin]
+        reports = await registry.company_reports(company.id)
+    assert company.name == "Gamma Mills Limited"
+    assert [r.doc_id for r in reports] == [doc_id]

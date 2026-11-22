@@ -20,7 +20,7 @@
             "tolerance": 0.5
           },
           {
-            "value": 328513.0,
+            "value": 1104637.0,
             "unit": "INR crore",
             "tolerance": 0.5
           }
@@ -32,7 +32,7 @@
           },
           {
             "doc_key": "ril-2025-26",
-            "page": 145
+            "page": 101
           }
         ]
       }
@@ -54,7 +54,7 @@
             "tolerance": 0.5
           },
           {
-            "value": 309990.0,
+            "value": 981475.0,
             "unit": "INR crore",
             "tolerance": 0.5
           }
@@ -66,7 +66,7 @@
           },
           {
             "doc_key": "ril-2025-26",
-            "page": 145
+            "page": 101
           }
         ]
       }
@@ -88,7 +88,7 @@
             "tolerance": 0.5
           },
           {
-            "value": 144.0,
+            "value": -11547.0,
             "unit": "INR crore",
             "tolerance": 0.5
           }
@@ -100,7 +100,7 @@
           },
           {
             "doc_key": "ril-2025-26",
-            "page": 145
+            "page": 101
           }
         ]
       }
@@ -122,7 +122,7 @@
             "tolerance": 0.5
           },
           {
-            "value": 13982.0,
+            "value": 84207.0,
             "unit": "INR crore",
             "tolerance": 0.5
           }
@@ -134,7 +134,7 @@
           },
           {
             "doc_key": "ril-2025-26",
-            "page": 145
+            "page": 101
           }
         ]
       }
@@ -156,7 +156,7 @@
             "tolerance": 0.005
           },
           {
-            "value": 19.59,
+            "value": 59.69,
             "unit": "INR",
             "tolerance": 0.005
           }
@@ -168,7 +168,7 @@
           },
           {
             "doc_key": "ril-2025-26",
-            "page": 145
+            "page": 101
           }
         ]
       }

@@ -181,16 +181,16 @@
     {
       "id": "calculation:RIL-FY2025-26-consolidated:revenue_net_of_gst",
       "kind": "calculation",
-      "question": "What was RIL's consolidated revenue from operations net of GST for FY2025-26, computed as revenue from sale of products plus revenue from sale of services, less GST recovered?",
+      "question": "What was RIL's consolidated revenue from operations net of GST for FY2025-26, computed as value of sales plus income from services, less GST recovered?",
       "doc_keys": [
         "ril-2025-26"
       ],
       "gold": {
         "answerable": true,
-        "formula": "RFSP + RFSS - GST = 348504 + 21522 - 42883 = 327143",
+        "formula": "RFSP + RFSS - GST = 1043589 + 132330 - 100244 = 1075675",
         "values": [
           {
-            "value": 327143.0,
+            "value": 1075675.0,
             "unit": "INR crore",
             "tolerance": 0.5
           }
@@ -198,7 +198,7 @@
         "evidence": [
           {
             "doc_key": "ril-2025-26",
-            "page": 145
+            "page": 101
           }
         ]
       }

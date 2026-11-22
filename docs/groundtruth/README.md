@@ -90,9 +90,15 @@ the wrong statement set, and that error is invisible in the resulting numbers.
 - `basis` ∈ `consolidated` | `standalone`
 - `statement` ∈ `profit_and_loss` | `assets` | `liabilities` | `equity`
 
-**RIL has no standalone basis.** It files a consolidated-only integrated report,
-so `RIL-*-standalone-*.json` must not exist — generating one would create truth
-that does not exist and then measure against it.
+**RIL prints both bases, and its PDF pages are two-up spreads.** Its
+consolidated P&L is PDF page 101; its standalone statements are PDF pages
+58-61 (not yet keyed). An earlier RIL file was keyed from PDF page 145, which is
+**Reliance Retail Ventures Limited's** statement inside the same PDF — check
+the entity name in the page header, not just the statement title.
+
+**REMC has no consolidated basis.** It has no subsidiaries and prints standalone
+statements only, so `REMC-*-consolidated-*.json` must not exist — generating
+one would create truth that does not exist and then measure against it.
 
 ## File shape
 
@@ -165,7 +171,7 @@ never from pipeline or agent output. Every cross-company figure is a value
 above; every calculation records the `formula` its gold was worked by hand
 from values above (margins and rates in `percent`, ratios as `ratio`).
 Unanswerable items ask about Companies not in the corpus, Fiscal years no
-Report covers, RIL's non-existent standalone basis, and RIL's extraordinary items
+Report covers, REMC's non-existent consolidated basis, and RIL's extraordinary items
 (which Ind AS does not permit). TCS prints exceptional items, so an
 extraordinary-items question would invite a true figure that scores as a
 hallucination; it has none. `test_hand_keyed_items_point_only_at_ground_truth_pages`

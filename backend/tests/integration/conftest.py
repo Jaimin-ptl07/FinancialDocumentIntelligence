@@ -12,6 +12,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 if sys.platform == "win32":
@@ -22,11 +23,19 @@ from alembic import command
 from alembic.config import Config
 from httpx import AsyncClient
 from minio import Minio
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from testcontainers.minio import MinioContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.rabbitmq import RabbitMqContainer
 from testcontainers.redis import RedisContainer
+
+if TYPE_CHECKING:
+    from fdi.platform.storage.artifact_store import ArtifactStore
 
 from fdi.platform.config import get_settings
 from tests.conftest import TEST_SIGNING_SECRET
@@ -267,3 +276,102 @@ def job_services(session_factory, store, **overrides):
     }
     fields.update(overrides)
     return JobServices(**fields)
+
+
+# --- Company registry (S2.1): a Report through the real stage chain ---------
+#
+# Shared by test_company_registry, test_companies_api and test_company_backfill.
+# `session_factory`/`store` here are the defaults; a module defining its own
+# fixture of the same name overrides them, as most stage tests do.
+
+COMPANY_CHAIN = ("ocr", "normalize", "ast", "structure", "graph", "provenance", "issuer")
+
+
+@pytest.fixture
+def session_factory(migrated_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    from fdi.platform.db.engine import make_session_factory
+
+    return make_session_factory(migrated_engine)
+
+
+@pytest.fixture
+async def store(minio_client: Minio) -> ArtifactStore:
+    from fdi.platform.storage.artifact_store import ArtifactStore
+
+    s = ArtifactStore(minio_client, bucket="test-artifacts")
+    await s.ensure_bucket()
+    return s
+
+
+def _paragraph(content: str, page: int, role: str | None = None) -> dict[str, object]:
+    para: dict[str, object] = {
+        "content": content,
+        "boundingRegions": [{"pageNumber": page, "polygon": [0, 0, 1, 0, 1, 1, 0, 1]}],
+    }
+    if role is not None:
+        para["role"] = role
+    return para
+
+
+async def ingest(
+    session_factory, store, *, doc_key: str, lines: list[str], through: str = "issuer"
+) -> str:
+    """Intake a Report whose page N carries `lines[N-1]`, and run the stage
+    chain up to and including `through`."""
+    from fdi.pipeline.intake import intake_document
+    from fdi.pipeline.ocr import FakeOcrClient
+    from fdi.pipeline.registry import StageRegistry
+    from fdi.pipeline.resolver import DagResolver
+    from fdi.pipeline.run import run_stage
+    from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.graph import GraphStage
+    from fdi.pipeline.stages.issuer import IssuerStage
+    from fdi.pipeline.stages.normalize import NormalizeStage
+    from fdi.pipeline.stages.ocr import OcrStage
+    from fdi.pipeline.stages.provenance import ProvenanceStage
+    from fdi.pipeline.stages.structure import StructureStage
+
+    doc = await intake_document(
+        pdf=f"%PDF-1.7\n%fake-pdf-body-{uuid.uuid4()}\n".encode(),
+        filename=f"{doc_key}.pdf",
+        doc_key=doc_key,
+        content_type="application/pdf",
+        session_factory=session_factory,
+        store=store,
+    )
+    ocr = FakeOcrClient({
+        "content": " ".join(lines),
+        "pages": [{"pageNumber": n, "lines": [], "words": []} for n in range(1, len(lines) + 1)],
+        "paragraphs": [_paragraph("Annual Report", 1, "title")]
+        + [_paragraph(line, n) for n, line in enumerate(lines, start=1)],
+        "tables": [],
+    })
+    reg = StageRegistry()
+    for stage in (
+        OcrStage(), NormalizeStage(), AstStage(), StructureStage(),
+        GraphStage(), ProvenanceStage(), IssuerStage(),
+    ):
+        reg.register(stage)
+    resolver = DagResolver(reg.all())
+    for name in COMPANY_CHAIN[: COMPANY_CHAIN.index(through) + 1]:
+        await run_stage(
+            doc_id=doc.id, stage_name=name, run_id=str(uuid.uuid4()), correlation_id="c1",
+            session_factory=session_factory, store=store, registry=reg, resolver=resolver,
+            services={"ocr": ocr} if name == "ocr" else {},
+        )
+    return doc.id
+
+
+def fresh_cin() -> str:
+    """A CIN no other test has used: the migrated database is shared across
+    the session, so a fixed CIN would pile every test's Reports into one
+    Company."""
+    n = uuid.uuid4().int
+    return f"L{n % 10**5:05d}MH2000PLC{(n // 10**5) % 10**6:06d}"
+
+
+def acme_report(cin: str) -> list[str]:
+    return [
+        "Acme Widgets Limited had a record year.",
+        f"Acme Widgets Limited CIN: {cin} Registered Office: Mumbai",
+    ]
