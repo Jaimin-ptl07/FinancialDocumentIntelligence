@@ -33,12 +33,12 @@ from eval_answers import (  # noqa: E402
     JudgedItem,
     MeasuredAnswer,
     dump,
-    eval_credentials,
     generate_fact_lookup,
     load_benchmark,
     main,
     render_markdown,
     report_json,
+    take_eval_credentials,
 )
 
 _ITEM = BenchmarkItem(
@@ -723,5 +723,5 @@ def test_eval_credentials_in_the_environment_do_not_stop_the_stack_settings_load
     monkeypatch.setenv("FDI_EVAL_PASSWORD", "pw")
     args = argparse.Namespace(email=None, password=None)
 
-    assert eval_credentials(args) == ("eval@example.org", "pw")
+    assert take_eval_credentials(args) == ("eval@example.org", "pw")
     Settings()

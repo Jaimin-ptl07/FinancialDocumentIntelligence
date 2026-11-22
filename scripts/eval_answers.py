@@ -1071,7 +1071,7 @@ def git_commit() -> str:
     return out.stdout.strip()
 
 
-def eval_credentials(args: argparse.Namespace) -> tuple[str, str] | None:
+def take_eval_credentials(args: argparse.Namespace) -> tuple[str, str] | None:
     """The eval Invitee's email and password, from the flags or FDI_EVAL_*.
 
     FDI_EVAL_* are taken out of this process's environment as they are read:
@@ -1092,7 +1092,7 @@ async def _run(
     transport: httpx.AsyncBaseTransport | None = None,
     judge: Judge | None = None,
 ) -> None:
-    credentials = eval_credentials(args)
+    credentials = take_eval_credentials(args)
     if credentials is None:
         print("eval Invitee credentials missing: pass --email/--password or set "
               "FDI_EVAL_EMAIL/FDI_EVAL_PASSWORD")
