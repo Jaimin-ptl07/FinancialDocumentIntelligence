@@ -294,3 +294,37 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class Workspace(Base):
+    """An Invitee's working set of Companies (S2.5): a focus list, never an
+    access boundary (#16). Owned by one Invitee and visible only to them;
+    nothing reads it to decide who may see a Company or Report."""
+
+    __tablename__ = "workspace"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class WorkspaceCompany(Base):
+    """One Company in one Workspace. Both foreign keys cascade: deleting the
+    Workspace or the Company removes the membership, never the other side."""
+
+    __tablename__ = "workspace_company"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspace.id", ondelete="CASCADE"), primary_key=True
+    )
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("company.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
