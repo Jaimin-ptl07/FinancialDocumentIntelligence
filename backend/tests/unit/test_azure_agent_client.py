@@ -126,3 +126,26 @@ def test_from_settings_none_when_unconfigured() -> None:
         auth_secret=TEST_SIGNING_SECRET,
     )
     assert AzureOpenAIAgentClient.from_settings(s) is None
+
+
+def test_a_call_with_no_tools_sends_neither_tools_nor_tool_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The eval's LLM judge (S1.5) reuses this client for a plain completion.
+    Azure rejects an empty `tools` list, and `tool_choice` without tools."""
+    from fdi.platform.agent import AzureOpenAIAgentClient
+
+    class _Msg:
+        content = '{"claims": []}'
+        tool_calls = None
+
+    calls = _client_returning(monkeypatch, _Msg())
+    c = AzureOpenAIAgentClient(
+        endpoint="e", key="k", deployment="dep1", model="gpt-4o", api_version="2024-10-21"
+    )
+    resp = c.complete([{"role": "user", "content": "judge"}], [])
+    assert resp.content == '{"claims": []}'
+    kwargs = calls["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert "tools" not in kwargs and "tool_choice" not in kwargs
+    assert kwargs["temperature"] == 0

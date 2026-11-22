@@ -320,3 +320,31 @@ async def test_stage_cost_totals_ignores_calls_with_no_stage_run(
     assert {k: v["llm_input_tokens"] for k, v in after.items()} == {
         k: v["llm_input_tokens"] for k, v in before.items()
     }
+
+
+async def test_eval_judge_is_an_accepted_llm_usage_source_read_back_newest_first(
+    session_factory,
+) -> None:
+    """The answer-quality eval's LLM judge (S1.5) bills under its own source
+    so eval spend never reads as product spend; the eval's spend estimate
+    averages the most recent judge calls."""
+    async with session_factory() as s:
+        repo = RegistryRepository(s)
+        for n, tokens in enumerate([(100, 10), (200, 20), (300, 30)]):
+            await repo.record_llm_usage(
+                str(uuid.uuid4()), doc_id=None, stage_run_id=None,
+                source="eval_judge", correlation_id=f"eval-run-{n}",
+                model="gpt-4o", input_tokens=tokens[0], output_tokens=tokens[1],
+                duration_ms=50,
+            )
+            await s.commit()
+        await repo.record_llm_usage(
+            str(uuid.uuid4()), doc_id=None, stage_run_id=None,
+            source="ask_agent", correlation_id="not-a-judge",
+            model="gpt-4o", input_tokens=9_999, output_tokens=999, duration_ms=50,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        recent = await RegistryRepository(s).recent_llm_usage("eval_judge", limit=2)
+    assert recent == [(300, 30), (200, 20)]

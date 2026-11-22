@@ -1,0 +1,355 @@
+{
+  "version": "v0",
+  "kind": "research",
+  "_source": "Hand-keyed from the Report PDFs' own text (per-page text layer; every figure and claim checked on the cited page); never from pipeline or agent output. Evidence is the page the answer is printed on - for a statement row, its NOTE page, not the statement face. REMC Limited's doc_key is the historical rites-2024-25 (REMC is not RITES).",
+  "items": [
+    {
+      "id": "research:TCS-FY2025-26-consolidated:other_income_note",
+      "kind": "research",
+      "question": "TCS reported other income of ₹4,402 crore in its FY2025-26 consolidated statement of profit and loss. What does the note behind that line say it consists of?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 3854.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 2059.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 211
+          }
+        ],
+        "required_claims": [
+          "Interest income is the largest component of other income.",
+          "Interest on financial assets carried at fair value through OCI is the largest component of interest income.",
+          "Net foreign exchange was a loss in FY2025-26, against a gain in FY2024-25."
+        ]
+      }
+    },
+    {
+      "id": "research:TCS-FY2025-26-consolidated:tax_rate_reconciliation",
+      "kind": "research",
+      "question": "TCS's FY2025-26 consolidated statement of profit and loss shows total tax expense of ₹16,033 crore on profit before tax of ₹65,487 crore. How does the income taxes note reconcile the tax expected at the statutory rate to that figure?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 25.17,
+            "unit": "percent",
+            "tolerance": 0.005
+          },
+          {
+            "value": 16481.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 1878.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 221
+          }
+        ],
+        "required_claims": [
+          "Expected income tax expense is computed at the Indian statutory income tax rate.",
+          "Tax pertaining to prior years reduced the reported tax expense below the expected amount.",
+          "Tax on income at different rates increased the tax expense."
+        ]
+      }
+    },
+    {
+      "id": "research:TCS-FY2025-26-consolidated:restructuring_exceptional_item",
+      "kind": "research",
+      "question": "TCS's FY2025-26 consolidated statement of profit and loss shows re-structuring expenses of ₹1,388 crore under exceptional items. What does the note behind that line say they were, and how much of the amount was utilized during the year?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 1268.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 237
+          }
+        ],
+        "required_claims": [
+          "The Group announced re-structuring initiatives in July 2025.",
+          "The expenses are termination benefits for associates released from the organisation whose deployment may not be feasible.",
+          "They are presented as exceptional items because of their size, nature or occurrence."
+        ]
+      }
+    },
+    {
+      "id": "research:TCS-FY2025-26-consolidated:final_dividend_proposed",
+      "kind": "research",
+      "question": "What final dividend did TCS's Board propose for the year ended March 31, 2026, and what cash outflow would it result in?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 31.0,
+            "unit": "INR",
+            "tolerance": 0.005
+          },
+          {
+            "value": 11216.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 238
+          }
+        ],
+        "required_claims": [
+          "The Board of Directors proposed the final dividend on April 9, 2026.",
+          "The dividend is subject to the approval of shareholders at the Annual General Meeting."
+        ]
+      }
+    },
+    {
+      "id": "research:TCS-FY2025-26-consolidated:talent_retention_and_learning",
+      "kind": "research",
+      "question": "What does TCS's FY2025-26 Management Discussion and Analysis report about employee attrition and learning in FY 2026?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 13.7,
+            "unit": "percent",
+            "tolerance": 0.05
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 55
+          }
+        ],
+        "required_claims": [
+          "The 13.7% figure is voluntary attrition in IT services.",
+          "Associates completed a total of 69 million learning hours in FY 2026.",
+          "Learning intensity rose 25% year-on-year to 120 hours per associate per year."
+        ]
+      }
+    },
+    {
+      "id": "research:RIL-FY2025-26-consolidated:other_income_note",
+      "kind": "research",
+      "question": "RIL reported other income of ₹28,962 crore in its FY2025-26 consolidated statement of profit and loss. What does the note behind that line say it consists of?",
+      "doc_keys": [
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 13302.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          },
+          {
+            "value": 9100.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "ril-2025-26",
+            "page": 115
+          }
+        ],
+        "required_claims": [
+          "Interest is the largest component of other income.",
+          "Interest on bank deposits is the largest component of interest income.",
+          "Dividend income rose sharply from FY2024-25."
+        ]
+      }
+    },
+    {
+      "id": "research:RIL-FY2025-26-consolidated:tax_rate_reconciliation",
+      "kind": "research",
+      "question": "RIL's FY2025-26 consolidated statement of profit and loss shows current tax of ₹9,736 crore and deferred tax of ₹17,816 crore. How does the taxation note reconcile these to the tax computed at the applicable rate, and what effective tax rate does it report?",
+      "doc_keys": [
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 25.168,
+            "unit": "percent",
+            "tolerance": 0.0005
+          },
+          {
+            "value": 22.37,
+            "unit": "percent",
+            "tolerance": 0.005
+          },
+          {
+            "value": 30997.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "ril-2025-26",
+            "page": 111
+          }
+        ],
+        "required_claims": [
+          "Additional allowances / deductions were the largest item reducing the current tax provision below the computed tax.",
+          "Utilisation of carried forward losses also reduced the current tax provision.",
+          "The deferred tax provision arose mainly from incremental deferred tax liability on property, plant and equipment and other intangible assets."
+        ]
+      }
+    },
+    {
+      "id": "research:RIL-FY2025-26-consolidated:segment_ebitda_decline",
+      "kind": "research",
+      "question": "According to RIL's FY2025-26 Management Discussion and Analysis, which business segment's EBITDA declined year-on-year, by how much, and why?",
+      "doc_keys": [
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "evidence": [
+          {
+            "doc_key": "ril-2025-26",
+            "page": 5
+          }
+        ],
+        "required_claims": [
+          "The Oil and Gas segment's EBITDA declined, by 10.1% year-on-year.",
+          "The decline was in line with natural decline in production in the KG D6 block.",
+          "Softer gas prices also contributed to the decline."
+        ]
+      }
+    },
+    {
+      "id": "research:REMC-FY2024-25-unknown:other_income_note",
+      "kind": "research",
+      "question": "REMC Limited reported other income of ₹660.16 lakh in its FY2024-25 statement of profit and loss. What does the note behind that line say it consists of?",
+      "doc_keys": [
+        "rites-2024-25"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 544.35,
+            "unit": "INR lakh",
+            "tolerance": 0.005
+          },
+          {
+            "value": 91.81,
+            "unit": "INR lakh",
+            "tolerance": 0.005
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "rites-2024-25",
+            "page": 79
+          }
+        ],
+        "required_claims": [
+          "Interest earned on deposits with banks is the largest component of other income.",
+          "Rental income is a component of other income.",
+          "Miscellaneous income includes sale of tender documents, penalties or compensation received, and profit on sale of fixed assets."
+        ]
+      }
+    },
+    {
+      "id": "research:REMC-FY2024-25-unknown:revenue_from_operations_note",
+      "kind": "research",
+      "question": "REMC Limited reported revenue from operations of ₹13,386.75 lakh in its FY2024-25 statement of profit and loss. What does the note behind that line show about its composition?",
+      "doc_keys": [
+        "rites-2024-25"
+      ],
+      "gold": {
+        "answerable": true,
+        "values": [
+          {
+            "value": 13052.99,
+            "unit": "INR lakh",
+            "tolerance": 0.005
+          },
+          {
+            "value": 1348.45,
+            "unit": "INR lakh",
+            "tolerance": 0.005
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "rites-2024-25",
+            "page": 79
+          }
+        ],
+        "required_claims": [
+          "Consultancy fee is the larger revenue stream, ahead of power generation (sale of electrical energy).",
+          "Consultancy fee is reported net of Goods and Services Tax.",
+          "Both consultancy fee and sale of electrical energy include an unbilled revenue component."
+        ]
+      }
+    },
+    {
+      "id": "research:REMC-FY2024-25-unknown:income_decline_reasons",
+      "kind": "research",
+      "question": "According to REMC Limited's Directors' Report for FY2024-25, why did total income and profit before tax decrease compared with FY2023-24?",
+      "doc_keys": [
+        "rites-2024-25"
+      ],
+      "gold": {
+        "answerable": true,
+        "evidence": [
+          {
+            "doc_key": "rites-2024-25",
+            "page": 7
+          }
+        ],
+        "required_claims": [
+          "Generation from the Jaisalmer Wind Power Plant was reduced.",
+          "RE-RTC bids were non-responsive because the expected CTUIL connectivity period was beyond the bid timelines for project execution."
+        ]
+      }
+    }
+  ]
+}

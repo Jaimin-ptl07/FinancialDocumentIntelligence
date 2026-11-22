@@ -330,3 +330,66 @@ def test_a_hand_keyed_item_missing_what_its_kind_needs_is_rejected(
     with pytest.raises(BenchmarkError) as exc:
         parse_benchmark(_body(item))
     assert str(exc.value) == reason
+
+
+_RESEARCH = {
+    "id": "research:q1",
+    "kind": "research",
+    "question": "What does the note behind TCS's other income say it consists of?",
+    "doc_keys": ["tcs-2025-26"],
+    "gold": {
+        "answerable": True,
+        "values": [{"value": 3962.0, "unit": "INR crore"}],
+        "evidence": [{"doc_key": "tcs-2025-26", "page": 210}],
+        "required_claims": [
+            "Interest income is the largest component of other income.",
+            "Other income includes net gain on investments.",
+        ],
+    },
+}
+
+
+def test_a_research_item_parses_with_its_required_claims() -> None:
+    item = parse_benchmark(_body(_RESEARCH)).items[0]
+    assert item.gold.required_claims == (
+        "Interest income is the largest component of other income.",
+        "Other income includes net gain on investments.",
+    )
+    assert item.gold.evidence == (Evidence("tcs-2025-26", 210),)
+    assert item.gold.values == (GoldValue(3962.0, "INR crore", 0.5),)
+
+
+def test_a_narrative_research_item_needs_no_gold_values() -> None:
+    item = parse_benchmark(_body(_patched(_RESEARCH, gold={"values": None}))).items[0]
+    assert item.gold.values == ()
+
+
+def test_items_of_other_kinds_have_no_required_claims() -> None:
+    assert parse_benchmark(_body()).items[0].gold.required_claims == ()
+
+
+@pytest.mark.parametrize(
+    ("item", "reason"),
+    [
+        (_patched(_RESEARCH, gold={"answerable": False}),
+         "item 'research:q1': a research item must be answerable"),
+        (_patched(_RESEARCH, gold={"evidence": None}),
+         "item 'research:q1': a research item needs at least one gold evidence location"),
+        (_patched(_RESEARCH, gold={"required_claims": None}),
+         "item 'research:q1': a research item needs at least one required claim"),
+        (_patched(_RESEARCH, gold={"required_claims": []}),
+         "item 'research:q1': 'gold.required_claims' must be a non-empty list of claims"),
+        (_patched(_RESEARCH, gold={"required_claims": "Interest is largest."}),
+         "item 'research:q1': 'gold.required_claims' must be a non-empty list of claims"),
+        (_patched(_RESEARCH, gold={"required_claims": ["ok", " "]}),
+         "item 'research:q1': 'gold.required_claims' #1 must be a non-empty string"),
+        (_patched(_RESEARCH, gold={"required_claims": ["same", "same"]}),
+         "item 'research:q1': 'gold.required_claims' states 'same' twice"),
+        (_patched(_UNANSWERABLE, gold={"required_claims": ["Infosys is not ingested."]}),
+         "item 'unanswerable:q1': an unanswerable item has no required claims"),
+    ],
+)
+def test_a_malformed_research_item_is_rejected(item: dict[str, object], reason: str) -> None:
+    with pytest.raises(BenchmarkError) as exc:
+        parse_benchmark(_body(item))
+    assert str(exc.value) == reason

@@ -340,7 +340,7 @@ def _tools_bench(*items: tuple[str, str, list[str] | None]) -> Benchmark:
 def test_tool_selection_is_the_share_of_expected_tools_called_whatever_the_order() -> None:
     """Order, repeats and extra tools do not count: the plan called `search`
     (twice) and an unasked-for `document_structure`, but never `get_tables`."""
-    bench = _tools_bench(("q1", "research", ["get_tables", "search"]))
+    bench = _tools_bench(("q1", "cross_company", ["get_tables", "search"]))
     report = score_run(bench, [EndpointAnswer(
         item_id="q1", answer="10", tool_trace=("search", "document_structure", "search"),
     )])
@@ -350,7 +350,7 @@ def test_tool_selection_is_the_share_of_expected_tools_called_whatever_the_order
 
 
 def test_calling_every_expected_tool_scores_one() -> None:
-    bench = _tools_bench(("q1", "research", ["search", "get_tables"]))
+    bench = _tools_bench(("q1", "cross_company", ["search", "get_tables"]))
     report = score_run(bench, [EndpointAnswer(
         item_id="q1", answer="10", tool_trace=("get_tables", "search"),
     )])
@@ -376,7 +376,7 @@ def test_an_item_without_expected_tools_has_no_tool_selection_and_is_not_counted
 
 
 def test_a_failed_item_that_names_tools_scores_zero_tool_selection() -> None:
-    bench = _tools_bench(("q1", "research", ["search"]))
+    bench = _tools_bench(("q1", "cross_company", ["search"]))
     report = score_run(bench, [EndpointAnswer(
         item_id="q1", answer=None, error="timed out", tool_trace=("search",),
     )])
@@ -387,7 +387,8 @@ def test_a_failed_item_that_names_tools_scores_zero_tool_selection() -> None:
 def test_tool_selection_accuracy_is_the_mean_over_items_that_name_tools() -> None:
     """r0: 1 of 2 = 0.5; r1: 1 of 1 = 1.0; f0: failed = 0.0; f1: none named."""
     bench = _tools_bench(
-        ("r0", "research", ["search", "get_tables"]), ("r1", "research", ["concept_lookup"]),
+        ("r0", "cross_company", ["search", "get_tables"]),
+        ("r1", "cross_company", ["concept_lookup"]),
         ("f0", "fact_lookup", ["search"]), ("f1", "fact_lookup", None),
     )
     report = score_run(bench, [
@@ -396,7 +397,7 @@ def test_tool_selection_accuracy_is_the_mean_over_items_that_name_tools() -> Non
         EndpointAnswer(item_id="f0", answer=None, error="HTTP 500"),
         EndpointAnswer(item_id="f1", answer="10"),
     ])
-    assert report.by_kind["research"].tool_selection_accuracy == 0.75
+    assert report.by_kind["cross_company"].tool_selection_accuracy == 0.75
     assert report.by_kind["fact_lookup"].tool_selection_accuracy == 0.0
     assert report.overall.tool_selection_items == 3
     assert report.overall.tool_selection_accuracy == 0.5
@@ -521,3 +522,68 @@ def test_a_percentage_in_a_refusal_is_an_asserted_figure() -> None:
 def test_a_failed_endpoint_on_an_unanswerable_item_is_still_failed() -> None:
     item = _refusal(None, error="HTTP 500")
     assert (item.status, item.reason, item.completed) == ("failed", "HTTP 500", False)
+
+
+def _research(values: list[dict[str, object]] | None = None) -> Benchmark:
+    gold: dict[str, object] = {
+        "answerable": True,
+        "evidence": [{"doc_key": "tcs-2025-26", "page": 210}],
+        "required_claims": ["Interest income is the largest component."],
+    }
+    if values is not None:
+        gold["values"] = values
+    return parse_benchmark({"version": "v-test", "items": [{
+        "id": "r1", "kind": "research",
+        "question": "What does the note behind TCS's other income say?", "gold": gold,
+    }]})
+
+
+_NOTE_PAGE = Citation(doc_key="tcs-2025-26", page=210)
+_STATEMENT_PAGE = Citation(doc_key="tcs-2025-26", page=167)
+
+
+def _research_score(answer: str, *citations: Citation,
+                    values: list[dict[str, object]] | None = None) -> ItemScore:
+    report = score_run(_research(values), [
+        EndpointAnswer(item_id="r1", answer=answer, citations=citations)
+    ])
+    return report.items[0]
+
+
+def test_a_research_figure_counts_wherever_the_answer_states_it() -> None:
+    """A research answer walks through a note: the required figure need not
+    lead it, as long as it is stated."""
+    score = _research_score(
+        "Other income of ₹3,962 crore comprises interest income of ₹2,875 crore, "
+        "the largest component, and net gain on investments of ₹612 crore.",
+        _NOTE_PAGE, values=[{"value": 612.0, "unit": "INR crore"}],
+    )
+    assert (score.status, score.completed) == ("correct", True)
+
+
+def test_a_research_answer_missing_a_required_figure_scores_wrong() -> None:
+    score = _research_score(
+        "Other income comprises interest income of ₹2,875 crore.",
+        _NOTE_PAGE, values=[{"value": 612.0, "unit": "INR crore"}],
+    )
+    assert score.status == "wrong"
+    assert score.reason == "612 INR crore not stated"
+
+
+def test_one_stated_figure_cannot_satisfy_two_required_figures() -> None:
+    score = _research_score(
+        "Interest income was ₹612 crore.", _NOTE_PAGE,
+        values=[{"value": 612.0, "unit": "INR crore"}, {"value": 612.0, "unit": "INR crore"}],
+    )
+    assert score.status == "wrong"
+
+
+def test_a_narrative_research_answer_completes_on_a_note_page_citation() -> None:
+    """No required figures: the deterministic part is the evidence hit."""
+    score = _research_score("Interest income is the largest component.", _NOTE_PAGE)
+    assert (score.status, score.supported, score.completed) == ("correct", True, True)
+
+
+def test_citing_only_the_statement_page_does_not_complete_a_research_item() -> None:
+    score = _research_score("Interest income is the largest component.", _STATEMENT_PAGE)
+    assert (score.status, score.supported, score.completed) == ("correct", False, False)

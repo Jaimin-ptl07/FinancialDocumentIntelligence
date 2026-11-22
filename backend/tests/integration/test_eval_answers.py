@@ -259,3 +259,55 @@ async def test_a_job_that_never_finishes_times_out_and_the_run_continues(
     assert "timed out after 0s" in report.items[0].reason
     assert "still queued" in report.items[0].reason
     assert report.items[1].reason.startswith("POST /ask returned 429")
+
+
+async def test_the_azure_judge_bills_each_call_under_eval_judge(session_factory) -> None:
+    """The judge's Azure client is faked; the usage ledger is real. Its call
+    lands in llm_usage_event under `eval_judge`, correlated by the run, and
+    the next run's estimate prices it at the configured rates."""
+    from eval_answers import AzureJudge
+
+    from fdi.core.pricing import LlmCallUsage
+
+    item = parse_benchmark({"version": "v-test", "items": [{
+        "id": "research:acme:r0", "kind": "research", "question": "What does the note say?",
+        "gold": {"answerable": True, "evidence": [{"doc_key": "acme-2025-26", "page": 31}],
+                 "required_claims": ["Interest is the largest component."]},
+    }]}).items[0]
+    reply = json.dumps({"claims": [{"index": 0, "supported": True, "reason": "note 26"}]})
+    client = FakeAgentClient([AgentResponse(content=reply, usage=LlmCallUsage(
+        model="gpt-4o", input_tokens=4_000, output_tokens=100, duration_ms=900,
+    ))])
+    run_id = str(uuid.uuid4())
+    from fdi.platform.config import Settings
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://u:p@h:5432/db",  # unused: sessions injected
+        broker_url="amqp://guest:guest@h:5672/%2F", result_backend="redis://h:6379/0",
+        s3_endpoint="h:9000", s3_access_key="ak", s3_secret_key="sk",
+        auth_secret=TEST_SIGNING_SECRET, gpt_deployment="judge-dep",
+        llm_input_cost_per_mtok_usd=2.5, llm_output_cost_per_mtok_usd=10.0,
+        usd_to_inr_rate=95.0,
+    )
+    judge = AzureJudge(settings, client, run_id, sessions=session_factory)
+
+    judged = await judge.judge(item, "Interest is the largest component.", ['{"rows": []}'])
+
+    assert [v.supported for v in judged.judgement.verdicts] == [True]
+    assert client.calls[0][1] == []  # a plain completion: no tools offered
+    # 4,000 x $2.5/M + 100 x $10/M = $0.011 -> x 95 = INR 1.045.
+    assert judged.usage is not None
+    assert judged.usage.cost_inr == pytest.approx(1.045)
+    async with session_factory() as s:
+        from sqlalchemy import select
+
+        from fdi.platform.db.models import LlmUsageEvent
+
+        rows = (await s.execute(
+            select(LlmUsageEvent).where(LlmUsageEvent.correlation_id == run_id)
+        )).scalars().all()
+    assert [(r.source, r.input_tokens, r.output_tokens) for r in rows] == [
+        ("eval_judge", 4_000, 100)
+    ]
+    assert (await judge.recent_costs())[0] == pytest.approx(1.045)
+    assert judge.name == "azure-openai:judge-dep"

@@ -172,3 +172,14 @@ hallucination; it has none. `test_hand_keyed_items_point_only_at_ground_truth_pa
 holds every hand-keyed evidence location to a ground-truth page.
 `scripts/eval_answers.py run` scores `/ask` against it (see that script's
 docstring); like `score_pipeline.py`, it always exits 0.
+
+`research.json` is **hand-keyed** too, from the Reports' own page text —
+never from pipeline or agent output. Each item either names a statement row
+and asks what its note says, or asks a narrative question (MD&A, Directors' /
+Board's Report). Its `evidence` is the page the answer is printed on: for a row
+that is the **note** page, never the statement face, so citing only the face
+does not count as the research done — which is why these pages are not
+ground-truth pages. Its `values` are figures printed in the note, not on the
+face; its `required_claims` are short qualitative claims a complete answer
+must make, each checkable from the evidence pages alone, and they are judged
+only by the optional LLM judge.

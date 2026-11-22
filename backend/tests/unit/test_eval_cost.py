@@ -2,6 +2,8 @@
 `summarise_cost` and `estimate_spend` only. Expected values are worked by
 hand from the nearest-rank percentile definition, not recomputed."""
 
+from dataclasses import replace
+
 import pytest
 
 from fdi.core.eval_cost import ItemCost, ItemUsage, estimate_spend, summarise_cost
@@ -110,4 +112,52 @@ def test_with_no_recent_usage_there_is_no_estimate() -> None:
     est = estimate_spend(10, [])
     assert (est.items, est.sample_size) == (10, 0)
     assert est.average_cost_inr is None
+    assert est.total_cost_inr is None
+
+
+def _judged(item: ItemCost, cost_inr: float, tokens: tuple[int, int]) -> ItemCost:
+    return replace(item, judge_usage=ItemUsage(
+        input_tokens=tokens[0], output_tokens=tokens[1], cost_inr=cost_inr
+    ))
+
+
+def test_judge_spend_is_in_the_run_total_but_reported_apart() -> None:
+    """Endpoint 0.30 + 0.50 INR; the judge 0.05 + 0.07 on two research
+    items. The total is 0.92; cost per completed task stays the endpoint's
+    0.80 over 2 -- the judge is the eval's spend, not the price of a task."""
+    items = [
+        _judged(_item("r1", "research", 1.0, 0.30, (1_000, 50)), 0.05, (2_000, 40)),
+        _judged(_item("r2", "research", 1.0, 0.50, (1_500, 70)), 0.07, (2_500, 60)),
+    ]
+    s = summarise_cost(items, completed={"r1", "r2"})
+    assert (s.judge_input_tokens, s.judge_output_tokens) == (4_500, 100)
+    assert s.judge_cost_inr == pytest.approx(0.12)
+    assert s.cost_inr == pytest.approx(0.80)
+    assert s.total_cost_inr == pytest.approx(0.92)
+    assert s.cost_per_completed_task_inr == pytest.approx(0.40)
+    research = s.spend_by_kind["research"]
+    assert research.judge_cost_inr == pytest.approx(0.12)
+    assert research.total_cost_inr == pytest.approx(0.92)
+
+
+def test_an_unjudged_run_has_no_judge_spend() -> None:
+    s = summarise_cost([_item("a", "fact_lookup", 1.0, 0.25)], completed=set())
+    assert (s.judge_input_tokens, s.judge_output_tokens, s.judge_cost_inr) == (0, 0, 0.0)
+    assert s.total_cost_inr == pytest.approx(0.25)
+
+
+def test_the_estimate_adds_judged_items_times_the_recent_judge_average() -> None:
+    """10 answers x 0.30 = 3.00, plus 4 judged items x mean(0.04, 0.06) = 0.20."""
+    est = estimate_spend(10, [0.20, 0.40, 0.30], judged_items=4,
+                         recent_judge_costs=[0.04, 0.06])
+    assert (est.judge_items, est.judge_sample_size) == (4, 2)
+    assert est.judge_average_cost_inr == pytest.approx(0.05)
+    assert est.judge_total_cost_inr == pytest.approx(0.20)
+    assert est.total_cost_inr == pytest.approx(3.20)
+
+
+def test_judged_items_with_no_recent_judge_usage_leave_no_estimate() -> None:
+    """Pricing the judge as free would understate the run."""
+    est = estimate_spend(10, [0.30], judged_items=4, recent_judge_costs=[])
+    assert est.judge_total_cost_inr is None
     assert est.total_cost_inr is None
