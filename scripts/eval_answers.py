@@ -30,6 +30,20 @@ prices at the stack's current configured rates and reflects today's model
 and prompt, not a stale report. A first run has no history, so it has no
 estimate: it then needs `--limit`, and `--yes` alone is refused.
 
+RETRIEVAL MODE. `run --mode retrieval` spends no LLM tokens: each item with
+gold evidence has its question sent to hybrid retrieval (`POST /retrieve`,
+top `RETRIEVAL_K`, scoped to the item's Report when it names exactly one --
+the route filters by a single `doc_key`, so a multi-Report item searches the
+whole corpus), and the report gives Recall@5, Recall@10 and MRR by
+(`doc_key`, page), defined in `fdi.core.retrieval_scoring`. No /ask, no
+model call; the query embedding is local BGE, so nothing is billed and
+neither `--limit` nor `--yes` is required (`--limit N` still caps it to the
+first N scorable items). Items without gold evidence are skipped and
+counted:
+
+    uv run --directory backend python ../scripts/eval_answers.py run \\
+        --mode retrieval --endpoint http://localhost:9514 --out-dir ../eval-runs
+
 Exit code is always 0: this is a measurement tool, not a gate. The report it
 writes is the number.
 """
@@ -73,6 +87,14 @@ from fdi.core.eval_cost import (
     estimate_spend,
     summarise_cost,
 )
+from fdi.core.retrieval_scoring import (
+    RetrievalHit,
+    RetrievalReport,
+    RetrievalSummary,
+    RetrievedHits,
+    scorable,
+    score_retrieval,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 GT_DIR = ROOT / "docs" / "groundtruth"
@@ -81,6 +103,8 @@ BENCHMARK_VERSION = "v0"
 BENCHMARK_DIR = GT_DIR / "benchmark" / BENCHMARK_VERSION
 # How many of the eval Invitee's latest /ask jobs the spend estimate averages.
 RECENT_JOBS = 20
+# Hits retrieval mode asks for: the largest K it reports recall at.
+RETRIEVAL_K = 10
 
 # --------------------------------------------------------------------------
 # generate
@@ -284,6 +308,57 @@ def _citation(raw: Mapping[str, object]) -> Citation:
     return Citation(
         doc_key=text("doc_key"), page=integer("page"), doc_id=text("doc_id"),
         table_index=integer("table_index"), row_label=text("row_label"),
+    )
+
+
+# --------------------------------------------------------------------------
+# Retrieval mode: hybrid retrieval only, no answer, no model.
+# --------------------------------------------------------------------------
+
+
+class RetrieveAdapter:
+    """Sends a benchmark item's question to `POST /retrieve` and normalises
+    the ranked hits into `RetrievedHits`. Like `AskJobAdapter`, a failure
+    becomes a `RetrievedHits` with an `error`, never an exception."""
+
+    def __init__(self, client: httpx.AsyncClient, *, k: int = RETRIEVAL_K) -> None:
+        self._client = client
+        self._k = k
+
+    async def login(self, email: str, password: str) -> None:
+        r = await self._client.post("/auth/login", json={"email": email, "password": password})
+        r.raise_for_status()
+        self._client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+
+    async def retrieve(self, item: BenchmarkItem) -> RetrievedHits:
+        body: dict[str, object] = {"query": item.question, "k": self._k}
+        # The route filters by ONE doc_key; an item spanning several Reports
+        # is searched corpus-wide rather than favouring one of them.
+        if len(item.doc_keys) == 1:
+            body["filters"] = {"doc_key": item.doc_keys[0]}
+        try:
+            r = await self._client.post("/retrieve", json=body)
+        except httpx.HTTPError as exc:
+            return RetrievedHits(item_id=item.id, error=f"{type(exc).__name__}: {exc}")
+        if r.status_code != 200:
+            return RetrievedHits(item_id=item.id,
+                                 error=f"POST /retrieve returned {r.status_code}: {r.text}")
+        raw = r.json().get("results")
+        if not isinstance(raw, list):
+            return RetrievedHits(item_id=item.id, error="POST /retrieve returned no results list")
+        return RetrievedHits(
+            item_id=item.id,
+            hits=tuple(_retrieval_hit(h) for h in raw if isinstance(h, Mapping)),
+        )
+
+
+def _retrieval_hit(raw: Mapping[str, object]) -> RetrievalHit:
+    """One HybridSearchResultView's location. A value of the wrong type is
+    dropped, never coerced, exactly as for a citation."""
+    doc_key, page = raw.get("doc_key"), raw.get("page")
+    return RetrievalHit(
+        doc_key=doc_key if isinstance(doc_key, str) else None,
+        page=page if isinstance(page, int) and not isinstance(page, bool) else None,
     )
 
 
@@ -502,6 +577,90 @@ def render_markdown(
     return "\n".join(lines) + "\n"
 
 
+async def run_retrieval_eval(
+    benchmark: Benchmark,
+    adapter: RetrieveAdapter,
+    *,
+    limit: int | None,
+    stamp: Mapping[str, object],
+    out_dir: Path,
+) -> RetrievalReport:
+    """Retrieve for the first `limit` SCORABLE items (all when None) one at a
+    time, score them, and write `report.json` + `report.md` into `out_dir`."""
+    scorable_items = [item for item in benchmark.items if scorable(item)]
+    items = scorable_items if limit is None else scorable_items[:limit]
+    retrieved: list[RetrievedHits] = []
+    for n, item in enumerate(items, start=1):
+        r = await adapter.retrieve(item)
+        print(f"[{n}/{len(items)}] {item.id}: {'error' if r.error else f'{len(r.hits)} hit(s)'}")
+        retrieved.append(r)
+    report = score_retrieval(benchmark, retrieved)
+    write_retrieval_reports(out_dir, report, stamp)
+    return report
+
+
+def write_retrieval_reports(
+    out_dir: Path, report: RetrievalReport, stamp: Mapping[str, object]
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "report.json").write_text(dump(retrieval_report_json(report, stamp)),
+                                         encoding="utf-8")
+    (out_dir / "report.md").write_text(render_retrieval_markdown(report, stamp),
+                                       encoding="utf-8")
+
+
+def retrieval_report_json(
+    report: RetrievalReport, stamp: Mapping[str, object]
+) -> dict[str, object]:
+    def summary(s: RetrievalSummary) -> dict[str, object]:
+        return {**asdict(s), "recall_at_5": s.recall_at_5, "recall_at_10": s.recall_at_10,
+                "mrr": s.mrr}
+
+    return {
+        "stamp": dict(stamp),
+        "benchmark_size": report.benchmark_size,
+        "skipped": report.skipped,
+        "overall": summary(report.overall),
+        "by_kind": {kind: summary(s) for kind, s in report.by_kind.items()},
+        "items": [
+            {**asdict(i), "recalled_at_5": i.recalled_at_5,
+             "recalled_at_10": i.recalled_at_10, "reciprocal_rank": i.reciprocal_rank}
+            for i in report.items
+        ],
+    }
+
+
+def render_retrieval_markdown(report: RetrievalReport, stamp: Mapping[str, object]) -> str:
+    lines = ["# Retrieval eval", ""]
+    lines += [f"- **{key}**: `{value}`" for key, value in stamp.items()]
+    lines += [
+        f"- **items run**: {report.overall.run} of {report.benchmark_size}",
+        f"- **skipped (no gold evidence)**: {report.skipped}",
+        "",
+        "Recall@K = items with at least one gold (doc_key, page) in the top K hits, "
+        "over items run; MRR = mean 1/rank of the first gold hit, 0 when absent. "
+        "A failed retrieval call counts against every column.",
+        "",
+        "| kind | run | failed | recall@5 | recall@10 | MRR |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    rows = [*report.by_kind.items(), ("**overall**", report.overall)]
+    lines += [
+        f"| {kind} | {s.run} | {s.failed} | {s.recall_at_5:.1%} | {s.recall_at_10:.1%} "
+        f"| {s.mrr:.3f} |"
+        for kind, s in rows
+    ]
+    failed = [i for i in report.items if i.failed]
+    if failed:
+        lines += ["", "## Failed", "", "| item | reason |", "|---|---|"]
+        lines += [f"| `{i.item_id}` | {(i.error or '').replace('|', '/')} |" for i in failed]
+    missed = [i for i in report.items if not i.failed and not i.recalled_at_10]
+    if missed:
+        lines += ["", "## No gold page in the top 10", "", "| item | hits |", "|---|---:|"]
+        lines += [f"| `{i.item_id}` | {i.hits} |" for i in missed]
+    return "\n".join(lines) + "\n"
+
+
 def git_commit() -> str:
     try:
         out = subprocess.run(
@@ -527,9 +686,12 @@ async def _run(
         "benchmark_version": benchmark.version,
         "git_commit": git_commit(),
         "endpoint": args.endpoint,
-        "mode": "ask",
+        "mode": args.mode,
         "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
+    if args.mode == "retrieval":
+        await _run_retrieval(args, benchmark, stamp, email, password, transport)
+        return
     async with httpx.AsyncClient(
         base_url=args.endpoint, timeout=60.0, transport=transport
     ) as client:
@@ -557,6 +719,33 @@ async def _run(
           f"reports in {args.out_dir}")
 
 
+async def _run_retrieval(
+    args: argparse.Namespace,
+    benchmark: Benchmark,
+    stamp: Mapping[str, object],
+    email: str,
+    password: str,
+    transport: httpx.AsyncBaseTransport | None,
+) -> None:
+    """Retrieval mode: nothing billed, so no spend estimate and no gate."""
+    async with httpx.AsyncClient(
+        base_url=args.endpoint, timeout=60.0, transport=transport
+    ) as client:
+        adapter = RetrieveAdapter(client)
+        try:
+            await adapter.login(email, password)
+        except httpx.HTTPError as exc:
+            print(f"could not reach the stack as the eval Invitee: {exc}")
+            return
+        report = await run_retrieval_eval(
+            benchmark, adapter, limit=args.limit, stamp=stamp, out_dir=args.out_dir
+        )
+    o = report.overall
+    print(f"recall@5 {o.recall_at_5:.1%}, recall@10 {o.recall_at_10:.1%}, MRR {o.mrr:.3f} "
+          f"over {o.run} item(s), {o.failed} failed, {report.skipped} skipped (no gold "
+          f"evidence); reports in {args.out_dir}")
+
+
 def main(
     argv: Sequence[str] | None = None, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> int:
@@ -568,7 +757,7 @@ def main(
     gen = sub.add_parser("generate", help="regenerate fact_lookup items from ground truth")
     gen.add_argument("--out", type=Path, default=BENCHMARK_DIR / "fact_lookup.json")
 
-    run = sub.add_parser("run", help="run the benchmark against /ask")
+    run = sub.add_parser("run", help="run the benchmark against /ask (or /retrieve)")
     run.add_argument("--benchmark", type=Path, default=BENCHMARK_DIR)
     run.add_argument("--endpoint", required=True, help="the FDI API base URL")
     run.add_argument("--out-dir", required=True, type=Path)
@@ -578,6 +767,9 @@ def main(
     run.add_argument("--yes", action="store_true", help="answer every item (billed)")
     run.add_argument("--timeout", type=float, default=300.0, help="seconds per item")
     run.add_argument("--poll-interval", type=float, default=2.0)
+    run.add_argument("--mode", choices=("answers", "retrieval"), default="answers",
+                     help="answers: /ask (billed); retrieval: POST /retrieve only, "
+                          "Recall@K and MRR, no model call")
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -591,7 +783,7 @@ def main(
     except BenchmarkError as exc:
         print(f"benchmark rejected: {exc}")
         return 0
-    if args.limit is None and not args.yes:
+    if args.mode == "answers" and args.limit is None and not args.yes:
         print(f"{len(benchmark.items)} item(s) would each call /ask, a billed Azure OpenAI "
               "endpoint. Pass --limit N to answer the first N, or --yes for all of them; "
               "the expected spend is printed before the first call.")
