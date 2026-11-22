@@ -1,6 +1,6 @@
 from typing import Any
 
-from fdi.core.basis import detect_basis_regions, page_basis
+from fdi.core.basis import bases_present, detect_basis_regions, page_basis
 
 
 def _provenance(entries: list[tuple[str, int]]) -> dict[str, object]:
@@ -166,3 +166,23 @@ def test_page_basis_never_raises_on_malformed_input() -> None:
         page_basis({"regions": [None, {"start_page": "x", "end_page": 5, "basis": 1}]}, 3)
         == "unknown"
     )
+
+
+def test_bases_present_names_each_statement_basis_once_standalone_first() -> None:
+    both = {
+        "regions": [
+            {"start_page": 120, "end_page": 200, "basis": "consolidated"},
+            {"start_page": 60, "end_page": 119, "basis": "standalone"},
+            {"start_page": 201, "end_page": 260, "basis": "consolidated"},
+        ],
+        "default_basis": "unknown",
+    }
+    consolidated_only = {
+        "regions": [{"start_page": 1, "end_page": 300, "basis": "consolidated"}],
+    }
+
+    assert bases_present(both) == ["standalone", "consolidated"]
+    assert bases_present(consolidated_only) == ["consolidated"]
+    assert bases_present({"regions": [], "default_basis": "unknown"}) == []
+    bad: Any = None
+    assert bases_present(bad) == []

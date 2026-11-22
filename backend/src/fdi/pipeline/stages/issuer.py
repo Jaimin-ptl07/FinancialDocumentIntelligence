@@ -17,7 +17,8 @@ ISSUER_STAGE = "issuer"
 
 class IssuerStage:
     name = ISSUER_STAGE
-    version = 1
+    # 2: the artifact also carries the Report's Fiscal year and period (S2.2).
+    version = 2
     deps: tuple[str, ...] = ("ast", "provenance")
 
     async def run(self, ctx: StageContext) -> object:

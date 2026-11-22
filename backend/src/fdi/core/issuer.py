@@ -33,8 +33,9 @@ Pure, no I/O; total -- never raises, whatever shape `ast`/`provenance` are.
 import re
 from collections import Counter
 from collections.abc import Mapping
+from datetime import date, timedelta
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # 21 characters: listing status, industry code, state, year, ownership, number.
 # OCR sometimes splits the groups with a space, so whitespace is tolerated
@@ -244,6 +245,181 @@ def _evidence(occurrence: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+# --- Fiscal year -------------------------------------------------------------
+#
+# Indian Fiscal-year conventions live here and nowhere else. A Report's
+# Fiscal year is read from two independent places:
+#
+# * the statements: "for the year ended 31st March 2026" -- the audited
+#   period. Statements also print the comparative year ("... 31st March
+#   2025"), and a Report never reports a period after its own, so the LATEST
+#   year end printed is the Report's;
+# * the cover: "Annual Report 2025-26" -- on the earliest page that prints it
+#   (running headers repeat it; the cover is the first).
+#
+# They agree -> that Fiscal year, high confidence. They disagree -> no Fiscal
+# year, low confidence, and a reason naming both: an Invitee settles it, the
+# code never picks a side silently. Only one present -> that one.
+
+_MONTHS = {
+    name: number
+    for number, names in enumerate(
+        (
+            ("january", "jan"), ("february", "feb"), ("march", "mar"), ("april", "apr"),
+            ("may",), ("june", "jun"), ("july", "jul"), ("august", "aug"),
+            ("september", "sept", "sep"), ("october", "oct"), ("november", "nov"),
+            ("december", "dec"),
+        ),
+        start=1,
+    )
+    for name in names
+}
+_MONTH = r"(" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?"
+_ORDINAL = r"(\d{1,2})(?:st|nd|rd|th)?"
+# "31st March, 2026" | "March 31, 2026" | "31.03.2026" / "31-03-2026" / "31/03/2026".
+_DATE = (
+    rf"(?:{_ORDINAL}\s+{_MONTH},?\s+(\d{{4}})"
+    rf"|{_MONTH}\s+{_ORDINAL},?\s+(\d{{4}})"
+    r"|(\d{1,2})[./-](\d{1,2})[./-](\d{4}))"
+)
+# "year ended" / "period ended (on)" -- not "half year ended" (an interim
+# period) and not "year ending" (a future one: outlook, not the audit).
+_YEAR_ENDED_RE = re.compile(
+    rf"(?<!half )(?<!half-)\b(?:financial\s+)?(?:year|period)\s+ended\s+(?:on\s+)?{_DATE}",
+    re.IGNORECASE,
+)
+_COVER_RE = re.compile(
+    r"\bannual\s+report\s+(?:FY\s*)?(\d{4})\s*[-–/]\s*(\d{4}|\d{2})\b", re.IGNORECASE
+)
+
+
+def _fiscal_label(start: date, end: date) -> str:
+    """`FY2025-26` for April 2025 - March 2026; a calendar-year period is
+    `FY2025`."""
+    if start.year == end.year:
+        return f"FY{end.year}"
+    return f"FY{start.year}-{end.year % 100:02d}"
+
+
+def _period_ending(end: date) -> tuple[date, date]:
+    """The twelve months closing on `end`: 31 March 2026 -> 1 April 2025."""
+    following = end + timedelta(days=1)
+    return following.replace(year=following.year - 1), end
+
+
+def _year_end(match: re.Match[str]) -> date | None:
+    g = match.groups()
+    try:
+        if g[0] is not None:
+            return date(int(g[2]), _MONTHS[g[1].lower()], int(g[0]))
+        if g[3] is not None:
+            return date(int(g[5]), _MONTHS[g[3].lower()], int(g[4]))
+        return date(int(g[8]), int(g[7]), int(g[6]))
+    except (ValueError, KeyError):
+        return None
+
+
+def _cover_period(match: re.Match[str]) -> tuple[date, date] | None:
+    """"Annual Report 2025-26" -> the Indian Fiscal year April 2025 - March 2026."""
+    first = int(match.group(1))
+    second = match.group(2)
+    last = int(second) if len(second) == 4 else (first // 100) * 100 + int(second)
+    if last != first + 1:
+        return None
+    return date(first, 4, 1), date(last, 3, 31)
+
+
+def _fy_candidate(
+    source: str, period: tuple[date, date], node_id: str, page: int | None, text: str
+) -> dict[str, object]:
+    start, end = period
+    return {
+        "fiscal_year": _fiscal_label(start, end),
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "source": source,
+        "evidence": {"node_id": node_id, "page": page, "text": text},
+    }
+
+
+def _fiscal_year(ast: Mapping[str, object], pages: Mapping[str, int]) -> dict[str, object]:
+    statements: dict[str, dict[str, object]] = {}
+    covers: list[dict[str, object]] = []
+    for blocks in _blocks(ast):
+        for node_id, text in blocks:
+            page = pages.get(node_id)
+            for match in _YEAR_ENDED_RE.finditer(text):
+                end = _year_end(match)
+                if end is None:
+                    continue
+                candidate = _fy_candidate(
+                    "statements", _period_ending(end), node_id, page,
+                    _passage(text, match.start(), match.end()),
+                )
+                statements.setdefault(str(candidate["fiscal_year"]), candidate)
+            for match in _COVER_RE.finditer(text):
+                period = _cover_period(match)
+                if period is not None:
+                    covers.append(
+                        _fy_candidate(
+                            "cover", period, node_id, page,
+                            _passage(text, match.start(), match.end()),
+                        )
+                    )
+
+    by_end = sorted(statements.values(), key=lambda c: str(c["period_end"]), reverse=True)
+    # The Report's own title is the one it prints most (cover, running
+    # headers); a one-off citation of an older Report loses. Ties go to the
+    # earliest page, evidence is the earliest printing.
+    covers.sort(key=_page_order)
+    printed = Counter(str(c["fiscal_year"]) for c in covers)
+    cover = (
+        min(covers, key=lambda c: (-printed[str(c["fiscal_year"])], _page_order(c)))
+        if covers
+        else None
+    )
+    stated = by_end[0] if by_end else None
+    candidates = [*by_end, *([cover] if cover is not None else [])]
+
+    chosen: dict[str, object] | None
+    if stated is not None and cover is not None and stated["fiscal_year"] != cover["fiscal_year"]:
+        chosen, confidence = None, "low"
+        reason = (
+            f"the cover says {cover['fiscal_year']} (page {_page_of(cover)}) but the "
+            f"statements say {stated['fiscal_year']} (page {_page_of(stated)})"
+        )
+    elif stated is not None:
+        chosen, confidence = stated, "high"
+        reason = f"statements for the year ended {stated['period_end']} (page {_page_of(stated)})"
+        if cover is not None:
+            reason += " and the cover agree"
+    elif cover is not None:
+        chosen, confidence = cover, "high"
+        reason = f"the cover names {cover['fiscal_year']} (page {_page_of(cover)})"
+    else:
+        chosen, confidence = None, "none"
+        reason = "no Fiscal year is printed in the Report"
+
+    return {
+        "fiscal_year": chosen["fiscal_year"] if chosen is not None else None,
+        "period_start": chosen["period_start"] if chosen is not None else None,
+        "period_end": chosen["period_end"] if chosen is not None else None,
+        "fiscal_year_confidence": confidence,
+        "fiscal_year_reason": reason,
+        "fiscal_year_candidates": candidates,
+    }
+
+
+def _page_of(candidate: Mapping[str, object]) -> object:
+    evidence = candidate["evidence"]
+    return evidence.get("page") if isinstance(evidence, Mapping) else None
+
+
+def _page_order(candidate: Mapping[str, object]) -> int:
+    page = _page_of(candidate)
+    return page if isinstance(page, int) else 10**9
+
+
 def _empty(reason: str) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -267,11 +443,22 @@ def identify_issuer(
     and every CIN and name candidate with its evidence (node id, page, the
     passage around the CIN) so a link is auditable like every other FDI fact. Candidates are
     ordered best first.
+
+    Also the Report's Fiscal year: `fiscal_year` ("FY2025-26"), `period_start`
+    / `period_end` (ISO dates) or all None, a `fiscal_year_confidence`
+    ("high"; "low" when the cover and the statements disagree; "none" when
+    no year is printed), a `fiscal_year_reason`, and the
+    `fiscal_year_candidates` from the statements (newest first) and the cover,
+    each with its evidence.
     """
     if not isinstance(ast, Mapping) or not isinstance(provenance, Mapping):
-        return _empty("the Report has no readable text")
+        return {**_empty("the Report has no readable text"), **_fiscal_year({}, {})}
+    pages = _node_pages(provenance)
+    return {**_identify_cin(ast, pages), **_fiscal_year(ast, pages)}
 
-    occurrences = _occurrences(ast, _node_pages(provenance))
+
+def _identify_cin(ast: Mapping[str, object], pages: Mapping[str, int]) -> dict[str, object]:
+    occurrences = _occurrences(ast, pages)
     if not occurrences:
         return _empty("no CIN is printed anywhere in the Report")
 

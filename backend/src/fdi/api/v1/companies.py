@@ -5,6 +5,8 @@ are Public filings, so there is no per-user filtering here and none may be
 added through Workspaces (#16). All reads go through
 `fdi.pipeline.companies.CompanyRegistry`, never the tables."""
 
+from datetime import date
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -29,9 +31,19 @@ class ReportOut(BaseModel):
     doc_key: str | None
     version: int | None
     filename: str | None
+    fiscal_year: str | None
+    period_start: date | None
+    period_end: date | None
+    report_type: str | None
+    link_status: str | None
+    link_method: str | None
+    bases_present: list[str]
+    processing_status: str
 
 
 class ReportListOut(BaseModel):
+    """Newest Fiscal year first."""
+
     reports: list[ReportOut]
 
 
@@ -40,7 +52,12 @@ def _company_out(c: CompanyView) -> CompanyOut:
 
 
 def _report_out(r: ReportView) -> ReportOut:
-    return ReportOut(doc_id=r.doc_id, doc_key=r.doc_key, version=r.version, filename=r.filename)
+    return ReportOut(
+        doc_id=r.doc_id, doc_key=r.doc_key, version=r.version, filename=r.filename,
+        fiscal_year=r.fiscal_year, period_start=r.period_start, period_end=r.period_end,
+        report_type=r.report_type, link_status=r.link_status, link_method=r.link_method,
+        bases_present=list(r.bases_present), processing_status=r.processing_status,
+    )
 
 
 @router.get("", response_model=CompanyListOut)

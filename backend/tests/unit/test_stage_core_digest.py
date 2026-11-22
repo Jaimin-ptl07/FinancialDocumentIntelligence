@@ -48,10 +48,12 @@ from fdi.pipeline.registry import REGISTRY
 # every stage that reads it, not only the one being worked on.
 EXPECTED: dict[str, tuple[int, str]] = {
     "fog_mapping": (10, "025ee2938eea8758"),
-    "fog_objects": (6, "7688b05187fa269b"),
+    # S2.2 added `fdi.core.basis.bases_present` (read by the company
+    # registry, called by none of these): digests moved, no artifact body did.
+    "fog_objects": (6, "182576a87ff8cee7"),
     "fog_reason": (4, "540aa4ac8389d1a7"),
-    "note_index": (3, "967d77c1b524bb84"),
-    "statement_index": (4, "48c540eaa51bffd0"),
+    "note_index": (3, "c12f3460c96c8d9b"),
+    "statement_index": (4, "deb2d61384c687bd"),
 }
 
 
