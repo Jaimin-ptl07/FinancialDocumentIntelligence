@@ -5,7 +5,8 @@ Two entry points:
 
 - `summarise_cost(items, completed) -> CostSummary` -- per-item wall-clock
   latency and usage in, P50/P95 latency per item kind and the run's totals
-  out. `completed` is the set of item ids that completed their task; the
+  out, with tokens, spend and cost per completed task both per item kind
+  and for the run. `completed` is the set of item ids that completed their task; the
   caller decides what "completed" means (the scorer's `ItemScore.completed`:
   correct AND validly cited).
 - `estimate_spend(items, recent_item_costs) -> SpendEstimate` -- items x the
@@ -62,8 +63,24 @@ class LatencySummary:
 
 
 @dataclass(frozen=True)
+class SpendSummary:
+    """Tokens and spend over one item kind's items, and that kind's cost per
+    completed task (None when none of them completed)."""
+
+    input_tokens: int
+    output_tokens: int
+    cost_inr: float
+    items_without_usage: int
+    completed: int
+    cost_per_completed_task_inr: float | None
+
+
+@dataclass(frozen=True)
 class CostSummary:
+    """The run's latency and spend, overall and per item kind."""
+
     latency_by_kind: dict[str, LatencySummary]
+    spend_by_kind: dict[str, SpendSummary]
     latency_overall: LatencySummary
     input_tokens: int
     output_tokens: int
@@ -85,15 +102,30 @@ class SpendEstimate:
 
 
 def summarise_cost(items: Sequence[ItemCost], completed: Collection[str]) -> CostSummary:
-    kinds: dict[str, list[float]] = {}
+    kinds: dict[str, list[ItemCost]] = {}
     for item in items:
-        kinds.setdefault(item.kind, []).append(item.latency_s)
+        kinds.setdefault(item.kind, []).append(item)
+    overall = _spend(items, completed)
+    return CostSummary(
+        latency_by_kind={
+            kind: _latency([i.latency_s for i in group]) for kind, group in kinds.items()
+        },
+        spend_by_kind={kind: _spend(group, completed) for kind, group in kinds.items()},
+        latency_overall=_latency([item.latency_s for item in items]),
+        input_tokens=overall.input_tokens,
+        output_tokens=overall.output_tokens,
+        cost_inr=overall.cost_inr,
+        items_without_usage=overall.items_without_usage,
+        completed=overall.completed,
+        cost_per_completed_task_inr=overall.cost_per_completed_task_inr,
+    )
+
+
+def _spend(items: Sequence[ItemCost], completed: Collection[str]) -> SpendSummary:
     priced = [item.usage for item in items if item.usage is not None]
     cost = sum(u.cost_inr for u in priced)
     done = sum(1 for item in items if item.item_id in completed)
-    return CostSummary(
-        latency_by_kind={kind: _latency(values) for kind, values in kinds.items()},
-        latency_overall=_latency([item.latency_s for item in items]),
+    return SpendSummary(
         input_tokens=sum(u.input_tokens for u in priced),
         output_tokens=sum(u.output_tokens for u in priced),
         cost_inr=cost,

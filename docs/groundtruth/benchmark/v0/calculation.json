@@ -1,0 +1,257 @@
+{
+  "version": "v0",
+  "kind": "calculation",
+  "_source": "Hand-keyed from docs/groundtruth/*.json and the PDF pages their _source names; never from pipeline or agent output. REMC Limited's doc_key is the historical rites-2024-25 (REMC is not RITES).",
+  "items": [
+    {
+      "id": "calculation:TCS-FY2025-26-consolidated:net_profit_margin",
+      "kind": "calculation",
+      "question": "What was TCS's consolidated net profit margin for FY2025-26, computed as profit after tax divided by total income (revenue from operations plus other income), in per cent?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "PATR / TOTRNOTINR x 100 = 49454 / 271423 x 100 = 18.2203%",
+        "values": [
+          {
+            "value": 18.22,
+            "unit": "percent",
+            "tolerance": 0.05
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:TCS-FY2025-26-consolidated:effective_tax_rate",
+      "kind": "calculation",
+      "question": "What was TCS's consolidated effective tax rate for FY2025-26, computed as total tax expense (current tax plus deferred tax) divided by profit before tax, in per cent?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "(CT + DT) / PBTR x 100 = (16388 + (-355)) / 65487 x 100 = 16033 / 65487 x 100 = 24.4827%",
+        "values": [
+          {
+            "value": 24.48,
+            "unit": "percent",
+            "tolerance": 0.05
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 167
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:TCS-FY2025-26-standalone:net_profit_margin",
+      "kind": "calculation",
+      "question": "What was TCS's standalone net profit margin for FY2025-26, computed as profit after tax divided by total income (revenue from operations plus other income), in per cent?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "PATR / TOTRNOTINR x 100 = 49096 / 230974 x 100 = 21.2561%",
+        "values": [
+          {
+            "value": 21.26,
+            "unit": "percent",
+            "tolerance": 0.05
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 253
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:TCS-FY2025-26-consolidated:total_assets",
+      "kind": "calculation",
+      "question": "What were TCS's consolidated total assets at the end of FY2025-26, computed as total non-current assets plus total current assets?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "TOTNCR + TOTCAR = 46667 + 135705 = 182372 (ties to the printed Total assets 1,82,372)",
+        "values": [
+          {
+            "value": 182372.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 166
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:TCS-FY2025-26-consolidated:total_liabilities",
+      "kind": "calculation",
+      "question": "What were TCS's consolidated total liabilities at the end of FY2025-26, computed as total non-current liabilities plus total current liabilities?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "TOTNCLR + TOTCLR = 12980 + 60914 = 73894 (check: total assets 182372 - total equity 108478 = 73894)",
+        "values": [
+          {
+            "value": 73894.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 166
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:TCS-FY2025-26-consolidated:current_ratio",
+      "kind": "calculation",
+      "question": "What was TCS's consolidated current ratio at the end of FY2025-26 (total current assets divided by total current liabilities)?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "TOTCAR / TOTCLR = 135705 / 60914 = 2.2278",
+        "values": [
+          {
+            "value": 2.228,
+            "unit": "ratio",
+            "tolerance": 0.005
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 166
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:TCS-FY2025-26-consolidated:total_lease_liabilities",
+      "kind": "calculation",
+      "question": "What were TCS's consolidated total lease liabilities at the end of FY2025-26, computed as non-current plus current lease liabilities?",
+      "doc_keys": [
+        "tcs-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "LTOLR + STLL = 9453 + 1830 = 11283",
+        "values": [
+          {
+            "value": 11283.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "tcs-2025-26",
+            "page": 166
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:RIL-FY2025-26-consolidated:revenue_net_of_gst",
+      "kind": "calculation",
+      "question": "What was RIL's consolidated revenue from operations net of GST for FY2025-26, computed as revenue from sale of products plus revenue from sale of services, less GST recovered?",
+      "doc_keys": [
+        "ril-2025-26"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "RFSP + RFSS - GST = 348504 + 21522 - 42883 = 327143",
+        "values": [
+          {
+            "value": 327143.0,
+            "unit": "INR crore",
+            "tolerance": 0.5
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "ril-2025-26",
+            "page": 145
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:REMC-FY2024-25:net_profit_margin",
+      "kind": "calculation",
+      "question": "What was REMC Limited's net profit margin for FY2024-25, computed as profit after tax divided by total income (revenue from operations plus other income), in per cent?",
+      "doc_keys": [
+        "rites-2024-25"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "PATR / TOTRNOTINR x 100 = 7931.09 / 14046.91 x 100 = 56.4615% (both INR lakh)",
+        "values": [
+          {
+            "value": 56.46,
+            "unit": "percent",
+            "tolerance": 0.05
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "rites-2024-25",
+            "page": 61
+          }
+        ]
+      }
+    },
+    {
+      "id": "calculation:REMC-FY2024-25:effective_tax_rate",
+      "kind": "calculation",
+      "question": "What was REMC Limited's effective tax rate for FY2024-25, computed as total tax expense (current tax net of the deferred tax credit) divided by profit before tax, in per cent?",
+      "doc_keys": [
+        "rites-2024-25"
+      ],
+      "gold": {
+        "answerable": true,
+        "formula": "-(CT + DT) / PBTR x 100, as printed CT = (2681.75) and DT = +450.34 added back: (2681.75 - 450.34) / 10162.50 x 100 = 2231.41 / 10162.50 x 100 = 21.9573% (check: 10162.50 - 2681.75 + 450.34 = 7931.09 = PATR)",
+        "values": [
+          {
+            "value": 21.96,
+            "unit": "percent",
+            "tolerance": 0.05
+          }
+        ],
+        "evidence": [
+          {
+            "doc_key": "rites-2024-25",
+            "page": 61
+          }
+        ]
+      }
+    }
+  ]
+}

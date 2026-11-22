@@ -158,5 +158,17 @@ uv run --directory backend pytest tests/unit/test_groundtruth_files.py -q
 **generated** from these files by `scripts/eval_answers.py generate` — never
 edited by hand. `test_eval_answers.py` fails when the committed file and the
 generator disagree, so after keying new truth, regenerate and commit both.
+
+`cross_company.json`, `calculation.json` and `unanswerable.json` are
+**hand-keyed**, from these files and the PDF pages their `_source` names —
+never from pipeline or agent output. Every cross-company figure is a value
+above; every calculation records the `formula` its gold was worked by hand
+from values above (margins and rates in `percent`, ratios as `ratio`).
+Unanswerable items ask about Companies not in the corpus, Fiscal years no
+Report covers, RIL's non-existent standalone basis, and RIL's extraordinary items
+(which Ind AS does not permit). TCS prints exceptional items, so an
+extraordinary-items question would invite a true figure that scores as a
+hallucination; it has none. `test_hand_keyed_items_point_only_at_ground_truth_pages`
+holds every hand-keyed evidence location to a ground-truth page.
 `scripts/eval_answers.py run` scores `/ask` against it (see that script's
 docstring); like `score_pipeline.py`, it always exits 0.
