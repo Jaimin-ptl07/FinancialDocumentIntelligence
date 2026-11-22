@@ -598,6 +598,22 @@ class DocumentCostView(BaseModel):
     by_source: list[CostBySourceView]
 
 
+class JobUsageView(BaseModel):
+    """The LLM spend one of the caller's API jobs has made (S1.3: the eval
+    harness's cost per item), priced into INR at read time exactly as
+    `DocumentCostView` is. All zeros while the job has made no billed call
+    yet."""
+
+    job_id: str
+    correlation_id: str
+    call_count: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+    total_cost_inr: float
+    by_source: list[CostBySourceView]
+
+
 class UsageEventView(BaseModel):
     """One individual OCR/LLM call for a document (costing feature
     drill-down) -- the raw record `CostBySourceView` aggregates over.

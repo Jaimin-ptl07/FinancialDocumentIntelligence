@@ -226,11 +226,12 @@ class RegistryRepository:
         input_tokens: int,
         output_tokens: int,
         duration_ms: int,
+        api_job_id: str | None = None,
     ) -> None:
         self._s.add(
             LlmUsageEvent(
                 id=id, doc_id=doc_id, stage_run_id=stage_run_id, source=source,
-                correlation_id=correlation_id, model=model,
+                correlation_id=correlation_id, api_job_id=api_job_id, model=model,
                 input_tokens=input_tokens, output_tokens=output_tokens,
                 duration_ms=duration_ms,
             )
@@ -559,6 +560,34 @@ class RegistryRepository:
         ]
         events.sort(key=lambda e: e["created_at"], reverse=True)
         return events
+
+    async def job_cost_by_source(self, api_job_id: str) -> list[CostBySource]:
+        """Every LLM usage source one API job spent on, whatever document (or
+        none, for /ask) it touched. Keyed by the job, never its correlation
+        id: that is caller-supplied, so two Invitees' jobs can share one. OCR
+        is not included: no API job runs OCR inline."""
+        rows = (
+            await self._s.execute(
+                select(
+                    LlmUsageEvent.source,
+                    func.count(),
+                    func.coalesce(func.sum(LlmUsageEvent.input_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.output_tokens), 0),
+                    func.coalesce(func.sum(LlmUsageEvent.duration_ms), 0),
+                )
+                .where(LlmUsageEvent.api_job_id == api_job_id)
+                .group_by(LlmUsageEvent.source)
+                .order_by(LlmUsageEvent.source)
+            )
+        ).all()
+        return [
+            CostBySource(
+                source=str(source), call_count=int(count), page_count=0,
+                input_tokens=int(in_tok), output_tokens=int(out_tok),
+                duration_ms=int(dur),
+            )
+            for source, count, in_tok, out_tok, dur in rows
+        ]
 
     async def corpus_cost_totals(self) -> CorpusCostTotals:
         """Every billable event corpus-wide, including /ask's doc_id=NULL

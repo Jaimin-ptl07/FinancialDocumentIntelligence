@@ -88,9 +88,12 @@ async def indexed_doc(session_factory, store):
         "ocr": {"ocr": FakeOcrClient({
             "content": "ACME",
             "pages": [{"pageNumber": 1, "lines": [], "words": []}],
+            # On page 1, so the search hit cites the item's gold evidence page.
             "paragraphs": [
-                {"role": "sectionHeading", "content": "Balance Sheet"},
-                {"content": f"Total Assets 100 {marker}"},
+                {"role": "sectionHeading", "content": "Balance Sheet",
+                 "boundingRegions": [{"pageNumber": 1, "polygon": []}]},
+                {"content": f"Total Assets 100 {marker}",
+                 "boundingRegions": [{"pageNumber": 1, "polygon": []}]},
             ],
             "tables": [],
         })},
@@ -196,6 +199,11 @@ async def test_run_eval_scores_ask_answers_end_to_end(
     assert [i.status for i in report.items] == ["correct", "wrong", "correct", "failed"]
     assert "FakeAgentClient exhausted" in report.items[3].reason
     assert (report.overall.run, report.overall.correct) == (4, 2)
+    # q0's search hit cites the gold page; q2 is right but cites nothing.
+    assert [i.completed for i in report.items] == [True, False, False, False]
+    assert report.items[0].valid_citations >= 1
+    assert report.items[2].citations == 0
+    assert report.overall.completion_rate == 0.25
 
     body = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert body["stamp"] == stamp
@@ -203,10 +211,21 @@ async def test_run_eval_scores_ask_answers_end_to_end(
     assert body["by_kind"]["fact_lookup"]["accuracy"] == 0.5
     assert body["items"][0]["answer"].startswith("ACME's total assets were ₹100 crore")
     assert body["items"][1]["reason"] == "100 INR crore not stated"
+    assert body["items"][0]["completed"] is True
+    assert body["items"][2]["completed"] is False
+    assert body["by_kind"]["fact_lookup"]["completion_rate"] == 0.25
+    # Usage was read back through the real GET /jobs/{id}/usage: the
+    # fake model reports none, so each item is priced, at zero.
+    assert body["items"][0]["job_id"]
+    assert (body["items"][0]["input_tokens"], body["items"][0]["cost_inr"]) == (0, 0.0)
+    assert body["cost"]["items_without_usage"] == 0
+    assert body["cost"]["completed"] == 1
 
     summary = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "`abc123`" in summary
     assert "| fact_lookup | 4 | 2 | 1 | 1 | 50.0% |" in summary
+    assert "| fact_lookup | 4 | 1 | 25.0% | 1 | 25.0% |" in summary
+    assert "`fact_lookup:acme:q2`" in summary.split("## Correct but not completed")[1]
 
 
 async def test_a_job_that_never_finishes_times_out_and_the_run_continues(

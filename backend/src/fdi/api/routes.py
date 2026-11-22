@@ -75,6 +75,7 @@ from fdi.api.schemas import (
     HybridSearchResultView,
     JobAccepted,
     JobListView,
+    JobUsageView,
     JobView,
     KeywordHitView,
     KeywordSearchRequest,
@@ -719,6 +720,33 @@ async def document_cost(doc_id: str, session: SessionDep) -> DocumentCostView:
     return DocumentCostView(
         doc_id=doc_id,
         total_cost_inr=sum(r.cost_inr for r in by_source),
+        by_source=by_source,
+    )
+
+
+@router.get("/jobs/{job_id}/usage", response_model=JobUsageView)
+async def get_job_usage(job_id: str, session: SessionDep, user_id: CurrentUserDep) -> JobUsageView:
+    """The LLM spend one of the caller's API jobs has made so far (S1.3:
+    the eval harness's cost per item). Ownership is part of the lookup, as
+    for GET /jobs/{id}: someone else's job is the same 404 as no job. Rows
+    are read by job, not correlation id -- that is caller-supplied, so an
+    Invitee could otherwise stamp a job with someone else's and read both."""
+    job = await JobRepository(session).get_for_user(job_id, user_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    settings = get_settings()
+    by_source = [
+        _priced_source(r, settings)
+        for r in await RegistryRepository(session).job_cost_by_source(job.id)
+    ]
+    return JobUsageView(
+        job_id=job.id,
+        correlation_id=job.correlation_id,
+        call_count=sum(s.call_count for s in by_source),
+        input_tokens=sum(s.input_tokens for s in by_source),
+        output_tokens=sum(s.output_tokens for s in by_source),
+        duration_ms=sum(s.duration_ms for s in by_source),
+        total_cost_inr=sum(s.cost_inr for s in by_source),
         by_source=by_source,
     )
 

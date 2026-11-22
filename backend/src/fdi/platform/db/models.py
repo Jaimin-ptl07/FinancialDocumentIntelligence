@@ -173,6 +173,12 @@ class LlmUsageEvent(Base):
     )
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The API job that spent it (migration 0012), NULL outside one. Not
+    # correlation_id: that is caller-supplied, so it cannot prove whose
+    # job a row belongs to.
+    api_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("api_job.id"), index=True, nullable=True
+    )
     model: Mapped[str] = mapped_column(String(64), nullable=False)
     input_tokens: Mapped[int] = mapped_column(nullable=False)
     output_tokens: Mapped[int] = mapped_column(nullable=False)

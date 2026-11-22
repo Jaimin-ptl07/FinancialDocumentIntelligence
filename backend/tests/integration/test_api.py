@@ -2143,3 +2143,86 @@ async def test_analytics_reports_total_cost_inr(
     assert body["total_cost_inr"] >= 0.0
     ocr_stage_entry = next(s for s in body["stages"] if s["name"] == "ocr")
     assert "cost_inr" in ocr_stage_entry
+
+
+# --------------------------------------------------------------------------
+# GET /jobs/{job_id}/usage -- one job's LLM spend, for its owner only
+# (S1.3: the eval harness's cost per item).
+# --------------------------------------------------------------------------
+
+
+async def test_job_usage_prices_the_callers_own_job_and_404s_for_anyone_else(
+    make_client, session_factory, store, _alembic_applied
+) -> None:
+    from fdi.api.deps import get_agent_client
+    from fdi.core.agent import AgentResponse, ToolCall
+    from fdi.core.pricing import LlmCallUsage
+    from fdi.pipeline.agent import FakeAgentClient
+    from fdi.platform.db.repository import UserRepository
+    from fdi.platform.security import hash_password
+    from tests.integration.conftest import INVITEE_PASSWORD
+
+    def billed(input_tokens: int, output_tokens: int, duration_ms: int) -> LlmCallUsage:
+        return LlmCallUsage(model="gpt-test", input_tokens=input_tokens,
+                            output_tokens=output_tokens, duration_ms=duration_ms)
+
+    # Two billed rounds -- a tool call (to a tool that does not exist, which
+    # the loop reports back harmlessly) and the answer -- each carrying the
+    # usage the Azure client would have read off its response.
+    fake = FakeAgentClient([
+        AgentResponse(tool_calls=[ToolCall(id="t1", name="no_such_tool", arguments={})],
+                      usage=billed(1_000, 100, 7)),
+        AgentResponse(content="Not found.", usage=billed(3_000, 100, 9)),
+    ])
+    stranger_fake = FakeAgentClient([AgentResponse(content="Hm.", usage=billed(500, 50, 3))])
+    async with make_client(dependency_overrides={get_agent_client: lambda: fake}) as owner:
+        submitted = await owner.post("/ask", json={"question": "anything?"})
+        assert submitted.status_code == 202
+        job_id = submitted.json()["job_id"]
+        correlation_id = submitted.json()["correlation_id"]
+        result = await run_job(owner, job_id, session_factory, store, agent_client=fake)
+        assert result.status_code == 200
+
+        usage = await owner.get(f"/jobs/{job_id}/usage")
+        never_submitted = await owner.get(f"/jobs/{uuid.uuid4()}/usage")
+
+        stranger = (f"invitee-{uuid.uuid4().hex}@example.test", INVITEE_PASSWORD)
+        async with session_factory() as s:
+            await UserRepository(s).create(
+                email=stranger[0], password_hash=hash_password(INVITEE_PASSWORD)
+            )
+            await s.commit()
+        await authenticate(owner, stranger)
+        as_stranger = await owner.get(f"/jobs/{job_id}/usage")
+
+        # A correlation id is caller-supplied (X-Request-ID), so a stranger
+        # can stamp their own job with the owner's. That must buy them only
+        # their own spend: usage is attributed to the job, not the id.
+        hijack = await owner.post("/ask", json={"question": "mine?"},
+                                  headers={"X-Request-ID": correlation_id})
+        assert hijack.status_code == 202
+        assert hijack.json()["correlation_id"] == correlation_id
+        hijack_id = hijack.json()["job_id"]
+        result = await run_job(owner, hijack_id, session_factory, store,
+                               agent_client=stranger_fake)
+        assert result.status_code == 200
+        hijack_usage = await owner.get(f"/jobs/{hijack_id}/usage")
+
+    assert usage.status_code == 200, usage.text
+    body = usage.json()
+    assert (body["job_id"], body["correlation_id"]) == (job_id, correlation_id)
+    assert body["call_count"] == 2
+    assert body["input_tokens"] == 4_000
+    assert body["output_tokens"] == 200
+    assert body["duration_ms"] == 16
+    # (4,000 x $2.5 + 200 x $10) / 1M x 95 INR/USD, at the default prices.
+    assert body["total_cost_inr"] == pytest.approx(1.14)
+    assert [s["source"] for s in body["by_source"]] == ["ask_agent"]
+    assert body["by_source"][0]["cost_inr"] == pytest.approx(1.14)
+
+    assert never_submitted.status_code == 404
+    # Someone else's job: the same 404 as no job at all, so ids do not leak.
+    assert as_stranger.status_code == 404
+
+    assert hijack_usage.status_code == 200, hijack_usage.text
+    assert (hijack_usage.json()["call_count"], hijack_usage.json()["input_tokens"]) == (1, 500)
