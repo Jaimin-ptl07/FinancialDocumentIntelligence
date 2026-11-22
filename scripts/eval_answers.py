@@ -94,7 +94,7 @@ from fdi.core.eval_cost import (
     estimate_spend,
     summarise_cost,
 )
-from fdi.core.report_diff import ReportDiff, ReportDiffError, diff_reports
+from fdi.core.report_diff import ReportDiff, diff_reports
 from fdi.core.retrieval_scoring import (
     RetrievalHit,
     RetrievalReport,
@@ -705,7 +705,8 @@ def render_retrieval_markdown(report: RetrievalReport, stamp: Mapping[str, objec
         f"- **skipped (no gold evidence)**: {report.skipped}",
         "",
         "Recall@K = items with at least one gold (doc_key, page) in the top K hits, "
-        "over items run; MRR = mean 1/rank of the first gold hit, 0 when absent. "
+        "over items run (a multi-Report item needs a gold page of every Report); "
+        "MRR = mean 1/rank of the first gold hit, 0 when absent. "
         "A failed retrieval call counts against every column.",
         "",
         "| kind | run | failed | recall@5 | recall@10 | MRR |",
@@ -774,10 +775,12 @@ def _diff(args: argparse.Namespace) -> None:
     except (OSError, ValueError) as exc:
         print(f"cannot read the reports: {exc}")
         return
-    try:
-        diff = diff_reports(old, new, force=args.force)
-    except ReportDiffError as exc:
-        print(f"cannot compare: {exc}")
+    diff = diff_reports(old, new)
+    if diff.problems:
+        print(f"cannot read the reports: {'; '.join(diff.problems)}")
+        return
+    if diff.mismatches and not args.force:
+        print(f"cannot compare: {'; '.join(diff.mismatches)} (pass --force to compare anyway)")
         return
     text = render_diff_markdown(diff, str(args.old), str(args.new))
     if args.out is not None:

@@ -2,6 +2,8 @@
 answering endpoint said, and what the score must be -- never how it is
 computed. Expected values are worked by hand from the printed figures."""
 
+import pytest
+
 from fdi.core.answer_scoring import Citation, EndpointAnswer, ItemScore, score_run
 from fdi.core.benchmark import Benchmark, parse_benchmark
 
@@ -482,6 +484,25 @@ def test_years_and_references_in_a_refusal_are_not_figures() -> None:
         "report for it, for the year ended 31 March 2026 (see page 12, Note 4)."
     )
     assert item.status == "correct"
+
+
+@pytest.mark.parametrize("answer", [
+    "Under Ind AS 1, extraordinary items are not permitted, so TCS reports none.",
+    "Infosys is in none of the 3 ingested Reports.",
+    "TCS reported no extraordinary items for FY2025-26.",
+    "There were no extraordinary items in RIL's FY2025-26 statements.",
+])
+def test_small_counts_and_standard_numbers_in_a_refusal_are_not_figures(answer: str) -> None:
+    """A bare integer under 1,000 with no currency, scale, decimals or
+    percent sign counts things or names a standard; it is no amount."""
+    item = _refusal(answer)
+    assert (item.status, item.reason) == ("correct", "")
+
+
+def test_an_unmarked_decimal_in_a_refusal_is_an_asserted_figure() -> None:
+    item = _refusal("I could not find it; the current ratio is roughly 2.23.")
+    assert item.status == "wrong"
+    assert "2.23" in item.reason
 
 
 def test_a_refusal_must_say_the_information_was_not_found() -> None:

@@ -357,6 +357,19 @@ def test_diff_refuses_reports_of_different_benchmark_versions_unless_forced(
     assert "forced past" in printed
 
 
+def test_diff_refuses_an_unreadable_report_even_when_forced(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    old = _written_report(tmp_path / "old.json", _two_item_report())
+    broken = tmp_path / "broken.json"
+    broken.write_text(json.dumps({"stamp": {}, "items": "nope"}), encoding="utf-8")
+
+    assert main(["diff", old, str(broken), "--force"]) == 0
+    printed = capsys.readouterr().out
+    assert "cannot read the reports: NEW report 'items' must be a list" in printed
+    assert "## Fixed" not in printed
+
+
 def test_every_report_metric_is_broken_down_by_kind() -> None:
     """Accuracy, completion, latency AND spend each get a row per item kind."""
     refusal = BenchmarkItem(id="u1", kind="unanswerable", question="Infosys's revenue?",

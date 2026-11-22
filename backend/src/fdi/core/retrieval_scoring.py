@@ -22,10 +22,15 @@ is what makes an item answerable; and most items (every `fact_lookup`) have
 exactly one gold location, where the two readings agree anyway. It also
 keeps Recall@K and MRR about the same event -- the first gold hit.
 
+An item whose gold spans several Reports (`cross_company`: TCS vs RIL) is
+answerable only with a gold page of EACH Report in context, so its "first
+gold hit" is the rank at which the hits first cover every gold Report.
+Finding one Company's page and not the other's is a miss, not half a hit.
+
 MRR
 ---
-The mean, over items run, of 1 / the rank of the first gold hit; 0 for an
-item with no gold hit among those returned.
+The mean, over items run, of 1 / that rank; 0 for an item the returned
+hits never cover.
 
 WHAT IS COUNTED
 ---------------
@@ -67,7 +72,8 @@ class ItemRetrieval:
     item_id: str
     kind: str
     hits: int
-    # 1-based rank of the first gold hit; None when none was returned.
+    # 1-based rank at which the hits first hold a gold page of every gold
+    # Report (for most items: the first gold hit); None when they never do.
     first_gold_rank: int | None
     error: str | None = None
 
@@ -161,8 +167,14 @@ def _score_item(item: BenchmarkItem, retrieved: RetrievedHits) -> ItemRetrieval:
         return ItemRetrieval(item_id=item.id, kind=item.kind, hits=0, first_gold_rank=None,
                              error=retrieved.error)
     gold = {(e.doc_key, e.page) for e in item.gold.evidence}
-    rank = next((n for n, hit in enumerate(retrieved.hits, start=1)
-                 if (hit.doc_key, hit.page) in gold), None)
+    uncovered = {e.doc_key for e in item.gold.evidence}
+    rank: int | None = None
+    for n, hit in enumerate(retrieved.hits, start=1):
+        if (hit.doc_key, hit.page) in gold:
+            uncovered.discard(hit.doc_key)
+            if not uncovered:
+                rank = n
+                break
     return ItemRetrieval(item_id=item.id, kind=item.kind, hits=len(retrieved.hits),
                          first_gold_rank=rank)
 

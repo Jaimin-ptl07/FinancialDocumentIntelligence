@@ -77,14 +77,14 @@
       ]
     },
     {
-      "id": "unanswerable:concept-not-disclosed:TCS-FY2025-26-extraordinary-items",
+      "id": "unanswerable:year-not-covered:RIL-FY2027-28-revenue",
       "kind": "unanswerable",
-      "question": "What were TCS's consolidated extraordinary items for FY2025-26?",
+      "question": "What was RIL's consolidated revenue from operations for FY2027-28?",
       "gold": {
         "answerable": false
       },
       "doc_keys": [
-        "tcs-2025-26"
+        "ril-2025-26"
       ]
     },
     {

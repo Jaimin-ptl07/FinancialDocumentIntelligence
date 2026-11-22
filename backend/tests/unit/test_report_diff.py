@@ -3,7 +3,7 @@ bodies, as `eval_answers.py run` writes them, and what the diff must say."""
 
 import pytest
 
-from fdi.core.report_diff import ItemChange, ReportDiffError, diff_reports
+from fdi.core.report_diff import ItemChange, diff_reports
 
 
 def _item(item_id: str, completed: bool, kind: str = "fact_lookup",
@@ -12,7 +12,7 @@ def _item(item_id: str, completed: bool, kind: str = "fact_lookup",
             "status": status or ("correct" if completed else "wrong"), "completed": completed}
 
 
-def _report(*items: dict[str, object], version: str = "v0", mode: str | None = "ask",
+def _report(*items: dict[str, object], version: str = "v0", mode: str | None = "answers",
             **extra: object) -> dict[str, object]:
     stamp: dict[str, object] = {"benchmark_version": version, "git_commit": "abc"}
     if mode is not None:
@@ -66,35 +66,27 @@ def test_the_summary_counts_changes_per_kind_and_overall() -> None:
         2, 1, 1, 1, 1, 1)
 
 
-def test_reports_from_different_benchmark_versions_are_refused_naming_both() -> None:
-    with pytest.raises(ReportDiffError) as exc:
-        diff_reports(_report(version="v0"), _report(version="v1"))
-    message = str(exc.value)
-    assert "different benchmark versions" in message
-    assert "OLD 'v0'" in message and "NEW 'v1'" in message
-    assert "force" in message
-
-
-def test_forcing_compares_different_versions_and_records_the_mismatch() -> None:
+def test_reports_from_different_benchmark_versions_are_a_mismatch_naming_both() -> None:
+    """The diff is still computed; refusing it is the caller's decision."""
     diff = diff_reports(_report(_item("a", False), version="v0"),
-                        _report(_item("a", True), version="v1"), force=True)
+                        _report(_item("a", True), version="v1"))
+    assert diff.mismatches == (
+        "reports are from different benchmark versions: OLD 'v0', NEW 'v1'",)
     assert diff.items[0].change == "fixed"
     assert (diff.old_version, diff.new_version) == ("v0", "v1")
-    assert len(diff.mismatches) == 1
-    assert "OLD 'v0'" in diff.mismatches[0]
 
 
-def test_reports_of_different_modes_are_refused_unless_forced() -> None:
-    with pytest.raises(ReportDiffError) as exc:
-        diff_reports(_report(mode="ask"), _report(mode="retrieval"))
-    assert "different modes: OLD 'ask', NEW 'retrieval'" in str(exc.value)
-    assert diff_reports(_report(mode="ask"), _report(mode="retrieval"), force=True).mismatches
+def test_reports_of_different_modes_are_a_mismatch() -> None:
+    diff = diff_reports(_report(mode="answers"), _report(mode="retrieval"))
+    assert diff.mismatches == (
+        "reports are of different modes: OLD 'answers', NEW 'retrieval'",)
 
 
 def test_a_top_level_mode_is_read_before_the_stamps() -> None:
-    assert diff_reports({**_report(mode=None), "mode": "ask"}, _report(mode="ask")).mismatches == ()
-    with pytest.raises(ReportDiffError):
-        diff_reports({**_report(mode="ask"), "mode": "retrieval"}, _report(mode="ask"))
+    assert diff_reports({**_report(mode=None), "mode": "answers"},
+                        _report(mode="answers")).mismatches == ()
+    assert diff_reports({**_report(mode="answers"), "mode": "retrieval"},
+                        _report(mode="answers")).mismatches
 
 
 def test_reports_that_both_carry_no_mode_compare() -> None:
@@ -105,7 +97,7 @@ def test_reports_that_both_carry_no_mode_compare() -> None:
     ("old", "new", "reason"),
     [
         ([], _report(), "OLD report must be a JSON object"),
-        (_report(), {"stamp": {"benchmark_version": "v0", "mode": "ask"}},
+        (_report(), {"stamp": {"benchmark_version": "v0", "mode": "answers"}},
          "NEW report 'items' must be a list"),
         (_report({"kind": "x", "completed": True}), _report(),
          "OLD report item #0: 'item_id' must be a non-empty string"),
@@ -115,9 +107,15 @@ def test_reports_that_both_carry_no_mode_compare() -> None:
          "OLD report item 'a': duplicate item_id"),
     ],
 )
-def test_a_report_the_diff_cannot_read_is_rejected_with_its_reason(
+def test_what_the_diff_cannot_read_is_a_problem_with_its_reason_never_an_exception(
     old: object, new: object, reason: str,
 ) -> None:
-    with pytest.raises(ReportDiffError) as exc:
-        diff_reports(old, new)  # type: ignore[arg-type]
-    assert str(exc.value) == reason
+    diff = diff_reports(old, new)  # type: ignore[arg-type]
+    assert diff.problems == (reason,)
+
+
+def test_an_unreadable_item_is_left_out_and_the_rest_still_diff() -> None:
+    old = _report(_item("a", False), {"item_id": "b", "kind": "x"})
+    diff = diff_reports(old, _report(_item("a", True), _item("b", True)))
+    assert [(c.item_id, c.change) for c in diff.items] == [("a", "fixed"), ("b", "only_new")]
+    assert len(diff.problems) == 1

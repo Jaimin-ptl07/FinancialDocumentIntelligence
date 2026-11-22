@@ -63,6 +63,30 @@ def test_any_of_several_gold_locations_counts_and_the_first_one_sets_the_rank() 
     assert report.items[0].first_gold_rank == 2
 
 
+def test_a_multi_report_item_is_recalled_only_once_every_report_has_a_gold_hit() -> None:
+    """TCS vs RIL: TCS's gold page at rank 2 and RIL's at rank 8 put both
+    Companies in front of the answerer only by rank 8."""
+    ril = Evidence("ril-2025-26", 145)
+    item = _item("c1", kind="cross_company", evidence=(_GOLD, ril))
+    hits = tuple(
+        RetrievalHit("tcs-2025-26", 362) if n == 2
+        else RetrievalHit("ril-2025-26", 145) if n == 8 else _off(n)
+        for n in range(1, 11)
+    )
+    scored = score_retrieval(Benchmark("v-test", (item,)), [RetrievedHits("c1", hits)]).items[0]
+    assert (scored.first_gold_rank, scored.recalled_at_5, scored.recalled_at_10) == (
+        8, False, True)
+
+
+def test_a_multi_report_item_missing_one_report_is_not_recalled() -> None:
+    item = _item("c1", kind="cross_company",
+                 evidence=(_GOLD, Evidence("ril-2025-26", 145)))
+    scored = score_retrieval(Benchmark("v-test", (item,)),
+                             [RetrievedHits("c1", _gold_at(1))]).items[0]
+    assert (scored.first_gold_rank, scored.recalled_at_10, scored.reciprocal_rank) == (
+        None, False, 0.0)
+
+
 def test_a_failed_retrieval_call_is_run_and_counts_against_every_metric() -> None:
     bench = Benchmark("v-test", (_item("q1"), _item("q2")))
     report = score_retrieval(bench, [

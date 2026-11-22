@@ -79,9 +79,12 @@ do not disclose, a Company not in the corpus) is correct only when the
 answer asserts NO figure AND says explicitly that the information was not
 found ("could not find", "is not disclosed", "not among the ingested
 Reports"). Any figure -- marked, bare or a percentage -- is a hallucination
-and scores wrong, the reason quoting it; only page / Note / fiscal-year
-references and a bare calendar year are not figures. A refusal that never
-says "not found" is an evasion and scores wrong too.
+and scores wrong, the reason quoting it. Not figures: page / Note /
+fiscal-year references, a bare calendar year, and a small count -- an
+unmarked whole number under 1,000, which counts things or names a standard
+("Ind AS 1", "none of the 3 ingested Reports"). A refusal that never says
+"not found" (or "reported no ...", "there were no ...") is an evasion and
+scores wrong too.
 
 Such an item has no gold evidence, so no citation can be valid and it is
 never `supported`. Completion therefore does NOT demand a valid citation
@@ -274,6 +277,8 @@ _MIN_SIGNIFICANT_FIGURES = 3
 
 _CALENDAR_YEAR = re.compile(r"(?:19|20)\d\d")
 
+_SMALL_COUNT_LIMIT = 1_000
+
 # An explicit statement that the answer is not in the Reports: "could not
 # find", "is not disclosed", "no information on", "not among the ingested
 # Reports". A refusal that never says so is an evasion, not a correct answer.
@@ -286,7 +291,12 @@ _NOT_FOUND = re.compile(
     r"|\bunable\s+to\s+(?:find|locate|answer|determine|identify)"
     r"|\bnot\s+(?:found|available|disclosed|reported|present|among|in\s+the\s+(?:corpus|"
     r"ingested|available|provided))"
-    r"|\bno\s+(?:information|data|record|figure|mention|disclosure|such|relevant|report)",
+    r"|\bno\s+(?:information|data|record|figure|mention|disclosure|such|relevant|report)"
+    # "TCS reported no extraordinary items", "there were no ...", "... none".
+    r"|\b(?:reports?|reported|discloses?|disclosed|records?|recorded|shows?|showed|"
+    r"has|had|have)\s+(?:no|none)\b"
+    r"|\bthere\s+(?:is|are|was|were)\s+no\b"
+    r"|\bnone\s+of\b",
     re.IGNORECASE,
 )
 
@@ -335,9 +345,18 @@ def _headline_figures(text: str, unit: str) -> list[_Figure]:
 
 def _asserted_figures(text: str) -> list[_Figure]:
     """Every figure the answer states, marked or not, percentages included,
-    except a bare calendar year ("as at 31 March 2026"), which asserts
-    nothing about an amount."""
-    return [f for f in _figures(text) if not _CALENDAR_YEAR.fullmatch(f.text)]
+    except a bare calendar year ("as at 31 March 2026") and a small count
+    -- an unmarked whole number under 1,000 ("Ind AS 1", "the 3 ingested
+    Reports") -- neither of which asserts an amount."""
+    return [
+        f for f in _figures(text)
+        if not _CALENDAR_YEAR.fullmatch(f.text) and not _small_count(f)
+    ]
+
+
+def _small_count(figure: _Figure) -> bool:
+    return (not figure.marked and not figure.percent and figure.decimals == 0
+            and abs(figure.amount) < _SMALL_COUNT_LIMIT)
 
 
 def _figures(text: str) -> list[_Figure]:
