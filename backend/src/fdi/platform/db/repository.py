@@ -1204,17 +1204,30 @@ class CompanyRepository:
         await self._s.flush()
 
     async def latest_documents(self, company_id: str) -> list[Document]:
-        """The Company's Reports: one row per `doc_key`, its highest version
-        filed under this Company -- a re-upload is a new version of the same
-        Report, not a second Report. Ranked as `list_latest_per_doc_key`.
+        """The Company's Reports -- its history, each Fiscal year once (S2.6).
+
+        1. One row per `doc_key`: its highest version filed under this
+           Company. A corrected re-upload under the same `doc_key` is a new
+           version of the same Report, not a second Report. Ranked as
+           `list_latest_per_doc_key`.
+        2. Then one row per (Fiscal year, report type): when the same issuer's
+           Report for the same year was uploaded under another `doc_key`, the
+           newest upload stands for that year and the older one drops out of
+           the history. Nothing is re-keyed: every `doc_key` keeps its rows
+           and versions and still scopes retrieval exactly as before. A
+           Report with no Fiscal year is never merged with anything -- it is
+           its own entry.
 
         THE one ordering of a Company's Reports: newest Fiscal year first (by
         period end), a Report with no Fiscal year yet after every dated one,
         then newest upload first."""
         group = func.coalesce(Document.doc_key, Document.id)
-        ranked = (
+        per_doc_key = (
             select(
                 Document.id.label("id"),
+                Document.fiscal_year.label("fiscal_year"),
+                Document.report_type.label("report_type"),
+                Document.created_at.label("created_at"),
                 func.row_number()
                 .over(
                     partition_by=group,
@@ -1229,10 +1242,27 @@ class CompanyRepository:
             .where(Document.company_id == company_id)
             .subquery()
         )
+        latest = select(per_doc_key).where(per_doc_key.c.rn == 1).subquery()
+        # An undated Report partitions on its own id, so it is never merged.
+        undated_own_key = sqlalchemy.case(
+            (latest.c.fiscal_year.is_(None), latest.c.id), else_=None
+        )
+        per_year = (
+            select(
+                latest.c.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=(latest.c.fiscal_year, latest.c.report_type, undated_own_key),
+                    order_by=(latest.c.created_at.desc(), latest.c.id),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
         rows = (
             await self._s.execute(
                 select(Document)
-                .where(Document.id.in_(select(ranked.c.id).where(ranked.c.rn == 1)))
+                .where(Document.id.in_(select(per_year.c.id).where(per_year.c.rn == 1)))
                 .order_by(
                     Document.period_end.desc().nullslast(),
                     Document.created_at.desc(),
