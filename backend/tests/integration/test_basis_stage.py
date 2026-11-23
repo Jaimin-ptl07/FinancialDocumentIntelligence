@@ -118,7 +118,7 @@ async def test_basis_chains_off_ast_and_provenance(session_factory, store) -> No
     basis_key = artifact_key(
         doc.id,
         "basis",
-        1,
+        BasisStage.version,
         derived_input_hash([facts["ast"].output_hash, facts["provenance"].output_hash]),
     )
     body = await store.get_json(basis_key)
