@@ -186,3 +186,115 @@ def test_bases_present_names_each_statement_basis_once_standalone_first() -> Non
     assert bases_present({"regions": [], "default_basis": "unknown"}) == []
     bad: Any = None
     assert bases_present(bad) == []
+
+
+# --- Anchor recall on the corpus's real headings (#57) ------------------------
+
+
+def _doc(headings: list[tuple[int, str]], last_page: int) -> dict[str, object]:
+    """The basis artifact for a Report whose section i is `headings[i]`
+    (page, heading text), with `last_page` its final page."""
+    ast = {"sections": [{"heading": text} for _, text in headings]}
+    provenance = _provenance(
+        [(f"s{i}", page) for i, (page, _) in enumerate(headings)] + [("t0", last_page)]
+    )
+    return detect_basis_regions(ast, provenance)
+
+
+def _regions(artifact: dict[str, object]) -> list[tuple[str, int, int]]:
+    regions: list[dict[str, Any]] = artifact["regions"]  # type: ignore[assignment]
+    return [(r["basis"], r["start_page"], r["end_page"]) for r in regions]
+
+
+# Narrative and contents headings that name a basis without opening it.
+_NOT_ANCHORS = [
+    (3, "Value Added Statement (Consolidated)"),
+    (5, "10-Year Financial Highlights (Consolidated)"),
+    (5, "Standalone Performance"),
+    (42, "Consolidated Financial Statement"),
+]
+
+
+def test_ril_whose_standalone_statements_do_not_say_standalone_has_both_regions() -> None:
+    # RIL FY2025-26: the standalone statements are captioned plain "Balance
+    # Sheet"; only the auditor's report and the notes name the basis.
+    artifact = _doc(
+        [
+            *_NOT_ANCHORS,
+            (52, "Independent Auditor's Report"),
+            (53, "Auditor's Responsibility for the Audit of the Standalone Financial Statements"),
+            (58, "Balance Sheet As at 31st March, 2026"),
+            (59, "Statement of Profit and Loss For the year ended 31st March, 2026"),
+            (62, "Notes To the Standalone Financial Statements for the year ended "
+                 "31st March, 2026"),
+            (93, "Standalone Financial Statements"),
+            (94, "To The Members of Reliance Industries Limited Report on the Audit of the "
+                 "Consolidated Financial Statements"),
+            (100, "Consolidated Balance Sheet As at 31st March, 2026"),
+            (104, "Notes To the Consolidated Financial Statements for the year ended "
+                  "31st March, 2026"),
+        ],
+        last_page=147,
+    )
+
+    assert _regions(artifact) == [("standalone", 53, 93), ("consolidated", 94, 147)]
+    assert bases_present(artifact) == ["standalone", "consolidated"]
+
+
+def test_tcs_regions_open_at_each_auditors_report() -> None:
+    artifact = _doc(
+        [
+            (3, "Standalone Financial Statements"),
+            (3, "Consolidated Financial Statements"),
+            (157, "Report on the Audit of the Consolidated Financial Statements Opinion"),
+            (163, "Annexure A to the Independent Auditor's Report on the Consolidated Financial "
+                  "Statements of Tata Consultancy Services Limited"),
+            (166, "Consolidated Balance Sheet"),
+            (166, "NOTES FORMING PART OF CONSOLIDATED FINANCIAL STATEMENTS"),
+            (239, "Report on the Audit of the Standalone Financial Statements Opinion"),
+            (252, "Standalone Balance Sheet"),
+            (258, "Notes forming part of Standalone Financial Statements"),
+        ],
+        last_page=360,
+    )
+
+    assert _regions(artifact) == [("consolidated", 157, 238), ("standalone", 239, 360)]
+
+
+def test_silver_touch_statements_of_assets_and_liabilities_anchor_their_basis() -> None:
+    artifact = _doc(
+        [
+            (83, "Information other than the Standalone Financial statements and Auditor's "
+                 "report thereon."),
+            (91, "AUDITED STATEMENT OF STANDALONE ASSETS AND LIABILITIES AS ON 31st March 2024"),
+            (93, "SILVER TOUCH TECHNOLOGIES LIMITED CIN-L72200GJ1995PLC024465 AUDITED "
+                 "STANDALONE CASH FLOW STATEMENT FOR THE YEAR"),
+            (131, "Notes forming part of the standalone financial statements"),
+            (134, "Auditor's Responsibilities for the Audit of the Consolidated "
+                  "Financial Statements"),
+            (142, "SILVER TOUCH TECHNOLOGIES LIMITED CIN-L72200GJ1995PLC024465 AUDITED "
+                  "CONSOLIDATED STATEMENT OF ASSETS AND LIABILITIES"),
+            (143, "CONSOLIDATED AUDITED STATEMENT OF PROFIT & LOSS A/C FOR THE YEAR ENDED ON "
+                  "31st March 2024"),
+            (144, "AUDITED CONSOLIDATED CASH FLOW STATEMENT FOR THE YEAR"),
+        ],
+        last_page=185,
+    )
+
+    assert _regions(artifact) == [("standalone", 91, 133), ("consolidated", 134, 185)]
+
+
+def test_remc_whose_report_is_on_standalone_ind_as_statements_is_standalone_only() -> None:
+    artifact = _doc(
+        [
+            (49, "Report on the Audit of the Standalone IND-AS Financial Statements"),
+            (60, "Balance Sheet As at 31st March, 2025"),
+        ],
+        last_page=101,
+    )
+
+    assert _regions(artifact) == [("standalone", 49, 101)]
+
+
+def test_narrative_and_contents_headings_open_no_region() -> None:
+    assert _regions(_doc(_NOT_ANCHORS, last_page=50)) == []

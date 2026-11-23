@@ -69,7 +69,7 @@ def _bounded_regions(
     """Each basis region, narrowed by the statement span found INSIDE IT.
 
     The basis region alone is not a bound. `core/basis.py` gives a document that
-    anchors only ONE basis (RIL, consolidated-only) the whole filing as its
+    anchors only ONE basis (REMC, standalone-only) the whole filing as its
     region, and `_UNKNOWN_REGION` does the same for a document with no anchors
     at all. Scanning that span picks up the Board's Report and the Notice of
     AGM, which restart their own `1.`/`2.` numbering -- and `_HEAD_FLAT` matches

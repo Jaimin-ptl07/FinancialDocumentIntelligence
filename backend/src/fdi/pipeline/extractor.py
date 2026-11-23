@@ -298,7 +298,7 @@ def _filter_by_basis(
 
     GRACEFUL FALLBACK: if filtering to `preference` would drop EVERY candidate
     -- the preferred basis is entirely absent from the pool, e.g. a
-    consolidated-only integrated report (Reliance) against the default
+    consolidated-only integrated report against the default
     `standalone` preference -- keep the unfiltered candidates instead of
     starving the unit. Extracting from the only basis present beats returning
     nothing. Never raises."""
