@@ -633,8 +633,10 @@ class CompanyRegistry:
         return _company_view(company) if company is not None else None
 
     async def company_reports(self, company_id: str) -> list[ReportView]:
-        """A Company's Reports, newest Fiscal year first -- the order is
-        `CompanyRepository.latest_documents`'s, the only place it is decided."""
+        """A Company's Reports, newest Fiscal year first, each dated Fiscal
+        year once (a re-upload under another `doc_key` stands in for the
+        older one; S2.6) -- `CompanyRepository.latest_documents` is the only
+        place the order and that rule are decided."""
         return [
             await self._report_view(d) for d in await self._companies.latest_documents(company_id)
         ]
