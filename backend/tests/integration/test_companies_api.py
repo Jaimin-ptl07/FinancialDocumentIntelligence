@@ -42,7 +42,9 @@ async def test_a_company_shows_its_registered_name_cin_and_reports(
         "id": company_id, "cin": filed_report["cin"], "name": "Acme Widgets Limited",
     }
     assert reports.status_code == 200
-    assert reports.json()["reports"] == [{
+    (report,) = reports.json()["reports"]
+    assert report.pop("link_reason").startswith("CIN printed beside the issuer's name")
+    assert report == {
         "doc_id": filed_report["doc_id"],
         "doc_key": filed_report["doc_key"],
         "version": 1,
@@ -50,14 +52,18 @@ async def test_a_company_shows_its_registered_name_cin_and_reports(
         "fiscal_year": None,
         "fiscal_year_confidence": "none",
         "fiscal_year_reason": "no Fiscal year is printed in the Report",
+        "fiscal_year_method": None,
         "period_start": None,
         "period_end": None,
         "report_type": "annual_report",
+        "company_id": company_id,
         "link_status": "linked",
         "link_method": "cin",
+        "candidates": None,
+        "last_change": None,
         "bases_present": [],
         "processing_status": "processing",
-    }]
+    }
 
 
 async def _index_done(session_factory, doc_id: str) -> None:

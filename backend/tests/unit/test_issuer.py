@@ -4,7 +4,9 @@ Fixture passages are cut verbatim from the corpus's real Reports (TCS, RIL,
 REMC, Silver Touch) -- page numbers included -- so the ranking is exercised on
 the wording annual reports actually print, not on invented prose."""
 
-from fdi.core.issuer import identify_issuer
+from datetime import date
+
+from fdi.core.issuer import fiscal_year_period, identify_issuer
 
 TCS_CIN = "L22210MH1995PLC084781"
 RIL_CIN = "L17110MH1973PLC019786"
@@ -457,3 +459,53 @@ def test_no_fiscal_year_printed_says_why() -> None:
     assert result["fiscal_year_confidence"] == "none"
     assert result["fiscal_year_reason"]
     assert result["fiscal_year_candidates"] == []
+
+
+# --- Awaiting confirmation (S2.3): unsure is said, with the reason -----------
+
+
+def test_two_cins_beside_the_issuers_name_with_no_label_are_ambiguous_and_say_why() -> None:
+    first, second = "U12345MH2001PLC111111", "U54321MH2002PLC222222"
+    ast, prov = _report(
+        ("Directors' Report", ["Delta Grid Limited had a record year."], 3),
+        ("Notice", [f"Delta Grid Limited {first}"], 9),
+        ("Back cover", [f"Delta Grid Limited {second}"], 40),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["cin"] is None
+    assert result["issuer_name"] is None
+    assert result["confidence"] == "low"
+    assert first in result["reason"] and second in result["reason"]
+    assert {c["cin"] for c in result["cin_candidates"]} == {first, second}
+
+
+def test_no_cin_still_names_the_companies_the_report_is_about() -> None:
+    ast, prov = _report(
+        ("Directors' Report", ["Beta Power Limited had a record year."], 5),
+        ("Chairman's letter", ["At Beta Power Limited, and with Omega Grid Ltd., we grew."], 7),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert (result["cin"], result["issuer_name"], result["confidence"]) == (None, None, "none")
+    assert "no CIN" in result["reason"]
+    names = result["name_candidates"]
+    assert [(n["name"], n["mentions"]) for n in names] == [
+        ("Beta Power Limited", 2), ("Omega Grid Ltd", 1),
+    ]
+    assert names[0]["evidence"]["page"] == 5
+
+
+# --- An Invitee's Fiscal year (S2.3) ----------------------------------------
+
+
+def test_an_invitees_fiscal_year_is_read_as_the_indian_fiscal_year() -> None:
+    for label in ("FY2024-25", "fy 2024-25", "2024-25", "FY2024-2025", "2024/25"):
+        assert fiscal_year_period(label) == ("FY2024-25", date(2024, 4, 1), date(2025, 3, 31))
+
+
+def test_a_fiscal_year_that_is_not_one_is_refused() -> None:
+    for label in ("FY2024-26", "2024", "last year", "", "FY2024-23"):
+        assert fiscal_year_period(label) is None

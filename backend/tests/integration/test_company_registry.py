@@ -78,7 +78,7 @@ async def test_resolving_twice_changes_nothing(session_factory, store) -> None:
         assert len(await CompanyRegistry(s, store).company_reports(a.company_id)) == 1
 
 
-async def test_a_report_with_no_cin_is_left_unlinked_with_the_reason(
+async def test_a_report_with_no_cin_is_left_unlinked_awaiting_an_invitee_with_the_reason(
     session_factory, store
 ) -> None:
     doc_id = await ingest(
@@ -90,7 +90,8 @@ async def test_a_report_with_no_cin_is_left_unlinked_with_the_reason(
 
     assert outcome.company_id is None
     assert "no CIN" in outcome.reason
-    assert outcome.link_status == "unidentified"
+    # It names its issuer without a CIN: an Invitee confirms it (S2.3).
+    assert outcome.link_status == "awaiting_confirmation"
 
 
 async def test_cins_with_no_clear_issuer_await_confirmation(session_factory, store) -> None:

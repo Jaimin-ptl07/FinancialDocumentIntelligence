@@ -26,6 +26,7 @@ from fdi.platform.db.models import (
     LlmUsageEvent,
     OcrUsageEvent,
     RefreshToken,
+    ReportLinkChange,
     StageRun,
 )
 
@@ -1168,40 +1169,97 @@ class CompanyRepository:
         ).all()
         return [(change, email) for change, email in rows]
 
-    async def link_document(self, doc_id: str, company_id: str) -> None:
-        await self._s.execute(
-            sqlalchemy.update(Document)
-            .where(Document.id == doc_id)
-            .values(company_id=company_id)
+    async def report(self, doc_id: str) -> Document | None:
+        """The Report's current row -- re-read, never a stale identity-map
+        copy, since its link may just have been rewritten."""
+        return await self._s.get(Document, doc_id, populate_existing=True)
+
+    async def set_report_link(
+        self,
+        doc_id: str,
+        *,
+        company_id: str | None,
+        link_status: str,
+        link_method: str | None,
+        keep_method: str | None = None,
+    ) -> bool:
+        """File the Report under `company_id` (None: under no Company) with
+        its link status and method. With `keep_method`, a Report whose link
+        was made by that method is left as it is and False returned -- decided
+        in the UPDATE itself, so a resolution racing an Invitee's confirm
+        cannot overwrite it."""
+        stmt = sqlalchemy.update(Document).where(Document.id == doc_id)
+        if keep_method is not None:
+            stmt = stmt.where(Document.link_method.is_distinct_from(keep_method))
+        result = await self._s.execute(
+            stmt.values(company_id=company_id, link_status=link_status, link_method=link_method)
+            .execution_options(synchronize_session=False)
         )
         await self._s.flush()
+        return bool(result.rowcount)  # type: ignore[attr-defined]
 
-    async def set_report_metadata(
+    async def set_report_coverage(
         self,
         doc_id: str,
         *,
         fiscal_year: str | None,
         period_start: date | None,
         period_end: date | None,
-        report_type: str,
-        link_status: str,
-        link_method: str | None,
-    ) -> None:
-        """What a Report covers and how it was filed (S2.2). Overwrites: the
-        issuer artifact is the source, re-resolving rewrites the same values."""
-        await self._s.execute(
-            sqlalchemy.update(Document)
-            .where(Document.id == doc_id)
-            .values(
+        report_type: str | None,
+        fiscal_year_method: str | None,
+        keep_method: str | None = None,
+    ) -> bool:
+        """What the Report covers: its Fiscal year and period, report type,
+        and how the Fiscal year was set. `keep_method` as `set_report_link`'s,
+        against `fiscal_year_method`."""
+        stmt = sqlalchemy.update(Document).where(Document.id == doc_id)
+        if keep_method is not None:
+            stmt = stmt.where(Document.fiscal_year_method.is_distinct_from(keep_method))
+        result = await self._s.execute(
+            stmt.values(
                 fiscal_year=fiscal_year,
                 period_start=period_start,
                 period_end=period_end,
                 report_type=report_type,
-                link_status=link_status,
-                link_method=link_method,
+                fiscal_year_method=fiscal_year_method,
+            ).execution_options(synchronize_session=False)
+        )
+        await self._s.flush()
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def record_report_change(
+        self, doc_id: str, *, invitee_id: str, action: str, detail: dict[str, object]
+    ) -> None:
+        self._s.add(
+            ReportLinkChange(
+                id=str(uuid.uuid4()), doc_id=doc_id, invitee_id=invitee_id,
+                action=action, detail=detail,
             )
         )
         await self._s.flush()
+
+    async def report_changes(self, doc_id: str) -> list[tuple[ReportLinkChange, str]]:
+        """(change, the acting Invitee's email), oldest first."""
+        rows = (
+            await self._s.execute(
+                select(ReportLinkChange, AppUser.email)
+                .join(AppUser, AppUser.id == ReportLinkChange.invitee_id)
+                .where(ReportLinkChange.doc_id == doc_id)
+                .order_by(ReportLinkChange.at, ReportLinkChange.id)
+            )
+        ).all()
+        return [(change, email) for change, email in rows]
+
+    async def reports_by_link_status(self, link_status: str) -> list[Document]:
+        """Every Report with this link status, newest upload first."""
+        rows = (
+            await self._s.execute(
+                select(Document)
+                .where(Document.link_status == link_status)
+                .order_by(Document.created_at.desc(), Document.id)
+            )
+        ).scalars().all()
+        return list(rows)
 
     async def latest_documents(self, company_id: str) -> list[Document]:
         """The Company's Reports: one row per `doc_key`, its highest version
@@ -1238,6 +1296,7 @@ class CompanyRepository:
                     Document.created_at.desc(),
                     Document.id,
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalars().all()
         return list(rows)

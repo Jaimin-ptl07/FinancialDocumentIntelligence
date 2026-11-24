@@ -37,6 +37,28 @@ class CompanyListOut(BaseModel):
     companies: list[CompanyOut]
 
 
+class ChangeOut(BaseModel):
+    action: str
+    invitee_id: str
+    invitee_email: str
+    at: datetime
+    detail: dict[str, object]
+
+
+class CinCandidateOut(BaseModel):
+    cin: str
+    name: str | None
+    page: int | None
+
+
+class CandidatesOut(BaseModel):
+    """What an Invitee chooses between for a Report awaiting confirmation."""
+
+    cins: list[CinCandidateOut]
+    names: list[str]
+    companies: list[CompanyOut]
+
+
 class ReportOut(BaseModel):
     doc_id: str
     doc_key: str | None
@@ -45,11 +67,20 @@ class ReportOut(BaseModel):
     fiscal_year: str | None
     fiscal_year_confidence: str | None
     fiscal_year_reason: str | None
+    # None (read by the issuer stage) or "confirmed_by_invitee".
+    fiscal_year_method: str | None
     period_start: date | None
     period_end: date | None
     report_type: str | None
+    company_id: str | None
     link_status: str | None
     link_method: str | None
+    # Why the issuer stage could or could not file it (None once an Invitee
+    # has); `candidates` only while awaiting confirmation.
+    link_reason: str | None
+    candidates: CandidatesOut | None
+    # The latest manual change to its Company or Fiscal year: who and when.
+    last_change: ChangeOut | None
     bases_present: list[str]
     processing_status: str
 
@@ -64,13 +95,34 @@ def _company_out(c: CompanyView) -> CompanyOut:
     return CompanyOut(id=c.id, cin=c.cin, name=c.name)
 
 
-def _report_out(r: ReportView) -> ReportOut:
+def change_out(c: ChangeView) -> ChangeOut:
+    return ChangeOut(
+        action=c.action, invitee_id=c.invitee_id, invitee_email=c.invitee_email,
+        at=c.at, detail=c.detail,
+    )
+
+
+def report_out(r: ReportView) -> ReportOut:
+    candidates = r.candidates
     return ReportOut(
         doc_id=r.doc_id, doc_key=r.doc_key, version=r.version, filename=r.filename,
         fiscal_year=r.fiscal_year, fiscal_year_confidence=r.fiscal_year_confidence,
-        fiscal_year_reason=r.fiscal_year_reason,
+        fiscal_year_reason=r.fiscal_year_reason, fiscal_year_method=r.fiscal_year_method,
         period_start=r.period_start, period_end=r.period_end,
-        report_type=r.report_type, link_status=r.link_status, link_method=r.link_method,
+        report_type=r.report_type, company_id=r.company_id,
+        link_status=r.link_status, link_method=r.link_method, link_reason=r.link_reason,
+        candidates=(
+            CandidatesOut(
+                cins=[
+                    CinCandidateOut(cin=c.cin, name=c.name, page=c.page)
+                    for c in candidates.cins
+                ],
+                names=list(candidates.names),
+                companies=[_company_out(c) for c in candidates.companies],
+            )
+            if candidates is not None else None
+        ),
+        last_change=change_out(r.last_change) if r.last_change is not None else None,
         bases_present=list(r.bases_present), processing_status=r.processing_status,
     )
 
@@ -119,14 +171,6 @@ class IdentifierListOut(BaseModel):
     identifiers: list[IdentifierOut]
 
 
-class ChangeOut(BaseModel):
-    action: str
-    invitee_id: str
-    invitee_email: str
-    at: datetime
-    detail: dict[str, object]
-
-
 class ChangeListOut(BaseModel):
     changes: list[ChangeOut]
 
@@ -135,14 +179,7 @@ def _identifier_out(i: IdentifierView) -> IdentifierOut:
     return IdentifierOut(id=i.id, type=i.kind, value=i.value)
 
 
-def _change_out(c: ChangeView) -> ChangeOut:
-    return ChangeOut(
-        action=c.action, invitee_id=c.invitee_id, invitee_email=c.invitee_email,
-        at=c.at, detail=c.detail,
-    )
-
-
-def _refused(exc: CompanyCurationError) -> HTTPException:
+def refused(exc: CompanyCurationError) -> HTTPException:
     if isinstance(exc, CompanyConflict):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
@@ -163,7 +200,7 @@ async def create_company(
             name=body.name, cin=body.cin, invitee_id=invitee_id
         )
     except CompanyCurationError as exc:
-        raise _refused(exc) from exc
+        raise refused(exc) from exc
     await session.commit()
     return _company_out(company)
 
@@ -178,7 +215,7 @@ async def update_company(
             company_id, invitee_id=invitee_id, name=body.name, cin=body.cin
         )
     except CompanyCurationError as exc:
-        raise _refused(exc) from exc
+        raise refused(exc) from exc
     if company is None:
         raise _not_found(company_id)
     await session.commit()
@@ -212,7 +249,7 @@ async def add_identifier(
             company_id, kind=body.type, value=body.value, invitee_id=invitee_id
         )
     except CompanyCurationError as exc:
-        raise _refused(exc) from exc
+        raise refused(exc) from exc
     if identifier is None:
         raise _not_found(company_id)
     await session.commit()
@@ -244,7 +281,7 @@ async def list_changes(company_id: str, session: SessionDep, store: StoreDep) ->
     registry = CompanyRegistry(session, store)
     if await registry.get_company(company_id) is None:
         raise _not_found(company_id)
-    return ChangeListOut(changes=[_change_out(c) for c in await registry.changes(company_id)])
+    return ChangeListOut(changes=[change_out(c) for c in await registry.changes(company_id)])
 
 
 @router.get("/{company_id}", response_model=CompanyOut)
@@ -263,4 +300,4 @@ async def company_reports(
     if await registry.get_company(company_id) is None:
         raise HTTPException(status_code=404, detail=f"company {company_id} not found")
     reports = await registry.company_reports(company_id)
-    return ReportListOut(reports=[_report_out(r) for r in reports])
+    return ReportListOut(reports=[report_out(r) for r in reports])

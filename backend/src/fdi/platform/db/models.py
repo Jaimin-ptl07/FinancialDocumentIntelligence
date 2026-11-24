@@ -75,6 +75,10 @@ class Document(Base):
     report_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     link_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     link_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # None while `fiscal_year` is the issuer stage's reading;
+    # "confirmed_by_invitee" once an Invitee corrected it (S2.3, migration
+    # 0018) -- re-resolving the Report then leaves it alone.
+    fiscal_year_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -91,6 +95,25 @@ class Company(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ReportLinkChange(Base):
+    """One Invitee's confirm or correction of a Report's Company or Fiscal
+    year -- who and when (S2.3). Append only; goes with its Report."""
+
+    __tablename__ = "report_link_change"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invitee_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # clock_timestamp(): two changes in one transaction keep their order.
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
 
 

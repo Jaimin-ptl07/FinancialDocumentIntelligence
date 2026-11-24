@@ -40,6 +40,10 @@ _Avoid_: "document" when the Report is meant (a document is one uploaded PDF), "
 The reporting period a Report covers, written `FY2025-26` for the year ending 31 March 2026 (the Indian April–March year). Distinct from when the Report was published.
 _Avoid_: "FY26", "2025" (ambiguous between the year a period starts, ends or is published)
 
+**Awaiting confirmation**:
+A Report whose issuer FDI could not identify confidently — no CIN printed, several CINs with no clear winner, or only a company name — and which therefore sits under no Company until an Invitee confirms one. A Report printing neither a CIN nor a company name is _unidentified_. An Invitee's confirmation or correction of a Report's Company or Fiscal year is recorded with who and when, and re-processing the Report never undoes it.
+_Avoid_: "unlinked" (says nothing about why), "pending" (overloaded with processing)
+
 ## Extraction
 
 **Extraction schema**:

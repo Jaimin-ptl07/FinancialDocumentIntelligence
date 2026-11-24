@@ -73,6 +73,9 @@ _AGAINST = -3
 # whole signal; anything closer is a guess an Invitee should settle.
 _MIN_WINNING_SCORE = 3
 _MIN_MARGIN = 2
+# With no CIN printed, how many of the most-mentioned company names are kept
+# as candidates: a Report names its banks, auditors and subsidiaries too.
+_MAX_NAME_CANDIDATES = 10
 
 
 def _normalize_name(name: str) -> str:
@@ -331,6 +334,23 @@ def _cover_period(match: re.Match[str]) -> tuple[date, date] | None:
     return date(first, 4, 1), date(last, 3, 31)
 
 
+_FISCAL_LABEL_RE = re.compile(r"^\s*(?:FY\s*)?(\d{4})\s*[-–/]\s*(\d{4}|\d{2})\s*$", re.IGNORECASE)
+
+
+def fiscal_year_period(label: str) -> tuple[str, date, date] | None:
+    """An Invitee's Fiscal year ("FY2024-25", "2024-25", "FY2024-2025") as
+    (canonical label, period start, period end): the Indian Fiscal year April
+    2024 - March 2025. None for anything that is not one Fiscal year."""
+    match = _FISCAL_LABEL_RE.match(label)
+    if match is None:
+        return None
+    period = _cover_period(match)
+    if period is None:
+        return None
+    start, end = period
+    return _fiscal_label(start, end), start, end
+
+
 def _fy_candidate(
     source: str, period: tuple[date, date], node_id: str, page: int | None, text: str
 ) -> dict[str, object]:
@@ -451,7 +471,9 @@ def identify_issuer(
     does, "none" when the Report prints no CIN), a human-readable `reason`,
     and every CIN and name candidate with its evidence (node id, page, the
     passage around the CIN) so a link is auditable like every other FDI fact. Candidates are
-    ordered best first.
+    ordered best first. With no CIN printed at all, `name_candidates` are the
+    company names the Report mentions most -- for an Invitee to confirm
+    against; a name alone never identifies the issuer.
 
     Also the Report's Fiscal year: `fiscal_year` ("FY2025-26"), `period_start`
     / `period_end` (ISO dates) or all None, a `fiscal_year_confidence`
@@ -466,10 +488,48 @@ def identify_issuer(
     return {**_identify_cin(ast, pages), **_fiscal_year(ast, pages)}
 
 
+def _names_without_cin(
+    ast: Mapping[str, object], pages: Mapping[str, int]
+) -> list[dict[str, object]]:
+    """With no CIN printed, the company names the Report mentions, most
+    mentioned first, each with where it is first printed -- for an Invitee to
+    confirm against, never to file under. A name that only extends another by
+    leading words ("At Beta Power Limited") is that other name."""
+    first_seen: dict[str, tuple[str, dict[str, object]]] = {}
+    for blocks in _blocks(ast):
+        for node_id, text in blocks:
+            for suffix in _SUFFIX_RE.finditer(text):
+                name = _attached_name(text[: suffix.end()])
+                if name is None:
+                    continue
+                key = _normalize_name(name)
+                if key not in first_seen:
+                    start = max(0, suffix.end() - len(name) - 1)
+                    first_seen[key] = (name, {
+                        "node_id": node_id,
+                        "page": pages.get(node_id),
+                        "text": _passage(text, start, suffix.end()),
+                    })
+    keys = [
+        key for key in first_seen
+        if not any(other != key and key.endswith(" " + other) for other in first_seen)
+    ]
+    normalized_text = _normalize_name(_full_text(ast))
+    mentions = {key: len(_name_pattern(key).findall(normalized_text)) for key in keys}
+    ranked = sorted(keys, key=lambda k: mentions[k], reverse=True)[:_MAX_NAME_CANDIDATES]
+    return [
+        {"name": first_seen[k][0], "mentions": mentions[k], "evidence": first_seen[k][1]}
+        for k in ranked
+    ]
+
+
 def _identify_cin(ast: Mapping[str, object], pages: Mapping[str, int]) -> dict[str, object]:
     occurrences = _occurrences(ast, pages)
     if not occurrences:
-        return _empty("no CIN is printed anywhere in the Report")
+        return {
+            **_empty("no CIN is printed anywhere in the Report"),
+            "name_candidates": _names_without_cin(ast, pages),
+        }
 
     text = _full_text(ast)
     normalized_text = _normalize_name(text)

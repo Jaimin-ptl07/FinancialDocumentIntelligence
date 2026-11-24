@@ -9,14 +9,23 @@ module only acts on its verdict:
 * a confident CIN that is already known -> file the Report under it;
 * a confident CIN that is new -> create the Company, then file the Report;
 * anything else (no CIN, no clear winner, no issuer artifact) -> leave the
-  Report unfiled and say why. A Company is never created on a guess.
+  Report under NO Company and say why. A Company is never created on a
+  guess, nor from a name alone (design §6.1).
 
 Resolving also records the Report's metadata from the same artifact (S2.2):
-its Fiscal year and period, report type, link status (`linked`,
-`awaiting_confirmation` when CINs are printed but none is clearly the
-issuer's, `unidentified` when none is printed) and link method (`cin`).
-Statement bases are never stored: `company_reports` reads them from the
-basis segmentation each time ("bases present").
+its Fiscal year and period, report type, link status and link method (`cin`).
+`linked` means filed on a confident CIN (or by an Invitee);
+`awaiting_confirmation` means the Report prints something about its issuer --
+CINs with no clear winner, or company names but no CIN -- and waits, with
+those candidates and the reason, for an Invitee; `unidentified` means it
+prints neither. Neither of the last two is ever under a Company unless an
+Invitee put it there. Statement bases are never stored: `company_reports`
+reads them from the basis segmentation each time ("bases present").
+
+An Invitee confirms or corrects a Report's Company (`link_report`) and
+Fiscal year (`correct_fiscal_year`) here too (S2.3). Either is marked
+`confirmed_by_invitee` and logged with who and when (append-only), and
+resolving the Report again -- re-processing, backfill -- never overwrites it.
 
 A pipeline-layer service, the same shape as `fdi.pipeline.crossdoc`:
 pipeline -> platform -> core.
@@ -38,6 +47,7 @@ from fdi.core.company_names import (
     normalize_cin,
     normalize_identifier,
 )
+from fdi.core.issuer import fiscal_year_period
 from fdi.pipeline.crossdoc import read_artifact
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
@@ -49,6 +59,7 @@ from fdi.platform.db.models import (
     CompanyChange,
     CompanyIdentifier,
     Document,
+    ReportLinkChange,
     StageStatus,
 )
 from fdi.platform.db.repository import CompanyRepository, RegistryRepository
@@ -60,16 +71,42 @@ LINKED = "linked"
 AWAITING_CONFIRMATION = "awaiting_confirmation"
 UNIDENTIFIED = "unidentified"
 LINK_METHOD_CIN = "cin"
+# An Invitee confirmed or corrected it (S2.3). Used for both the Company link
+# (`link_method`) and the Fiscal year (`fiscal_year_method`); re-resolving a
+# Report never overwrites what an Invitee set.
+LINK_METHOD_INVITEE = "confirmed_by_invitee"
 
 # The stage whose completion makes a Report searchable by /ask.
 _RESEARCH_READY_STAGE = "index"
 
 
 @dataclass(frozen=True)
+class CinCandidate:
+    """A CIN printed in the Report, with the company name printed beside it
+    and the page."""
+
+    cin: str
+    name: str | None
+    page: int | None
+
+
+@dataclass(frozen=True)
+class LinkCandidates:
+    """What an Invitee chooses between for a Report awaiting confirmation:
+    the CINs it prints, the company names it prints, and the Companies
+    already in the registry that one of those CINs or names belongs to."""
+
+    cins: "tuple[CinCandidate, ...]" = ()
+    names: tuple[str, ...] = ()
+    companies: "tuple[CompanyView, ...]" = ()
+
+
+@dataclass(frozen=True)
 class ReportLink:
     """What resolving one Report did. `company_id` is None when the Report
     was left unfiled; `reason` says why either way. `link_status` is None only
-    when the issuer stage has not run."""
+    when the issuer stage has not run. `candidates` are set while the Report
+    awaits confirmation."""
 
     doc_id: str
     company_id: str | None
@@ -78,6 +115,7 @@ class ReportLink:
     reason: str
     link_status: str | None = None
     fiscal_year: str | None = None
+    candidates: LinkCandidates | None = None
 
 
 # --- hand curation and finding a Company (S2.4) ------------------------------
@@ -93,6 +131,10 @@ class InvalidCompanyInput(CompanyCurationError):
 
 class CompanyConflict(CompanyCurationError):
     """The CIN or (type, value) identifier already belongs to a Company."""
+
+
+class UnknownCompany(CompanyCurationError):
+    """A Report cannot be filed under a Company that does not exist."""
 
 
 @dataclass(frozen=True)
@@ -133,6 +175,13 @@ def _identifier_view(row: CompanyIdentifier) -> IdentifierView:
 
 
 def _change_view(change: CompanyChange, email: str) -> ChangeView:
+    return ChangeView(
+        action=change.action, invitee_id=change.invitee_id, invitee_email=email,
+        at=change.at, detail=dict(change.detail),
+    )
+
+
+def _report_change_view(change: ReportLinkChange, email: str) -> ChangeView:
     return ChangeView(
         action=change.action, invitee_id=change.invitee_id, invitee_email=email,
         at=change.at, detail=dict(change.detail),
@@ -185,6 +234,17 @@ class ReportView:
     link_method: str | None
     bases_present: tuple[str, ...]
     processing_status: str
+    # S2.3: the Company it is filed under (None while awaiting confirmation
+    # or unidentified, unless an Invitee filed it), why the issuer stage
+    # could or could not file it, and -- only while awaiting confirmation --
+    # what an Invitee chooses between.
+    company_id: str | None = None
+    link_reason: str | None = None
+    candidates: LinkCandidates | None = None
+    # How the Fiscal year was set: None (the issuer stage) or
+    # "confirmed_by_invitee"; and the latest manual change, who and when.
+    fiscal_year_method: str | None = None
+    last_change: "ChangeView | None" = None
 
 
 def _str_or_none(value: object) -> str | None:
@@ -216,11 +276,40 @@ def _iso_date(value: object) -> date | None:
 
 
 def _link_status(issuer: Mapping[str, object]) -> str:
+    """Linked only on a confident CIN. Anything the Report does print about
+    its issuer -- CINs with no clear winner, or company names with no CIN --
+    awaits an Invitee; a Report printing neither is unidentified."""
     if isinstance(issuer.get("cin"), str) and isinstance(issuer.get("issuer_name"), str):
         return LINKED
-    if issuer.get("cin_candidates"):
+    if issuer.get("cin_candidates") or issuer.get("name_candidates"):
         return AWAITING_CONFIRMATION
     return UNIDENTIFIED
+
+
+def _mappings(value: object) -> list[Mapping[str, object]]:
+    return [v for v in value if isinstance(v, Mapping)] if isinstance(value, list) else []
+
+
+def _cin_candidates(issuer: Mapping[str, object]) -> tuple[CinCandidate, ...]:
+    out: list[CinCandidate] = []
+    for c in _mappings(issuer.get("cin_candidates")):
+        cin = c.get("cin")
+        if not isinstance(cin, str):
+            continue
+        evidence = c.get("evidence")
+        page = evidence.get("page") if isinstance(evidence, Mapping) else None
+        out.append(
+            CinCandidate(
+                cin=cin, name=_str_or_none(c.get("name")),
+                page=page if isinstance(page, int) and not isinstance(page, bool) else None,
+            )
+        )
+    return tuple(out)
+
+
+def _name_candidates(issuer: Mapping[str, object]) -> tuple[str, ...]:
+    names = (_str_or_none(n.get("name")) for n in _mappings(issuer.get("name_candidates")))
+    return tuple(n for n in names if n is not None)
 
 
 class CompanyRegistry:
@@ -243,32 +332,168 @@ class CompanyRegistry:
                 reason="the issuer stage has not run",
             )
         link_status = _link_status(issuer)
-        fiscal_year = issuer.get("fiscal_year")
-        fiscal_year = fiscal_year if isinstance(fiscal_year, str) else None
-        await self._companies.set_report_metadata(
+        # What an Invitee set is theirs: the writes below skip a Fiscal year
+        # or a link made `confirmed_by_invitee`, in the UPDATE itself, so a
+        # resolution racing an Invitee's confirm cannot undo it either.
+        await self._companies.set_report_coverage(
             doc_id,
-            fiscal_year=fiscal_year,
+            fiscal_year=_str_or_none(issuer.get("fiscal_year")),
             period_start=_iso_date(issuer.get("period_start")),
             period_end=_iso_date(issuer.get("period_end")),
             report_type=REPORT_TYPE_ANNUAL,
-            link_status=link_status,
-            link_method=LINK_METHOD_CIN if link_status == LINKED else None,
+            fiscal_year_method=None,
+            keep_method=LINK_METHOD_INVITEE,
         )
+        doc = await self._companies.report(doc_id)
+        if doc is None:
+            return ReportLink(
+                doc_id=doc_id, company_id=None, cin=None, created_company=False,
+                reason="there is no such Report",
+            )
+        fiscal_year = doc.fiscal_year
+        if doc.link_method == LINK_METHOD_INVITEE:
+            return self._kept(doc)
+        reason = str(issuer.get("reason", ""))
         cin = issuer.get("cin")
         name = issuer.get("issuer_name")
         if not isinstance(cin, str) or not isinstance(name, str):
+            # No confident issuer: filed under no Company, whatever an
+            # earlier resolution filed it under.
+            if not await self._companies.set_report_link(
+                doc_id, company_id=None, link_status=link_status, link_method=None,
+                keep_method=LINK_METHOD_INVITEE,
+            ):
+                return await self._kept_now(doc_id)
             return ReportLink(
                 doc_id=doc_id, company_id=None, cin=None, created_company=False,
-                reason=str(issuer.get("reason", "")),
-                link_status=link_status, fiscal_year=fiscal_year,
+                reason=reason, link_status=link_status, fiscal_year=fiscal_year,
+                candidates=(
+                    await self._candidates(issuer)
+                    if link_status == AWAITING_CONFIRMATION else None
+                ),
             )
         company, created = await self._companies.get_or_create_by_cin(cin=cin, name=name)
-        await self._companies.link_document(doc_id, company.id)
+        if not await self._companies.set_report_link(
+            doc_id, company_id=company.id, link_status=LINKED, link_method=LINK_METHOD_CIN,
+            keep_method=LINK_METHOD_INVITEE,
+        ):
+            return await self._kept_now(doc_id)
         return ReportLink(
             doc_id=doc_id, company_id=company.id, cin=cin, created_company=created,
-            reason=str(issuer.get("reason", "")),
-            link_status=link_status, fiscal_year=fiscal_year,
+            reason=reason, link_status=link_status, fiscal_year=fiscal_year,
         )
+
+    @staticmethod
+    def _kept(doc: Document) -> ReportLink:
+        return ReportLink(
+            doc_id=doc.id, company_id=doc.company_id, cin=None, created_company=False,
+            reason="filed by an Invitee; resolving the Report again leaves it there",
+            link_status=doc.link_status, fiscal_year=doc.fiscal_year,
+        )
+
+    async def _kept_now(self, doc_id: str) -> ReportLink:
+        """The link write was skipped: an Invitee filed the Report while this
+        resolution ran (or the Report has since gone)."""
+        doc = await self._companies.report(doc_id)
+        if doc is None:
+            return ReportLink(
+                doc_id=doc_id, company_id=None, cin=None, created_company=False,
+                reason="there is no such Report",
+            )
+        return self._kept(doc)
+
+    async def _candidates(self, issuer: Mapping[str, object]) -> LinkCandidates:
+        """The Report's printed CINs and names, and the registry's Companies
+        that one of them belongs to -- by CIN, or by name or alias, spelling
+        aside. Suggestions only: nothing here files the Report."""
+        cins = _cin_candidates(issuer)
+        names = _name_candidates(issuer)
+        printed_cins = {c.cin for c in cins}
+        printed_names = [*names, *(c.name for c in cins if c.name is not None)]
+        companies = tuple(
+            _company_view(company)
+            for company, known_as in await self._names()
+            if company.cin in printed_cins
+            or any(is_same_name(p, k) for p in printed_names for k in known_as)
+        )
+        return LinkCandidates(cins=cins, names=names, companies=companies)
+
+    async def report(self, doc_id: str) -> ReportView | None:
+        """One Report as an Invitee sees it; None when there is no such
+        Report."""
+        doc = await self._companies.report(doc_id)
+        return await self._report_view(doc) if doc is not None else None
+
+    async def reports_awaiting_confirmation(self) -> list[ReportView]:
+        """Every Report waiting for an Invitee, newest upload first."""
+        return [
+            await self._report_view(d)
+            for d in await self._companies.reports_by_link_status(AWAITING_CONFIRMATION)
+        ]
+
+    # --- an Invitee confirms or corrects a Report (S2.3) --------------------
+
+    async def link_report(
+        self, doc_id: str, *, company_id: str, invitee_id: str
+    ) -> ReportView | None:
+        """File a Report under `company_id` by an Invitee's word: confirming
+        it (it was under no Company, or already under this one) or correcting
+        it (it was under another). Its link method becomes
+        `confirmed_by_invitee`, which re-resolving the Report never
+        overwrites. None when there is no such Report; raises
+        `UnknownCompany` when there is no such Company."""
+        doc = await self._companies.report(doc_id)
+        if doc is None:
+            return None
+        if await self._companies.get(company_id) is None:
+            raise UnknownCompany(f"no Company {company_id}")
+        previous = doc.company_id
+        await self._companies.set_report_link(
+            doc_id, company_id=company_id, link_status=LINKED, link_method=LINK_METHOD_INVITEE
+        )
+        detail: dict[str, object]
+        if previous is None or previous == company_id:
+            action, detail = "confirm", {"company_id": company_id}
+        else:
+            action, detail = "correct_company", {"company_id": [previous, company_id]}
+        await self._companies.record_report_change(
+            doc_id, invitee_id=invitee_id, action=action, detail=detail
+        )
+        return await self.report(doc_id)
+
+    async def correct_fiscal_year(
+        self, doc_id: str, *, fiscal_year: str, invitee_id: str
+    ) -> ReportView | None:
+        """Set a Report's Fiscal year by an Invitee's word ("FY2024-25"): its
+        period follows (April 2024 - March 2025), so does its place in its
+        Company's history, and re-resolving the Report never overwrites it.
+        None when there is no such Report; raises `InvalidCompanyInput` for a
+        label that is not one Fiscal year."""
+        period = fiscal_year_period(fiscal_year)
+        if period is None:
+            raise InvalidCompanyInput(f"{fiscal_year!r} is not a Fiscal year like FY2024-25")
+        doc = await self._companies.report(doc_id)
+        if doc is None:
+            return None
+        label, start, end = period
+        previous = doc.fiscal_year
+        await self._companies.set_report_coverage(
+            doc_id, fiscal_year=label, period_start=start, period_end=end,
+            report_type=doc.report_type or REPORT_TYPE_ANNUAL,
+            fiscal_year_method=LINK_METHOD_INVITEE,
+        )
+        await self._companies.record_report_change(
+            doc_id, invitee_id=invitee_id, action="correct_fiscal_year",
+            detail={"fiscal_year": [previous, label]},
+        )
+        return await self.report(doc_id)
+
+    async def report_changes(self, doc_id: str) -> list[ChangeView]:
+        """Every manual change to the Report's link, oldest first."""
+        return [
+            _report_change_view(c, email)
+            for c, email in await self._companies.report_changes(doc_id)
+        ]
 
     # --- hand curation (S2.4): every change records the acting Invitee -----
 
@@ -419,7 +644,17 @@ class CompanyRegistry:
         basis = await read_artifact(registry, self._store, doc.id, BasisStage.name)
         issuer = await read_artifact(registry, self._store, doc.id, IssuerStage.name) or {}
         latest = {stage: run.status for stage, run in (await registry.latest_runs(doc.id)).items()}
+        changes = await self._companies.report_changes(doc.id)
+        manual_link = doc.link_method == LINK_METHOD_INVITEE
         return ReportView(
+            company_id=doc.company_id,
+            link_reason=None if manual_link else _str_or_none(issuer.get("reason")),
+            candidates=(
+                await self._candidates(issuer)
+                if doc.link_status == AWAITING_CONFIRMATION and not manual_link else None
+            ),
+            fiscal_year_method=doc.fiscal_year_method,
+            last_change=_report_change_view(*changes[-1]) if changes else None,
             doc_id=doc.id, doc_key=doc.doc_key, version=doc.version, filename=doc.filename,
             fiscal_year=doc.fiscal_year,
             fiscal_year_confidence=_str_or_none(issuer.get("fiscal_year_confidence")),
