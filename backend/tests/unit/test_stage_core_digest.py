@@ -48,10 +48,14 @@ from fdi.pipeline.registry import REGISTRY
 # every stage that reads it, not only the one being worked on.
 EXPECTED: dict[str, tuple[int, str]] = {
     "fog_mapping": (10, "025ee2938eea8758"),
-    "fog_objects": (6, "7688b05187fa269b"),
+    # S2.2 added `fdi.core.basis.bases_present` and #57 widened the basis
+    # anchors (BasisStage v2). These stages only call `basis_regions`, which
+    # is unchanged; a new basis artifact reaches them through their declared
+    # `basis` dep's output hash, so their digests moved and no version did.
+    "fog_objects": (6, "cdc94712b0c14a91"),
     "fog_reason": (4, "540aa4ac8389d1a7"),
-    "note_index": (3, "967d77c1b524bb84"),
-    "statement_index": (4, "48c540eaa51bffd0"),
+    "note_index": (3, "faea6e37dac9a9e5"),
+    "statement_index": (4, "8bd6748d30d14384"),
 }
 
 

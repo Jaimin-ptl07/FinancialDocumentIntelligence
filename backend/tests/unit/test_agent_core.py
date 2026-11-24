@@ -1,6 +1,14 @@
+import json
+
 import pytest
 
-from fdi.core.agent import AgentResponse, ToolCall, dedup_citations, extract_citations
+from fdi.core.agent import (
+    AgentResponse,
+    ToolCall,
+    dedup_citations,
+    extract_citations,
+    tool_message_content,
+)
 
 
 def test_agent_response_requires_exactly_one_of_tool_calls_or_content() -> None:
@@ -132,3 +140,22 @@ def test_dedup_citations_collapses_exact_duplicates_preserves_order() -> None:
     b = {"doc_id": "d1", "chunk_id": "s1"}
     out = dedup_citations([a, dict(a), b, dict(a)])
     assert out == [a, b]
+
+
+def test_a_tool_result_within_the_bound_reaches_the_model_unchanged() -> None:
+    result = {"tables": [{"rows": ["Total liabilities", 100]}]}
+    assert tool_message_content(result) == json.dumps(result)
+
+
+def test_a_tool_result_over_the_bound_is_truncated_with_a_notice() -> None:
+    """One get_tables(keyword="liabilities") returned 1,090,527 characters and
+    was re-sent every round: INR 366 for one /ask (#56)."""
+    result = {"tables": ["x" * 50_000]}
+    full = json.dumps(result)
+
+    content = tool_message_content(result, max_chars=1_000)
+
+    assert content.startswith(full[:1_000])
+    assert f"{len(full)}" in content
+    assert "narrow" in content.lower()
+    assert len(content) < 1_300

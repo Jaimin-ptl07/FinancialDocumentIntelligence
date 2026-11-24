@@ -78,7 +78,7 @@ async def test_resolving_twice_changes_nothing(session_factory, store) -> None:
         assert len(await CompanyRegistry(s, store).company_reports(a.company_id)) == 1
 
 
-async def test_a_report_with_no_cin_is_left_unlinked_with_the_reason(
+async def test_a_report_with_no_cin_is_left_unlinked_awaiting_an_invitee_with_the_reason(
     session_factory, store
 ) -> None:
     doc_id = await ingest(
@@ -90,6 +90,41 @@ async def test_a_report_with_no_cin_is_left_unlinked_with_the_reason(
 
     assert outcome.company_id is None
     assert "no CIN" in outcome.reason
+    # It names its issuer without a CIN: an Invitee confirms it (S2.3).
+    assert outcome.link_status == "awaiting_confirmation"
+
+
+async def test_cins_with_no_clear_issuer_await_confirmation(session_factory, store) -> None:
+    doc_id = await ingest(
+        session_factory, store, doc_key=f"gamma-{uuid.uuid4()}",
+        lines=[
+            "Reference numbers U12345MH2001PTC111111 and U54321MH2002PTC222222 apply.",
+            "for the year ended 31st March 2026",
+        ],
+    )
+
+    outcome = await resolve(session_factory, store, doc_id)
+
+    assert outcome.company_id is None
+    assert outcome.link_status == "awaiting_confirmation"
+    assert outcome.fiscal_year == "FY2025-26"
+
+
+async def test_a_linked_report_carries_its_fiscal_year(session_factory, store) -> None:
+    doc_id = await ingest(
+        session_factory, store, doc_key=f"acme-{uuid.uuid4()}",
+        lines=[*acme_report(fresh_cin()), "for the period ended on 31st March, 2025"],
+    )
+
+    outcome = await resolve(session_factory, store, doc_id)
+
+    assert (outcome.link_status, outcome.fiscal_year) == ("linked", "FY2024-25")
+    async with session_factory() as s:
+        (report,) = await CompanyRegistry(s, store).company_reports(outcome.company_id)
+    assert (report.fiscal_year, str(report.period_start), str(report.period_end)) == (
+        "FY2024-25", "2024-04-01", "2025-03-31",
+    )
+    assert (report.link_status, report.link_method) == ("linked", "cin")
 
 
 async def test_a_report_never_run_through_issuer_is_left_unlinked(

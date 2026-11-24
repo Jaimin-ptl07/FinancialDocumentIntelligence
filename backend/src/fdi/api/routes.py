@@ -3,14 +3,13 @@
 import contextlib
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Annotated, cast
+from typing import cast
 from urllib.parse import quote
 
 import sqlalchemy
 import structlog
 from fastapi import (
     APIRouter,
-    Depends,
     File,
     Form,
     HTTPException,
@@ -22,7 +21,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.api import limits as ratelimit
-from fdi.api.auth import require_access_token
+from fdi.api.auth import CurrentUserDep
 from fdi.api.deps import (
     AgentClientDep,
     CandidatesDep,
@@ -154,11 +153,6 @@ log = structlog.get_logger(__name__)
 # could leak.
 router = APIRouter()
 public_router = APIRouter()
-
-# The caller's id, for routes that need identity (job ownership). FastAPI
-# caches a dependency per request, so this is the same decode the include-
-# level gate already did -- not a second verification.
-CurrentUserDep = Annotated[str, Depends(require_access_token)]
 
 
 @public_router.get("/health")

@@ -1,6 +1,7 @@
 """The committed benchmark is generated, never typed, and the runner never
 calls a billed endpoint without an explicit item limit."""
 
+import argparse
 import json
 import re
 import sys
@@ -37,6 +38,7 @@ from eval_answers import (  # noqa: E402
     main,
     render_markdown,
     report_json,
+    take_eval_credentials,
 )
 
 _ITEM = BenchmarkItem(
@@ -704,3 +706,22 @@ def test_the_judge_is_refused_in_retrieval_mode(capsys: pytest.CaptureFixture[st
     main(["run", "--endpoint", "http://127.0.0.1:9", "--out-dir", "unused",
           "--mode", "retrieval", "--judge"], judge=_FakeJudge())
     assert "--judge scores answers" in capsys.readouterr().out
+
+
+def test_eval_credentials_in_the_environment_do_not_stop_the_stack_settings_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FDI_EVAL_* are the eval script's, not the stack's: Settings rejects every
+    FDI_ variable it does not know, so --judge (which builds Settings) would
+    never start if they were left in the environment."""
+    from fdi.platform.config import Settings
+    from tests.unit.test_config import REQUIRED
+
+    for k, v in REQUIRED.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FDI_EVAL_EMAIL", "eval@example.org")
+    monkeypatch.setenv("FDI_EVAL_PASSWORD", "pw")
+    args = argparse.Namespace(email=None, password=None)
+
+    assert take_eval_credentials(args) == ("eval@example.org", "pw")
+    Settings()

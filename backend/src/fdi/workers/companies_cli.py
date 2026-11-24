@@ -16,7 +16,8 @@ environment lives:
 
     docker compose exec worker fdi-companies backfill
 
-Prints one line per Report (doc id, CIN or "-", the reason) to STDOUT. Exit 0
+Prints one line per Report (doc id, CIN, Fiscal year and link status, each
+"-" when absent, then the reason) to STDOUT. Exit 0
 always: a Report left unfiled is an outcome to read, not a command failure.
 """
 
@@ -60,7 +61,10 @@ async def amain(argv: list[str]) -> None:
         await engine.dispose()
 
     for link in links:
-        print(f"{link.doc_id}\t{link.cin or '-'}\t{link.reason}")
+        print(
+            f"{link.doc_id}\t{link.cin or '-'}\t{link.fiscal_year or '-'}\t"
+            f"{link.link_status or '-'}\t{link.reason}"
+        )
     filed = sum(1 for link in links if link.company_id is not None)
     print(f"filed {filed} of {len(links)} Reports")
 

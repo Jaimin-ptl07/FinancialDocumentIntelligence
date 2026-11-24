@@ -14,7 +14,8 @@ from fdi.pipeline.stage import StageContext
 
 class BasisStage:
     name = "basis"
-    version = 1
+    # v2: SA 700 auditor's-report, notes and LODR captions anchor too (#57).
+    version = 2
     deps: tuple[str, ...] = ("ast", "provenance")
 
     async def run(self, ctx: StageContext) -> object:

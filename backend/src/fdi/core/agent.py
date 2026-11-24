@@ -8,8 +8,10 @@ extract_citations/dedup_citations are the one place every RT tool's
 differently-shaped result becomes ONE Citation shape
 ({doc_id, doc_key, version, heading, page, chunk_id, table_index, row_label,
 column_header, node_id}, absent fields None), so answer_question and the API
-view never branch on which tool produced a fact."""
+view never branch on which tool produced a fact. tool_message_content is the
+bounded copy of a tool result the model sees."""
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -204,3 +206,23 @@ def dedup_citations(citations: Sequence[Mapping[str, object]]) -> list[dict[str,
         seen.add(key)
         out.append(dict(c))
     return out
+
+
+# About 8k tokens. The largest useful tool result seen is ~25k characters; one
+# get_tables(keyword=...) returned 1,090,527, and answer_question re-sends every
+# result each round -- INR 366 for one /ask (#56).
+TOOL_RESULT_MAX_CHARS = 32_000
+
+
+def tool_message_content(result: object, max_chars: int = TOOL_RESULT_MAX_CHARS) -> str:
+    """The copy of a tool result the model sees: its JSON, cut at `max_chars`
+    with a notice saying so. The tool trace keeps the full result, so
+    citations are drawn from all of it."""
+    text = json.dumps(result, default=str)
+    if len(text) <= max_chars:
+        return text
+    return (
+        f"{text[:max_chars]}\n[TRUNCATED: this result is {len(text)} characters; only the "
+        f"first {max_chars} are shown. Narrow the call -- a more specific keyword or "
+        f"query, one doc_id, fewer results -- to see what was cut.]"
+    )

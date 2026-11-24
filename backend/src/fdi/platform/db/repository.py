@@ -3,12 +3,13 @@ theirs, not ours."""
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import TypedDict
 
 import sqlalchemy
 from sqlalchemy import Float, case, distinct, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.eval_types import EvalOutcome
@@ -17,12 +18,15 @@ from fdi.platform.db.models import (
     ApiJob,
     AppUser,
     Company,
+    CompanyChange,
+    CompanyIdentifier,
     Document,
     EvalCaseResult,
     EvalRun,
     LlmUsageEvent,
     OcrUsageEvent,
     RefreshToken,
+    ReportLinkChange,
     StageRun,
 )
 
@@ -1068,22 +1072,220 @@ class CompanyRepository:
         ).scalars().all()
         return list(rows)
 
-    async def link_document(self, doc_id: str, company_id: str) -> None:
-        await self._s.execute(
-            sqlalchemy.update(Document)
-            .where(Document.id == doc_id)
-            .values(company_id=company_id)
+    # --- hand curation (S2.4) ------------------------------------------------
+
+    async def create(self, *, cin: str, name: str) -> Company | None:
+        """A new Company, or None when its CIN is already taken -- decided by
+        `uq_company_cin`, not by a read first, so two Invitees creating the
+        same Company at once still end with one."""
+        inserted = (
+            await self._s.execute(
+                pg_insert(Company)
+                .values(id=str(uuid.uuid4()), cin=cin, name=name)
+                .on_conflict_do_nothing(constraint="uq_company_cin")
+                .returning(Company.id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return None
+        return await self._s.get(Company, inserted)
+
+    async def update(self, company: Company, *, cin: str, name: str) -> bool:
+        """Set the Company's CIN and name; False (and nothing changed) when the
+        CIN belongs to another Company. A savepoint keeps the caller's
+        transaction usable after the constraint fires."""
+        try:
+            async with self._s.begin_nested():
+                await self._s.execute(
+                    sqlalchemy.update(Company)
+                    .where(Company.id == company.id)
+                    .values(cin=cin, name=name)
+                )
+        except IntegrityError:
+            return False
+        await self._s.refresh(company)
+        return True
+
+    async def add_identifier(
+        self, company_id: str, *, kind: str, value: str, key: str
+    ) -> CompanyIdentifier | None:
+        """The new identifier, or None when (kind, key) is already held -- by
+        this Company or another (`uq_company_identifier_kind_key`)."""
+        inserted = (
+            await self._s.execute(
+                pg_insert(CompanyIdentifier)
+                .values(
+                    id=str(uuid.uuid4()), company_id=company_id, kind=kind, value=value, key=key
+                )
+                .on_conflict_do_nothing(constraint="uq_company_identifier_kind_key")
+                .returning(CompanyIdentifier.id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return None
+        return await self._s.get(CompanyIdentifier, inserted)
+
+    async def remove_identifier(
+        self, company_id: str, identifier_id: str
+    ) -> CompanyIdentifier | None:
+        """The removed identifier, or None when the Company has no such one."""
+        row = await self._s.get(CompanyIdentifier, identifier_id)
+        if row is None or row.company_id != company_id:
+            return None
+        await self._s.delete(row)
+        await self._s.flush()
+        return row
+
+    async def identifiers(self, company_id: str | None = None) -> list[CompanyIdentifier]:
+        """One Company's identifiers, or every Company's when `company_id` is
+        None -- oldest first."""
+        stmt = select(CompanyIdentifier).order_by(
+            CompanyIdentifier.created_at, CompanyIdentifier.id
+        )
+        if company_id is not None:
+            stmt = stmt.where(CompanyIdentifier.company_id == company_id)
+        return list((await self._s.execute(stmt)).scalars().all())
+
+    async def record_change(
+        self, company_id: str, *, invitee_id: str, action: str, detail: dict[str, object]
+    ) -> None:
+        self._s.add(
+            CompanyChange(
+                id=str(uuid.uuid4()), company_id=company_id, invitee_id=invitee_id,
+                action=action, detail=detail,
+            )
         )
         await self._s.flush()
 
+    async def changes(self, company_id: str) -> list[tuple[CompanyChange, str]]:
+        """(change, the acting Invitee's email), oldest first."""
+        rows = (
+            await self._s.execute(
+                select(CompanyChange, AppUser.email)
+                .join(AppUser, AppUser.id == CompanyChange.invitee_id)
+                .where(CompanyChange.company_id == company_id)
+                .order_by(CompanyChange.at, CompanyChange.id)
+            )
+        ).all()
+        return [(change, email) for change, email in rows]
+
+    async def report(self, doc_id: str) -> Document | None:
+        """The Report's current row -- re-read, never a stale identity-map
+        copy, since its link may just have been rewritten."""
+        return await self._s.get(Document, doc_id, populate_existing=True)
+
+    async def set_report_link(
+        self,
+        doc_id: str,
+        *,
+        company_id: str | None,
+        link_status: str,
+        link_method: str | None,
+        keep_method: str | None = None,
+    ) -> bool:
+        """File the Report under `company_id` (None: under no Company) with
+        its link status and method. With `keep_method`, a Report whose link
+        was made by that method is left as it is and False returned -- decided
+        in the UPDATE itself, so a resolution racing an Invitee's confirm
+        cannot overwrite it."""
+        stmt = sqlalchemy.update(Document).where(Document.id == doc_id)
+        if keep_method is not None:
+            stmt = stmt.where(Document.link_method.is_distinct_from(keep_method))
+        result = await self._s.execute(
+            stmt.values(company_id=company_id, link_status=link_status, link_method=link_method)
+            .execution_options(synchronize_session=False)
+        )
+        await self._s.flush()
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def set_report_coverage(
+        self,
+        doc_id: str,
+        *,
+        fiscal_year: str | None,
+        period_start: date | None,
+        period_end: date | None,
+        report_type: str | None,
+        fiscal_year_method: str | None,
+        keep_method: str | None = None,
+    ) -> bool:
+        """What the Report covers: its Fiscal year and period, report type,
+        and how the Fiscal year was set. `keep_method` as `set_report_link`'s,
+        against `fiscal_year_method`."""
+        stmt = sqlalchemy.update(Document).where(Document.id == doc_id)
+        if keep_method is not None:
+            stmt = stmt.where(Document.fiscal_year_method.is_distinct_from(keep_method))
+        result = await self._s.execute(
+            stmt.values(
+                fiscal_year=fiscal_year,
+                period_start=period_start,
+                period_end=period_end,
+                report_type=report_type,
+                fiscal_year_method=fiscal_year_method,
+            ).execution_options(synchronize_session=False)
+        )
+        await self._s.flush()
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def record_report_change(
+        self, doc_id: str, *, invitee_id: str, action: str, detail: dict[str, object]
+    ) -> None:
+        self._s.add(
+            ReportLinkChange(
+                id=str(uuid.uuid4()), doc_id=doc_id, invitee_id=invitee_id,
+                action=action, detail=detail,
+            )
+        )
+        await self._s.flush()
+
+    async def report_changes(self, doc_id: str) -> list[tuple[ReportLinkChange, str]]:
+        """(change, the acting Invitee's email), oldest first."""
+        rows = (
+            await self._s.execute(
+                select(ReportLinkChange, AppUser.email)
+                .join(AppUser, AppUser.id == ReportLinkChange.invitee_id)
+                .where(ReportLinkChange.doc_id == doc_id)
+                .order_by(ReportLinkChange.at, ReportLinkChange.id)
+            )
+        ).all()
+        return [(change, email) for change, email in rows]
+
+    async def reports_by_link_status(self, link_status: str) -> list[Document]:
+        """Every Report with this link status, newest upload first."""
+        rows = (
+            await self._s.execute(
+                select(Document)
+                .where(Document.link_status == link_status)
+                .order_by(Document.created_at.desc(), Document.id)
+            )
+        ).scalars().all()
+        return list(rows)
+
     async def latest_documents(self, company_id: str) -> list[Document]:
-        """The Company's Reports: one row per `doc_key`, its highest version
-        filed under this Company -- a re-upload is a new version of the same
-        Report, not a second Report. Ranked as `list_latest_per_doc_key`."""
+        """The Company's Reports -- its history, each Fiscal year once (S2.6).
+
+        1. One row per `doc_key`: its highest version filed under this
+           Company. A corrected re-upload under the same `doc_key` is a new
+           version of the same Report, not a second Report. Ranked as
+           `list_latest_per_doc_key`.
+        2. Then one row per (Fiscal year, report type): when the same issuer's
+           Report for the same year was uploaded under another `doc_key`, the
+           newest upload stands for that year and the older one drops out of
+           the history. Nothing is re-keyed: every `doc_key` keeps its rows
+           and versions and still scopes retrieval exactly as before. A
+           Report with no Fiscal year is never merged with anything -- it is
+           its own entry.
+
+        THE one ordering of a Company's Reports: newest Fiscal year first (by
+        period end), a Report with no Fiscal year yet after every dated one,
+        then newest upload first."""
         group = func.coalesce(Document.doc_key, Document.id)
-        ranked = (
+        per_doc_key = (
             select(
                 Document.id.label("id"),
+                Document.fiscal_year.label("fiscal_year"),
+                Document.report_type.label("report_type"),
+                Document.created_at.label("created_at"),
                 func.row_number()
                 .over(
                     partition_by=group,
@@ -1098,11 +1300,33 @@ class CompanyRepository:
             .where(Document.company_id == company_id)
             .subquery()
         )
+        latest = select(per_doc_key).where(per_doc_key.c.rn == 1).subquery()
+        # An undated Report partitions on its own id, so it is never merged.
+        undated_own_key = sqlalchemy.case(
+            (latest.c.fiscal_year.is_(None), latest.c.id), else_=None
+        )
+        per_year = (
+            select(
+                latest.c.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=(latest.c.fiscal_year, latest.c.report_type, undated_own_key),
+                    order_by=(latest.c.created_at.desc(), latest.c.id),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
         rows = (
             await self._s.execute(
                 select(Document)
-                .where(Document.id.in_(select(ranked.c.id).where(ranked.c.rn == 1)))
-                .order_by(Document.created_at.desc(), Document.id)
+                .where(Document.id.in_(select(per_year.c.id).where(per_year.c.rn == 1)))
+                .order_by(
+                    Document.period_end.desc().nullslast(),
+                    Document.created_at.desc(),
+                    Document.id,
+                )
+                .execution_options(populate_existing=True)
             )
         ).scalars().all()
         return list(rows)

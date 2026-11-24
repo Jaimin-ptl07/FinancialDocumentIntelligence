@@ -2,10 +2,11 @@
 truth, and this keeps wall-clock out of artifact bodies (Global Constraint 6)."""
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -45,7 +46,13 @@ class StageStatus(enum.StrEnum):
 
 class Document(Base):
     __tablename__ = "document"
-    __table_args__ = (UniqueConstraint("checksum", name="uq_document_checksum"),)
+    __table_args__ = (
+        UniqueConstraint("checksum", name="uq_document_checksum"),
+        CheckConstraint(
+            "link_status IN ('linked','awaiting_confirmation','unidentified')",
+            name="ck_document_link_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -59,6 +66,19 @@ class Document(Base):
     company_id: Mapped[str | None] = mapped_column(
         ForeignKey("company.id"), nullable=True, index=True
     )
+    # Report metadata (S2.2, migration 0015), written by the company registry
+    # from the issuer artifact. Statement bases are NOT here: they are read
+    # from the basis segmentation ("bases present").
+    fiscal_year: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    report_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    link_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    link_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # None while `fiscal_year` is the issuer stage's reading;
+    # "confirmed_by_invitee" once an Invitee corrected it (S2.3, migration
+    # 0018) -- re-resolving the Report then leaves it alone.
+    fiscal_year_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -75,6 +95,70 @@ class Company(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ReportLinkChange(Base):
+    """One Invitee's confirm or correction of a Report's Company or Fiscal
+    year -- who and when (S2.3). Append only; goes with its Report."""
+
+    __tablename__ = "report_link_change"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invitee_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # clock_timestamp(): two changes in one transaction keep their order.
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+
+
+class CompanyIdentifier(Base):
+    """A hand-entered name or code a Company is known by (S2.4): an NSE
+    symbol, BSE code, ISIN or alias. `key` is what makes two identifiers of a
+    kind the same (`fdi.core.company_names.identifier_key`), so "RIL" and
+    "r.i.l" cannot both be aliases; it is unique per kind across all
+    Companies -- one ticker, one Company."""
+
+    __tablename__ = "company_identifier"
+    __table_args__ = (
+        UniqueConstraint("kind", "key", name="uq_company_identifier_kind_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("company.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+
+
+class CompanyChange(Base):
+    """One manual change to a Company -- who made it and when (S2.4). Append
+    only: a removed identifier's row is gone, its removal stays here -- and a
+    Company with a history cannot be deleted out from under it (RESTRICT)."""
+
+    __tablename__ = "company_change"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("company.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    invitee_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # clock_timestamp(), not now(): two changes in one transaction still
+    # get distinct, ordered times.
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
 
 
@@ -292,5 +376,39 @@ class RefreshToken(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Workspace(Base):
+    """An Invitee's working set of Companies (S2.5): a focus list, never an
+    access boundary (#16). Owned by one Invitee and visible only to them;
+    nothing reads it to decide who may see a Company or Report."""
+
+    __tablename__ = "workspace"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class WorkspaceCompany(Base):
+    """One Company in one Workspace. Both foreign keys cascade: deleting the
+    Workspace or the Company removes the membership, never the other side."""
+
+    __tablename__ = "workspace_company"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspace.id", ondelete="CASCADE"), primary_key=True
+    )
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("company.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

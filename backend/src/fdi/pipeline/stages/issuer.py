@@ -17,7 +17,10 @@ ISSUER_STAGE = "issuer"
 
 class IssuerStage:
     name = ISSUER_STAGE
-    version = 1
+    # 2: the artifact also carries the Report's Fiscal year and period (S2.2).
+    # 3: a Report printing no CIN still lists the company names it mentions
+    #    (`name_candidates`), for an Invitee to confirm against (S2.3).
+    version = 3
     deps: tuple[str, ...] = ("ast", "provenance")
 
     async def run(self, ctx: StageContext) -> object:

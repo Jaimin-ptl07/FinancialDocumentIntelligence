@@ -96,8 +96,9 @@ consolidated P&L is PDF page 101; its standalone statements are PDF pages
 **Reliance Retail Ventures Limited's** statement inside the same PDF — check
 the entity name in the page header, not just the statement title.
 
-**REMC has no consolidated basis.** It has no subsidiaries and prints standalone
-statements only, so `REMC-*-consolidated-*.json` must not exist — generating
+**REMC has no consolidated basis.** It has no subsidiaries and its report never
+prints the word "consolidated" (its own file stays `unknown`: the statements do
+not label their basis either), so `REMC-*-consolidated-*.json` must not exist — generating
 one would create truth that does not exist and then measure against it.
 
 ## File shape

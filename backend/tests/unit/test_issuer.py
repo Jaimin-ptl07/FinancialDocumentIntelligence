@@ -4,7 +4,9 @@ Fixture passages are cut verbatim from the corpus's real Reports (TCS, RIL,
 REMC, Silver Touch) -- page numbers included -- so the ranking is exercised on
 the wording annual reports actually print, not on invented prose."""
 
-from fdi.core.issuer import identify_issuer
+from datetime import date
+
+from fdi.core.issuer import fiscal_year_period, identify_issuer
 
 TCS_CIN = "L22210MH1995PLC084781"
 RIL_CIN = "L17110MH1973PLC019786"
@@ -276,3 +278,234 @@ def test_a_name_merely_containing_the_issuers_name_does_not_count_as_the_issuer(
     candidates = {c["cin"]: c["score"] for c in identify_issuer(ast, prov)["cin_candidates"]}
 
     assert candidates["L11111MH2001PLC111111"] - candidates["U22222MH2002PLC222222"] >= 5
+
+
+# --- Fiscal year and period (S2.2) -------------------------------------------
+
+
+def test_year_ended_31st_march_is_the_indian_fiscal_year_it_closes() -> None:
+    ast, prov = _report(
+        (
+            "Standalone Statement of Profit and Loss for the year ended 31st March 2026",
+            ["Revenue from operations 2,55,324"],
+            101,
+        ),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert result["period_start"] == "2025-04-01"
+    assert result["period_end"] == "2026-03-31"
+    assert result["fiscal_year_confidence"] == "high"
+    (best,) = result["fiscal_year_candidates"]
+    assert best["fiscal_year"] == "FY2025-26"
+    assert best["source"] == "statements"
+    assert best["evidence"]["page"] == 101
+    assert "year ended 31st March 2026" in best["evidence"]["text"]
+
+
+def test_the_comparative_year_is_not_the_reports_fiscal_year() -> None:
+    """Statements print last year's column too; it never outranks the
+    Report's own year, however often or early it appears."""
+    ast, prov = _report(
+        ("Notes", ["Restated figures for the year ended 31st March 2025."], 60),
+        (
+            "Statement of Profit and Loss for the year ended 31st March 2026",
+            ["Year ended 31st March 2026 Year ended 31st March 2025"],
+            101,
+        ),
+        ("Notes", ["As reported for the year ended 31st March 2025."], 140),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert [c["fiscal_year"] for c in result["fiscal_year_candidates"]] == [
+        "FY2025-26", "FY2024-25",
+    ]
+
+
+def test_tcs_style_month_first_date_and_remc_period_ended_on() -> None:
+    tcs, tcs_prov = _report(
+        ("Directors' Report", ["for the financial year ended March 31, 2026"], 20),
+    )
+    remc, remc_prov = _report(
+        (
+            "CERTIFICATE",
+            ["Corporate Governance by REMC LIMITED for the period ended on 31st March, 2025"],
+            31,
+        ),
+    )
+
+    assert identify_issuer(tcs, tcs_prov)["fiscal_year"] == "FY2025-26"
+    remc_result = identify_issuer(remc, remc_prov)
+    assert remc_result["fiscal_year"] == "FY2024-25"
+    assert (remc_result["period_start"], remc_result["period_end"]) == (
+        "2024-04-01", "2025-03-31",
+    )
+
+
+def test_an_interim_or_later_period_does_not_move_the_fiscal_year_end() -> None:
+    # The Directors' Report, printed before the statements, mentions later
+    # and interim periods; only the 31 March year end is the Report's.
+    ast, prov = _report(
+        (
+            "Directors' Report",
+            [
+                "Revenue for the period ended 30th June 2026 grew 8%.",
+                "Results for the nine months period ended 31st December 2026 follow.",
+            ],
+            40,
+        ),
+        (
+            "Statement of Profit and Loss for the year ended 31st March 2026",
+            ["Revenue from operations 2,55,324"],
+            101,
+        ),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert (result["period_start"], result["period_end"]) == ("2025-04-01", "2026-03-31")
+    assert result["fiscal_year_candidates"][0]["evidence"]["page"] == 101
+
+
+def test_a_half_year_is_not_the_reports_fiscal_year() -> None:
+    ast, prov = _report(
+        ("Annual Report 2025-26", [], 1),
+        ("Results", ["Unaudited results for the half year ended 30th September 2026."], 9),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert result["period_end"] == "2026-03-31"
+    assert result["fiscal_year_candidates"] == [
+        {
+            "fiscal_year": "FY2025-26",
+            "period_start": "2025-04-01",
+            "period_end": "2026-03-31",
+            "source": "cover",
+            "evidence": {"node_id": "s0", "page": 1, "text": "Annual Report 2025-26"},
+        }
+    ]
+
+
+def test_cover_and_statements_agreeing_is_high_confidence() -> None:
+    ast, prov = _report(
+        ("Integrated Annual Report 2025-26", ["Growth is Life"], 1),
+        ("Balance Sheet", ["Consolidated figures for the year ended 31st March 2026"], 120),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert result["fiscal_year_confidence"] == "high"
+    assert {c["source"] for c in result["fiscal_year_candidates"]} == {"cover", "statements"}
+
+
+def test_an_older_report_cited_early_is_not_the_reports_own_title() -> None:
+    """Measured on RIL FY2025-26: page 18 cites "the Integrated Annual Report
+    2022-23"; the Report's own title repeats as a running header after it."""
+    ast, prov = _report(
+        (
+            "Materiality",
+            ["Details can be found on Pg 164 of the Integrated Annual Report 2022-23."],
+            18,
+        ),
+        ("Strategy", ["Integrated Annual Report 2025-26"], 25),
+        ("Statement of Profit and Loss for the year ended 31st March 2026", ["Total"], 101),
+        ("People", ["Integrated Annual Report 2025-26"], 47),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] == "FY2025-26"
+    assert result["fiscal_year_confidence"] == "high"
+    cover = [c for c in result["fiscal_year_candidates"] if c["source"] == "cover"]
+    assert [(c["fiscal_year"], c["evidence"]["page"]) for c in cover] == [("FY2025-26", 25)]
+
+
+def test_cover_and_statements_conflicting_is_reported_not_resolved() -> None:
+    ast, prov = _report(
+        ("Annual Report 2025-26", ["Growth is Life"], 1),
+        (
+            "Statement of Profit and Loss for the year ended 31st March 2025",
+            ["Revenue from operations 1,000"],
+            88,
+        ),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] is None
+    assert result["period_start"] is None
+    assert result["fiscal_year_confidence"] == "low"
+    assert "FY2025-26" in result["fiscal_year_reason"]
+    assert "FY2024-25" in result["fiscal_year_reason"]
+    assert {(c["source"], c["fiscal_year"]) for c in result["fiscal_year_candidates"]} == {
+        ("cover", "FY2025-26"), ("statements", "FY2024-25"),
+    }
+
+
+def test_no_fiscal_year_printed_says_why() -> None:
+    ast, prov = _report(("Directors' Report", ["Acme Widgets Limited had a good year."], 5))
+
+    result = identify_issuer(ast, prov)
+
+    assert result["fiscal_year"] is None
+    assert result["fiscal_year_confidence"] == "none"
+    assert result["fiscal_year_reason"]
+    assert result["fiscal_year_candidates"] == []
+
+
+# --- Awaiting confirmation (S2.3): unsure is said, with the reason -----------
+
+
+def test_two_cins_beside_the_issuers_name_with_no_label_are_ambiguous_and_say_why() -> None:
+    first, second = "U12345MH2001PLC111111", "U54321MH2002PLC222222"
+    ast, prov = _report(
+        ("Directors' Report", ["Delta Grid Limited had a record year."], 3),
+        ("Notice", [f"Delta Grid Limited {first}"], 9),
+        ("Back cover", [f"Delta Grid Limited {second}"], 40),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert result["cin"] is None
+    assert result["issuer_name"] is None
+    assert result["confidence"] == "low"
+    assert first in result["reason"] and second in result["reason"]
+    assert {c["cin"] for c in result["cin_candidates"]} == {first, second}
+
+
+def test_no_cin_still_names_the_companies_the_report_is_about() -> None:
+    ast, prov = _report(
+        ("Directors' Report", ["Beta Power Limited had a record year."], 5),
+        ("Chairman's letter", ["At Beta Power Limited, and with Omega Grid Ltd., we grew."], 7),
+    )
+
+    result = identify_issuer(ast, prov)
+
+    assert (result["cin"], result["issuer_name"], result["confidence"]) == (None, None, "none")
+    assert "no CIN" in result["reason"]
+    names = result["name_candidates"]
+    assert [(n["name"], n["mentions"]) for n in names] == [
+        ("Beta Power Limited", 2), ("Omega Grid Ltd", 1),
+    ]
+    assert names[0]["evidence"]["page"] == 5
+
+
+# --- An Invitee's Fiscal year (S2.3) ----------------------------------------
+
+
+def test_an_invitees_fiscal_year_is_read_as_the_indian_fiscal_year() -> None:
+    for label in ("FY2024-25", "fy 2024-25", "2024-25", "FY2024-2025", "2024/25"):
+        assert fiscal_year_period(label) == ("FY2024-25", date(2024, 4, 1), date(2025, 3, 31))
+
+
+def test_a_fiscal_year_that_is_not_one_is_refused() -> None:
+    for label in ("FY2024-26", "2024", "last year", "", "FY2024-23"):
+        assert fiscal_year_period(label) is None

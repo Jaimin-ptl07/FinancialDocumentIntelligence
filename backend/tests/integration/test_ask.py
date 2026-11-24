@@ -5,13 +5,14 @@ anywhere in this file. Reuses test_hybrid_search.py's hybrid_corpus-style
 build (fresh uuid4 marker in OCR text to dodge the session-scoped-DB
 collision class every other RT integration test already guards against)."""
 
+import json
 import uuid
 
 import pytest
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from fdi.core.agent import AgentResponse, ToolCall
+from fdi.core.agent import TOOL_RESULT_MAX_CHARS, AgentResponse, ToolCall
 from fdi.core.pricing import LlmCallUsage
 from fdi.pipeline.agent import FakeAgentClient
 from fdi.pipeline.agent_tools import AgentContext
@@ -152,6 +153,38 @@ async def test_answer_question_exhausts_max_rounds_gracefully(session_factory, s
     assert "3 tool-call round" in result["answer"]
     assert result["citations"] == []
     assert len(result["tool_trace"]) == 3
+
+
+async def test_the_model_sees_a_bounded_tool_result_and_the_trace_keeps_all_of_it(
+    session_factory, store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#56: a get_tables(keyword=...) result of a million characters was fed
+    back whole and re-sent every round."""
+    huge = {"tables": ["row " * 300_000]}
+
+    async def huge_result(name: str, arguments: object, *, ctx: object) -> dict[str, object]:
+        return huge
+
+    monkeypatch.setattr("fdi.pipeline.ask.execute_tool", huge_result)
+    fake = FakeAgentClient([
+        AgentResponse(tool_calls=[ToolCall(id="c1", name="get_tables",
+                                            arguments={"keyword": "liabilities"})]),
+        AgentResponse(content="done"),
+    ])
+    async with session_factory() as s:
+        ctx = AgentContext(session=s, store=store, embedder=None, vector_store=None,
+                            graph_store=None)
+        result = await answer_question(
+            question="total liabilities?", ctx=ctx, agent_client=fake, max_rounds=5,
+        )
+
+    second_call_messages, _ = fake.calls[1]
+    tool_message = second_call_messages[-1]
+    assert tool_message["role"] == "tool"
+    assert str(tool_message["content"]).startswith(json.dumps(huge)[:TOOL_RESULT_MAX_CHARS])
+    assert len(str(tool_message["content"])) < TOOL_RESULT_MAX_CHARS + 500
+    assert "TRUNCATED" in str(tool_message["content"])
+    assert result["tool_trace"][0]["result"] == huge
 
 
 async def test_ask_records_one_llm_usage_event_per_round(

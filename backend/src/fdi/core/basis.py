@@ -23,37 +23,55 @@ from collections.abc import Mapping
 
 # Anchors are deliberately SPECIFIC (full caption text, not a bare
 # "consolidated"/"standalone" substring) -- a bare word also occurs inside
-# narrative (accounting policies, related-party notes) in either section, and
+# narrative (accounting policies, related-party notes, "Standalone
+# Performance", "Value Added Statement (Consolidated)") in either section, and
 # matching it would misclassify prose as a region boundary.
-_CONSOLIDATED_ANCHORS = (
-    "independent auditor's report on the consolidated financial statements",
-    "independent auditors' report on the consolidated financial statements",
-    "consolidated balance sheet",
-    "consolidated statement of profit and loss",
-    "consolidated statement of cash flow",
-    "consolidated cash flow",
+#
+# Each anchor is a caption pattern with `{basis}` standing for the basis word.
+# The primary-statement captions alone are not enough: a Report may caption
+# its statements plain "Balance Sheet" and name the basis only in the
+# SA 700 auditor's-report captions and the notes' running header (RIL
+# FY2025-26, #57), so those captions anchor too.
+_IND_AS = r"(?: ind[- ]?as)?"
+_ANCHOR_PATTERNS = (
+    r"independent auditor'?s'? report on the {basis} financial statements",
+    rf"report on the audit of the {{basis}}{_IND_AS} financial statements",
+    rf"auditor'?s'? responsibilit(?:y|ies) for the audit of the {{basis}}{_IND_AS} "
+    r"financial statements",
+    rf"notes (?:to|forming part of) (?:the )?{{basis}}{_IND_AS} financial statements",
+    r"{basis} balance sheet",
+    r"{basis}(?: audited)? statement of profit (?:and|&) loss",
+    r"{basis} statement of cash flow",
+    r"{basis} cash flow",
+    # SEBI LODR's balance-sheet caption, in both word orders.
+    r"{basis}(?: audited)? statement of assets and liabilities",
+    r"statement of {basis} assets and liabilities",
 )
 
-# The Standalone counterparts are the same captions with "standalone" in
-# place of "consolidated" -- which already includes "independent auditor's
-# report on the standalone financial statements" (both apostrophe variants).
-_STANDALONE_ANCHORS = tuple(a.replace("consolidated", "standalone") for a in _CONSOLIDATED_ANCHORS)
+
+def _anchors(basis: str) -> re.Pattern[str]:
+    return re.compile("|".join(p.format(basis=basis) for p in _ANCHOR_PATTERNS))
+
+
+_CONSOLIDATED_RE = _anchors("consolidated")
+_STANDALONE_RE = _anchors("standalone")
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _normalize(heading: str) -> str:
-    """Lowercase, collapse-whitespace normalization for anchor matching."""
-    return _WHITESPACE_RE.sub(" ", heading.strip().lower())
+    """Lowercase, collapse-whitespace, straight-apostrophe normalization for
+    anchor matching."""
+    return _WHITESPACE_RE.sub(" ", heading.strip().lower().replace("’", "'"))
 
 
 def _classify_heading(heading: str) -> str | None:
     """`"consolidated"` / `"standalone"` if the normalized heading contains a
-    matching anchor phrase, else `None`."""
+    matching anchor caption, else `None`."""
     normalized = _normalize(heading)
-    if any(anchor in normalized for anchor in _CONSOLIDATED_ANCHORS):
+    if _CONSOLIDATED_RE.search(normalized):
         return "consolidated"
-    if any(anchor in normalized for anchor in _STANDALONE_ANCHORS):
+    if _STANDALONE_RE.search(normalized):
         return "standalone"
     return None
 
@@ -250,6 +268,18 @@ def basis_regions(basis_artifact: Mapping[str, object]) -> list[tuple[str, int, 
     return out
 
 
+_STATEMENT_BASES = ("standalone", "consolidated")
+
+
+def bases_present(basis_artifact: Mapping[str, object]) -> list[str]:
+    """Which statement bases a Report contains -- "standalone",
+    "consolidated", or both, in that order -- as its basis segmentation
+    found them. A Report's bases are read from here, never stored on the
+    Report. Total: a malformed or anchorless artifact yields []."""
+    found = {basis for basis, _, _ in basis_regions(basis_artifact)}
+    return [basis for basis in _STATEMENT_BASES if basis in found]
+
+
 def resolve_effective_basis(
     basis_artifact: Mapping[str, object], preference: str
 ) -> str:
@@ -258,9 +288,10 @@ def resolve_effective_basis(
     Basis must be decided per DOCUMENT, not per retrieval unit. The per-unit
     fallback ("if filtering to the preference would empty this pool, keep it
     unfiltered") is correct in isolation and wrong in aggregate: on a
-    consolidated-only filing it lets a unit whose pool happens to contain a
-    standalone page filter to standalone while its neighbour falls back to
-    consolidated. Measured on RIL FY2025-26, that produced total non-current
+    filing segmented as one basis it lets a unit whose pool happens to contain
+    a page of the other filter to it while its neighbour falls back. Measured
+    on RIL FY2025-26 -- while its standalone statements went unanchored and the
+    whole Report read as consolidated (#57) -- that produced total non-current
     assets from page 58 and total current liabilities from page 100 -- two
     different statement sets -- and a balance sheet out by 998,799.
 

@@ -284,7 +284,9 @@ def job_services(session_factory, store, **overrides):
 # `session_factory`/`store` here are the defaults; a module defining its own
 # fixture of the same name overrides them, as most stage tests do.
 
-COMPANY_CHAIN = ("ocr", "normalize", "ast", "structure", "graph", "provenance", "issuer")
+COMPANY_CHAIN = (
+    "ocr", "normalize", "ast", "structure", "graph", "provenance", "basis", "issuer",
+)
 
 
 @pytest.fixture
@@ -314,16 +316,24 @@ def _paragraph(content: str, page: int, role: str | None = None) -> dict[str, ob
 
 
 async def ingest(
-    session_factory, store, *, doc_key: str, lines: list[str], through: str = "issuer"
+    session_factory,
+    store,
+    *,
+    doc_key: str,
+    lines: list[str],
+    through: str = "issuer",
+    headings: dict[int, str] | None = None,
 ) -> str:
-    """Intake a Report whose page N carries `lines[N-1]`, and run the stage
-    chain up to and including `through`."""
+    """Intake a Report whose page N carries `lines[N-1]` -- preceded by the
+    section heading `headings[N]`, if any -- and run the stage chain up to and
+    including `through`."""
     from fdi.pipeline.intake import intake_document
     from fdi.pipeline.ocr import FakeOcrClient
     from fdi.pipeline.registry import StageRegistry
     from fdi.pipeline.resolver import DagResolver
     from fdi.pipeline.run import run_stage
     from fdi.pipeline.stages.ast import AstStage
+    from fdi.pipeline.stages.basis import BasisStage
     from fdi.pipeline.stages.graph import GraphStage
     from fdi.pipeline.stages.issuer import IssuerStage
     from fdi.pipeline.stages.normalize import NormalizeStage
@@ -339,17 +349,22 @@ async def ingest(
         session_factory=session_factory,
         store=store,
     )
+    headings = headings or {}
+    paragraphs = [_paragraph("Annual Report", 1, "title")]
+    for n, line in enumerate(lines, start=1):
+        if n in headings:
+            paragraphs.append(_paragraph(headings[n], n, "sectionHeading"))
+        paragraphs.append(_paragraph(line, n))
     ocr = FakeOcrClient({
         "content": " ".join(lines),
         "pages": [{"pageNumber": n, "lines": [], "words": []} for n in range(1, len(lines) + 1)],
-        "paragraphs": [_paragraph("Annual Report", 1, "title")]
-        + [_paragraph(line, n) for n, line in enumerate(lines, start=1)],
+        "paragraphs": paragraphs,
         "tables": [],
     })
     reg = StageRegistry()
     for stage in (
         OcrStage(), NormalizeStage(), AstStage(), StructureStage(),
-        GraphStage(), ProvenanceStage(), IssuerStage(),
+        GraphStage(), ProvenanceStage(), BasisStage(), IssuerStage(),
     ):
         reg.register(stage)
     resolver = DagResolver(reg.all())
@@ -375,3 +390,76 @@ def acme_report(cin: str) -> list[str]:
         "Acme Widgets Limited had a record year.",
         f"Acme Widgets Limited CIN: {cin} Registered Office: Mumbai",
     ]
+
+
+# --- Invitee-facing API clients and filed Reports (company registry tests) ---
+
+
+@pytest.fixture
+async def make_client(postgres_url, minio_endpoint, amqp_url, redis_url, monkeypatch):
+    """`make_client(creds)` -> an app client logged in as `creds` (None: not
+    logged in), so one test can read as two different Invitees. Test modules
+    with their own `make_client` override this one."""
+    from contextlib import asynccontextmanager
+
+    from httpx import ASGITransport
+
+    @asynccontextmanager
+    async def _make(creds: tuple[str, str] | None):
+        for key, value in {
+            "FDI_DATABASE_URL": postgres_url,
+            "FDI_BROKER_URL": amqp_url,
+            "FDI_RESULT_BACKEND": redis_url,
+            "FDI_S3_ENDPOINT": minio_endpoint,
+            "FDI_S3_ACCESS_KEY": "minioadmin",
+            "FDI_S3_SECRET_KEY": "minioadmin",
+            "FDI_S3_BUCKET": "test-artifacts",
+            "FDI_AUTH_SECRET": TEST_SIGNING_SECRET,
+        }.items():
+            monkeypatch.setenv(key, value)
+        get_settings.cache_clear()
+
+        from fdi.api.app import create_app
+
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                if creds is not None:
+                    await authenticate(client, creds)
+                yield client
+
+    return _make
+
+
+@pytest.fixture
+async def another_invitee(session_factory) -> tuple[str, str]:
+    """A second Invitee's (email, password), beside `invitee`."""
+    from fdi.platform.db.repository import UserRepository
+    from fdi.platform.security import hash_password
+
+    email = f"invitee-{uuid.uuid4().hex}@example.test"
+    async with session_factory() as s:
+        await UserRepository(s).create(email=email, password_hash=hash_password(INVITEE_PASSWORD))
+        await s.commit()
+    return email, INVITEE_PASSWORD
+
+
+async def file_report(session_factory, store) -> dict[str, str]:
+    """Ingest an Acme Report under a fresh CIN and file it under its Company
+    by the real path (`CompanyRegistry.resolve_report`)."""
+    from fdi.pipeline.companies import CompanyRegistry
+
+    cin = fresh_cin()
+    doc_key = f"acme-{uuid.uuid4()}"
+    doc_id = await ingest(session_factory, store, doc_key=doc_key, lines=acme_report(cin))
+    async with session_factory() as s:
+        link = await CompanyRegistry(s, store).resolve_report(doc_id)
+        await s.commit()
+    assert link.company_id is not None
+    return {"cin": cin, "doc_key": doc_key, "doc_id": doc_id, "company_id": link.company_id}
+
+
+@pytest.fixture
+async def filed_report(session_factory, store) -> dict[str, str]:
+    return await file_report(session_factory, store)

@@ -1071,18 +1071,33 @@ def git_commit() -> str:
     return out.stdout.strip()
 
 
+def take_eval_credentials(args: argparse.Namespace) -> tuple[str, str] | None:
+    """The eval Invitee's email and password, from the flags or FDI_EVAL_*.
+
+    FDI_EVAL_* are taken out of this process's environment as they are read:
+    they are this script's, not the stack's, and `Settings` -- which --judge
+    builds -- rejects every FDI_ variable it does not know."""
+    email = args.email or os.environ.get("FDI_EVAL_EMAIL")
+    password = args.password or os.environ.get("FDI_EVAL_PASSWORD")
+    os.environ.pop("FDI_EVAL_EMAIL", None)
+    os.environ.pop("FDI_EVAL_PASSWORD", None)
+    if not email or not password:
+        return None
+    return email, password
+
+
 async def _run(
     args: argparse.Namespace,
     benchmark: Benchmark,
     transport: httpx.AsyncBaseTransport | None = None,
     judge: Judge | None = None,
 ) -> None:
-    email = args.email or os.environ.get("FDI_EVAL_EMAIL")
-    password = args.password or os.environ.get("FDI_EVAL_PASSWORD")
-    if not email or not password:
+    credentials = take_eval_credentials(args)
+    if credentials is None:
         print("eval Invitee credentials missing: pass --email/--password or set "
               "FDI_EVAL_EMAIL/FDI_EVAL_PASSWORD")
         return
+    email, password = credentials
     stamp = {
         "benchmark_version": benchmark.version,
         "git_commit": git_commit(),
