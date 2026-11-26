@@ -36,6 +36,12 @@ prices at the stack's current configured rates and reflects today's model
 and prompt, not a stale report. A first run has no history, so it has no
 estimate: it then needs `--limit`, and `--yes` alone is refused.
 
+RESUMING. `--resume <earlier report.json>` finishes a run that was cut
+short: each item that earlier run answered is re-read from its job (its
+answer, citations and usage; its latency as measured then) and is not
+billed again; only the rest are asked, and only they enter the estimate.
+The eval Invitee is signed in again whenever its access token expires.
+
 RETRIEVAL MODE. `run --mode retrieval` spends no LLM tokens: each item with
 gold evidence has its question sent to hybrid retrieval (`POST /retrieve`,
 top `RETRIEVAL_K`, scoped to the item's Report when it names exactly one --
@@ -83,7 +89,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -194,6 +200,51 @@ def dump(body: object) -> str:
 
 
 # --------------------------------------------------------------------------
+# Signing in as the eval Invitee.
+# --------------------------------------------------------------------------
+
+
+class EvalInviteeAuth(httpx.Auth):
+    """Signs every request as the eval Invitee, and signs in again when one
+    comes back 401. An access token lives 15 minutes and a full run takes
+    longer: without this, every item after the expiry fails unanswered."""
+
+    requires_response_body = True
+
+    def __init__(self, login_url: httpx.URL, email: str, password: str) -> None:
+        self._login_url = login_url
+        self._credentials = {"email": email, "password": password}
+        self._token: str | None = None
+
+    def login_request(self) -> httpx.Request:
+        return httpx.Request("POST", self._login_url, json=self._credentials)
+
+    def take_token(self, response: httpx.Response) -> None:
+        response.raise_for_status()
+        self._token = str(response.json()["access_token"])
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+        if self._token is None:
+            self.take_token((yield self.login_request()))
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        response = yield request
+        if response.status_code == 401:
+            self.take_token((yield self.login_request()))
+            request.headers["Authorization"] = f"Bearer {self._token}"
+            yield request
+
+
+async def sign_in(client: httpx.AsyncClient, email: str, password: str) -> None:
+    """Sign `client` in as the eval Invitee now -- so wrong credentials fail
+    before the first item -- and keep it signed in for the whole run."""
+    base = client.base_url
+    auth = EvalInviteeAuth(base.copy_with(raw_path=base.raw_path + b"auth/login"),
+                           email, password)
+    auth.take_token(await client.send(auth.login_request()))
+    client.auth = auth
+
+
+# --------------------------------------------------------------------------
 # The answering-endpoint adapter: today's /ask job flow.
 # --------------------------------------------------------------------------
 
@@ -238,9 +289,7 @@ class AskJobAdapter:
         self._clock = clock
 
     async def login(self, email: str, password: str) -> None:
-        r = await self._client.post("/auth/login", json={"email": email, "password": password})
-        r.raise_for_status()
-        self._client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+        await sign_in(self._client, email, password)
 
     async def measure(self, item: BenchmarkItem) -> MeasuredAnswer:
         """`answer`, timed wall-clock, then priced from the usage its job
@@ -287,6 +336,25 @@ class AskJobAdapter:
     async def answer(self, item: BenchmarkItem) -> EndpointAnswer:
         answer, _job_id, _evidence = await self._attempt(item)
         return answer
+
+    async def recall(self, item: BenchmarkItem, job_id: str, latency_s: float) -> MeasuredAnswer:
+        """An item an earlier run already answered, re-read from its job --
+        nothing billed again. `latency_s` is what that run measured."""
+
+        def failed(error: str) -> EndpointAnswer:
+            return EndpointAnswer(item_id=item.id, answer=None, error=error)
+
+        try:
+            answer, evidence = await self._await_answer(item, job_id, failed)
+        except httpx.HTTPError as exc:
+            answer, evidence = failed(f"{type(exc).__name__}: {exc}"), ()
+        usage = await self.usage(job_id)
+        return MeasuredAnswer(
+            answer=answer,
+            cost=ItemCost(item_id=item.id, kind=item.kind, latency_s=latency_s, usage=usage),
+            job_id=job_id,
+            evidence=evidence,
+        )
 
     async def _attempt(
         self, item: BenchmarkItem
@@ -415,9 +483,7 @@ class RetrieveAdapter:
         self._k = k
 
     async def login(self, email: str, password: str) -> None:
-        r = await self._client.post("/auth/login", json={"email": email, "password": password})
-        r.raise_for_status()
-        self._client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+        await sign_in(self._client, email, password)
 
     async def retrieve(self, item: BenchmarkItem) -> RetrievedHits:
         body: dict[str, object] = {"query": item.question, "k": self._k}
@@ -583,6 +649,17 @@ def load_benchmark(directory: Path) -> Benchmark:
     return Benchmark(version=versions.pop(), items=items)
 
 
+def load_resumable(report_path: Path) -> dict[str, tuple[str, float]]:
+    """From an earlier run's report.json: every item that got an answer
+    (status not "failed") -> (its job id, its measured latency)."""
+    body = json.loads(report_path.read_text(encoding="utf-8"))
+    return {
+        i["item_id"]: (str(i["job_id"]), float(i["latency_s"]))
+        for i in body["items"]
+        if i.get("status") != "failed" and i.get("job_id") and i.get("latency_s") is not None
+    }
+
+
 async def run_eval(
     benchmark: Benchmark,
     adapter: AskJobAdapter,
@@ -591,16 +668,25 @@ async def run_eval(
     stamp: Mapping[str, object],
     out_dir: Path,
     judge: Judge | None = None,
+    resume: Mapping[str, tuple[str, float]] | None = None,
 ) -> EvalReport:
     """Answer the first `limit` items (all when None) one at a time, score
     them, have `judge` (when given) judge those with required claims, and
-    write `report.json` + `report.md` into `out_dir`."""
+    write `report.json` + `report.md` into `out_dir`. An item in `resume`
+    (item id -> its earlier job id and latency) is re-read from that job,
+    not asked again."""
     items = benchmark.items if limit is None else benchmark.items[:limit]
+    resume = resume or {}
     measured: list[MeasuredAnswer] = []
     judgements: list[ItemJudgement] = []
     for n, item in enumerate(items, start=1):
-        m = await adapter.measure(item)
-        print(f"[{n}/{len(items)}] {item.id}: {'error' if m.answer.error else 'answered'}")
+        if item.id in resume:
+            m = await adapter.recall(item, *resume[item.id])
+            outcome = "error" if m.answer.error else "reused"
+        else:
+            m = await adapter.measure(item)
+            outcome = "error" if m.answer.error else "answered"
+        print(f"[{n}/{len(items)}] {item.id}: {outcome}")
         if judge is not None and item.gold.required_claims:
             m, judgement = await _judge_item(judge, item, m)
             judgements.append(judgement)
@@ -1130,10 +1216,15 @@ async def _run(
             print(f"could not reach the stack as the eval Invitee: {exc}")
             return
         to_run = benchmark.items if args.limit is None else benchmark.items[: args.limit]
+        resume = load_resumable(args.resume) if args.resume else {}
+        if args.resume:
+            stamp["resumed"] = {"from": str(args.resume),
+                                "items": sum(1 for i in to_run if i.id in resume)}
+        to_ask = [i for i in to_run if i.id not in resume]
         judged_items = sum(1 for i in to_run if i.gold.required_claims) if judge else 0
         recent_judge = await judge.recent_costs() if judge and judged_items else []
         # Printed before the first billed call, which run_eval makes.
-        estimate = estimate_spend(len(to_run), recent, judged_items=judged_items,
+        estimate = estimate_spend(len(to_ask), recent, judged_items=judged_items,
                                   recent_judge_costs=recent_judge)
         print(spend_line(estimate))
         if estimate.total_cost_inr is None and args.limit is None:
@@ -1142,7 +1233,7 @@ async def _run(
             return
         report = await run_eval(
             benchmark, adapter, limit=args.limit, stamp=stamp, out_dir=args.out_dir,
-            judge=judge,
+            judge=judge, resume=resume,
         )
     o = report.overall
     print(f"{o.correct}/{o.run} correct ({o.accuracy:.1%}), {o.failed} failed; "
@@ -1199,6 +1290,9 @@ def main(
     run.add_argument("--password", help="eval Invitee password (default: $FDI_EVAL_PASSWORD)")
     run.add_argument("--limit", type=int, help="answer only the first N items")
     run.add_argument("--yes", action="store_true", help="answer every item (billed)")
+    run.add_argument("--resume", type=Path,
+                     help="an earlier report.json: re-read the items it answered from "
+                          "their jobs (not billed again) and ask only the rest")
     run.add_argument("--timeout", type=float, default=300.0, help="seconds per item")
     run.add_argument("--poll-interval", type=float, default=2.0)
     run.add_argument("--mode", choices=("answers", "retrieval"), default="answers",
