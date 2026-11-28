@@ -236,13 +236,11 @@ def _section_reset(label: str) -> str:
     return best
 
 
-def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
-    """Face rows with amounts, note references and their section caption."""
-    rows = table_rows(table)
-    if not rows:
-        return []
-    # A header sits at the TOP of the table. Scanning the whole table lets a
-    # late footnote row masquerade as one.
+def _face_header(rows: Mapping[int, Mapping[int, str]]) -> tuple[int | None, int | None]:
+    """(the header row, the note column) of a statement face, either None.
+
+    A header sits at the TOP of the table. Scanning the whole table lets a
+    late footnote row masquerade as one."""
     header = next(
         (r for r in sorted(rows)[:_HEADER_SCAN]
          if any(_is_note_header(v) for v in rows[r].values())),
@@ -253,6 +251,43 @@ def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
         note_col = next(
             (c for c, v in rows[header].items() if _is_note_header(v)), None
         )
+    return header, note_col
+
+
+def _face_amount_columns(cols: Mapping[int, str], note_col: int | None) -> list[int]:
+    """The columns of a face row that may hold an amount, left to right."""
+    return [c for c in sorted(cols) if c != 0 and c != note_col]
+
+
+def printed_amounts(
+    table: Mapping[str, object], source_row: int, *, origin: str
+) -> tuple[str, ...]:
+    """The printed text of every amount cell in one row, left to right -- the
+    SAME cells `parse_face_table` (origin "face") or a note row (origin
+    "note") read their `current` and `prior` from, so text and value always
+    describe one cell. The first is the current column, the second the
+    comparative. Empty when the row holds no amount. Total: never raises."""
+    rows = table_rows(table)
+    cols = rows.get(source_row)
+    if not cols:
+        return ()
+    if origin == "face":
+        _, note_col = _face_header(rows)
+        columns = _face_amount_columns(cols, note_col)
+    else:
+        columns = [c for c in sorted(cols) if c != 0]
+    return tuple(
+        text.strip() for c in columns
+        if parse_amount(text := cols.get(c, "")) is not None
+    )
+
+
+def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
+    """Face rows with amounts, note references and their section caption."""
+    rows = table_rows(table)
+    if not rows:
+        return []
+    header, note_col = _face_header(rows)
 
     out: list[FaceRow] = []
     path: list[str] = []
@@ -264,13 +299,10 @@ def parse_face_table(table: Mapping[str, object]) -> list[FaceRow]:
         label = cols.get(0, "")
         if not label:
             continue
-        amounts: list[float] = []
-        for c in sorted(cols):
-            if c == 0 or c == note_col:
-                continue
-            value = parse_amount(cols.get(c))
-            if value is not None:
-                amounts.append(value)
+        amounts = [
+            value for c in _face_amount_columns(cols, note_col)
+            if (value := parse_amount(cols.get(c))) is not None
+        ]
         if not amounts:
             # A row with no amount anywhere is a CAPTION.
             if _section_reset(label):

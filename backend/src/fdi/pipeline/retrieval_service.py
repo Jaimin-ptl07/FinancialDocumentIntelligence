@@ -46,6 +46,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import Annotated, Literal, cast, get_args
 
 import structlog
@@ -85,12 +86,14 @@ from fdi.core.evidence import (
     report_status,
     table_ref,
 )
+from fdi.core.financial_facts import Observation, Source
 from fdi.core.fog_reason import fact_claims
 from fdi.core.semantic import SectionType
 from fdi.core.statements import STATEMENT_ANCHORS
 from fdi.pipeline.companies import CompanyRegistry
 from fdi.pipeline.crossdoc import read_artifact
 from fdi.pipeline.embeddings import EmbeddingClient
+from fdi.pipeline.financial_facts import FinancialFactService
 from fdi.pipeline.retrieval import bm25_search, hybrid_search, vector_search
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.models import Document
@@ -365,6 +368,7 @@ class RetrievalService:
         self._embedder = embedder
         self._vector_store = vector_store
         self._artifacts = _Artifacts(session, store)
+        self._facts = FinancialFactService(session=session, store=store)
 
     # -- retrieve ---------------------------------------------------------
 
@@ -663,6 +667,14 @@ class RetrievalService:
             return [], "facts exist only for a statement basis; the scope names none"
         out: list[Evidence] = []
         for r in reports:
+            if await self._facts.projected(r.doc_id):
+                # S5: backed by the Financial fact service -- the same
+                # Observation an `inspect` of the id resolves to.
+                for basis in wanted or await self._facts.bases(r.doc_id):
+                    o = await self._facts.observation_for_evidence(r.doc_id, basis, concept)
+                    if o is not None and o.value is not None:
+                        out.append(_observation_evidence(r, o))
+                continue
             fog = await self._artifacts.get(r.doc_id, "fog_objects")
             mapping = await self._artifacts.get(r.doc_id, "fog_mapping")
             if fog is None or mapping is None:
@@ -966,11 +978,30 @@ class RetrievalService:
         })
 
     async def _inspect_fact(self, r: ReportMeta, ref: EvidenceRef) -> InspectedEvidence | None:
+        basis, tag = cast(str, ref.basis), cast(str, ref.name)
+        if await self._facts.projected(r.doc_id):
+            o = await self._facts.observation_for_evidence(r.doc_id, basis, tag)
+            if o is None or o.value is None:
+                return None
+            e = _observation_evidence(r, o, path=None)
+            li = ref_for_fog_node(r.doc_id, o.line_item) if o.line_item else None
+            line = await self._inspect_line_item(r, li) if li is not None else None
+            return InspectedEvidence(replace(e, bounding_regions=(
+                line.evidence.bounding_regions if line is not None else ())), {
+                "fact": {"tag": tag, "basis": basis, "value": format(o.value, "f"),
+                         "printed": o.printed, "unit": o.unit.label,
+                         "normalised": format(n, "f") if (n := o.normalised) is not None
+                         else None,
+                         "fiscal_year": o.fiscal_year, "source": o.source.value,
+                         "label": o.label, "validation": o.validation.value,
+                         "inputs": list(o.inputs)},
+                "line_item": li.id if li is not None else None,
+                "table": line.context.get("table") if line is not None else "",
+            })
         fog = await self._artifacts.get(r.doc_id, "fog_objects")
         mapping = await self._artifacts.get(r.doc_id, "fog_mapping")
         if fog is None or mapping is None:
             return None
-        basis, tag = cast(str, ref.basis), cast(str, ref.name)
         claim = fact_claims(fog, mapping, basis=basis).get(tag)
         if claim is None:
             return None
@@ -990,6 +1021,26 @@ class RetrievalService:
             "line_item": li.id if li is not None else None,
             "table": line.context.get("table") if line is not None else "",
         })
+
+
+def _observation_evidence(
+    r: ReportMeta, o: Observation, *, path: str | None = RetrievalPath.STRUCTURED.value,
+) -> Evidence:
+    """A Report's current-column Observation as `fact` Evidence. Its id stays
+    `{doc}:fact:{basis}:{tag}` (ADR-0005); the content shows the figure as
+    printed, with its unit."""
+    li = ref_for_fog_node(r.doc_id, o.line_item) if o.line_item else None
+    shown = o.printed or format(cast(Decimal, o.value), "f")
+    origin = "composed" if o.source is Source.GRAPH_COMPOSED else o.label
+    return Evidence(
+        evidence_id=fact_ref(r.doc_id, o.basis, o.concept).id,
+        kind=EvidenceKind.FACT, report=r,
+        content=f"{origin}: {shown} {o.unit.label} ({o.concept}, {o.basis}, {o.fiscal_year})",
+        page=o.page, basis=o.basis, table_index=o.table_index,
+        links=(li.id,) if li is not None else (),
+        value=float(cast(Decimal, o.value)),
+        retrieval_paths=(path,) if path else (),
+    )
 
 
 # ---------------------------------------------------------------------------

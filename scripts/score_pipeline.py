@@ -8,6 +8,15 @@ comparison is apples to apples on one harness.
         --gt-dir docs/groundtruth --extraction path/to/record.json \\
         --issuer TCS --basis consolidated
 
+Two more inputs, for the Financial fact service (S5): `--reasoning` scores a
+`fog_reason` artifact's arbitrated facts, and `--facts` scores what the fact
+service stores for the same Report version (`fdi-facts export DOC_ID`). The
+projection is lossless exactly when the two print the same table:
+
+    fdi-facts export <doc_id> > facts.json
+    ... score_pipeline.py --gt-dir docs/groundtruth --issuer TCS --reasoning fog_reason.json
+    ... score_pipeline.py --gt-dir docs/groundtruth --issuer TCS --facts facts.json
+
 An extraction record is ONE statement set, so its basis must be stated (by
 `--basis` or by a `basis` key on the record) -- otherwise a consolidated run
 would be credited against the standalone ground truth too. `--fog` needs no
@@ -78,6 +87,38 @@ def facts_from_fog(fog: Mapping[str, object], *, basis: str) -> dict[str, object
     return out
 
 
+def facts_from_reasoning(reasoning: Mapping[str, object], *, basis: str) -> dict[str, object]:
+    """tag -> current value out of a `fog_reason` artifact's arbitrated facts
+    for one basis -- the artifact side of the S5 lossless check."""
+    bases = reasoning.get("bases") if isinstance(reasoning, Mapping) else None
+    region = bases.get(basis) if isinstance(bases, Mapping) else None
+    facts = region.get("facts") if isinstance(region, Mapping) else None
+    if not isinstance(facts, Mapping):
+        return {}
+    return {
+        str(tag): {"current": value, "prior": None}
+        for tag, value in facts.items()
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
+
+
+def facts_from_service(export: Mapping[str, object], *, basis: str) -> dict[str, object]:
+    """tag -> {current, prior} out of `fdi-facts export`, whose values are
+    exact decimal strings -- the fact-service side of the S5 lossless check."""
+    bases = export.get("bases") if isinstance(export, Mapping) else None
+    region = bases.get(basis) if isinstance(bases, Mapping) else None
+    out: dict[str, object] = {}
+    for tag, cell in (region.items() if isinstance(region, Mapping) else []):
+        if not isinstance(cell, Mapping) or cell.get("current") is None:
+            continue
+        prior = cell.get("prior")
+        out[str(tag)] = {
+            "current": float(str(cell["current"])),
+            "prior": float(str(prior)) if prior is not None else None,
+        }
+    return out
+
+
 def report(rows: Sequence[tuple[GroundTruth, Score]]) -> str:
     """A fixed-width table, one row per ground-truth file, plus a total."""
     if not rows:
@@ -130,6 +171,10 @@ def main() -> None:
     parser.add_argument("--gt-dir", required=True, type=Path)
     parser.add_argument("--extraction", type=Path, help="an extraction record JSON")
     parser.add_argument("--fog", type=Path, help="a FOG artifact JSON")
+    parser.add_argument("--reasoning", type=Path, help="a fog_reason artifact JSON")
+    parser.add_argument(
+        "--facts", type=Path, help="a Financial fact service export (fdi-facts export)"
+    )
     parser.add_argument("--issuer", help="score only this issuer")
     parser.add_argument(
         "--basis",
@@ -144,6 +189,8 @@ def main() -> None:
     produced_facts: dict[str, object] = {}
     record_basis: str | None = None
     fog: Mapping[str, object] | None = None
+    reasoning: Mapping[str, object] | None = None
+    service: Mapping[str, object] | None = None
     if args.extraction is not None:
         record = json.loads(args.extraction.read_text(encoding="utf-8"))
         produced_facts = facts_from_extraction(record)
@@ -158,6 +205,10 @@ def main() -> None:
             return
     elif args.fog is not None:
         fog = json.loads(args.fog.read_text(encoding="utf-8"))
+    elif args.reasoning is not None:
+        reasoning = json.loads(args.reasoning.read_text(encoding="utf-8"))
+    elif args.facts is not None:
+        service = json.loads(args.facts.read_text(encoding="utf-8"))
 
     rows: list[tuple[GroundTruth, Score]] = []
     for path in sorted(args.gt_dir.glob("*.json")):
@@ -173,6 +224,10 @@ def main() -> None:
             produced: Mapping[str, object] = produced_facts
         elif fog is not None:
             produced = facts_from_fog(fog, basis=gt.basis)
+        elif reasoning is not None:
+            produced = facts_from_reasoning(reasoning, basis=gt.basis)
+        elif service is not None:
+            produced = facts_from_service(service, basis=gt.basis)
         else:
             produced = {}
         rows.append((gt, score_document(gt, produced)))

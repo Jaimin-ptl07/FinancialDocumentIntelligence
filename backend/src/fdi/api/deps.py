@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fdi.api.limits import RateLimits
 from fdi.pipeline.agent import AgentClient
-from fdi.pipeline.dispatch import StageDispatcher
+from fdi.pipeline.dispatch import FactProjectionDispatcher, StageDispatcher
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.evaluation import CandidateRegistry
 from fdi.pipeline.extractor import ExtractorClient
@@ -69,6 +69,13 @@ def get_dispatcher(request: Request) -> StageDispatcher:
     """
     dispatcher: StageDispatcher = request.app.state.dispatcher
     return dispatcher
+
+
+def get_facts_dispatcher(request: Request) -> FactProjectionDispatcher | None:
+    """The Financial fact re-projection publisher (S5), or None in an app
+    built without one."""
+    dispatcher = getattr(request.app.state, "facts_dispatcher", None)
+    return dispatcher if isinstance(dispatcher, FactProjectionDispatcher) else None
 
 
 def get_job_dispatcher(request: Request) -> JobDispatcher:
@@ -154,6 +161,7 @@ StoreDep = Annotated[ArtifactStore, Depends(get_store)]
 CorrelationIdDep = Annotated[str, Depends(get_correlation_id)]
 DispatcherDep = Annotated[StageDispatcher, Depends(get_dispatcher)]
 JobDispatcherDep = Annotated[JobDispatcher, Depends(get_job_dispatcher)]
+FactsDispatcherDep = Annotated[FactProjectionDispatcher | None, Depends(get_facts_dispatcher)]
 RateLimitsDep = Annotated[RateLimits, Depends(get_rate_limits)]
 ResolverDep = Annotated[DagResolver, Depends(get_resolver)]
 SessionFactoryDep = Annotated["async_sessionmaker[AsyncSession]", Depends(get_session_factory)]

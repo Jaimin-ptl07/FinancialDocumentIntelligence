@@ -74,3 +74,15 @@ class StageDispatcher:
         self._stage_task.apply_async(
             args=[doc_id, stage_name], kwargs={"correlation_id": correlation_id}
         )
+
+
+class FactProjectionDispatcher:
+    """Publishes a Financial fact re-projection of one Report (S5): after an
+    Invitee re-files it under another Company or corrects its Fiscal year,
+    its Observations carry the old Company and Fiscal year until it runs."""
+
+    def __init__(self, task: TaskSender) -> None:
+        self._task = task
+
+    def dispatch(self, doc_id: str, correlation_id: str) -> None:
+        self._task.apply_async(args=[doc_id], kwargs={"correlation_id": correlation_id})

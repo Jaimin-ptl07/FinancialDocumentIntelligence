@@ -136,9 +136,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # built-in stages into `REGISTRY` for THIS process -- the API never resolves a
     # DAG itself, but the resolver's registry must still be populated for anything
     # downstream that inspects it.
-    from fdi.pipeline.dispatch import StageDispatcher
+    from fdi.pipeline.dispatch import FactProjectionDispatcher, StageDispatcher
     from fdi.pipeline.jobs import JobDispatcher
-    from fdi.workers.tasks import run_job_task, run_stage_task
+    from fdi.workers.tasks import project_facts_task, run_job_task, run_stage_task
 
     # REGISTRY is populated as a side effect of the import above (tasks.py does
     # `from fdi.pipeline import stages as _stages`), so it must be built AFTER
@@ -166,6 +166,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # T5: the expensive routes publish API jobs. Same Celery app as the stage
     # task, so the broker re-assertion above covers it too.
     app.state.job_dispatcher = JobDispatcher(run_job_task)
+    # S5: a Report re-filed or re-dated by an Invitee re-projects its facts.
+    app.state.facts_dispatcher = FactProjectionDispatcher(project_facts_task)
 
     # `api -> pipeline` is a legal edge in the import contract (only
     # `api -> workers` is the one exemption carved out above), so this import

@@ -36,19 +36,23 @@ app, so a worker with broken config still fails at import, not here.
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 
 import structlog
 from minio import Minio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fdi.pipeline import candidates as _candidates  # noqa: F401 - registers eval candidates
 from fdi.pipeline import stages as _stages  # noqa: F401 - registers built-in stages
 from fdi.pipeline.companies import resolve_and_commit
 from fdi.pipeline.evaluation import CANDIDATES
+from fdi.pipeline.financial_facts import project_document
 from fdi.pipeline.jobs import JobServices, execute_job
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.pipeline.run import run_stage
 from fdi.pipeline.schema_store import load_schema
+from fdi.pipeline.stages.fog_reason import FogReasonStage
 from fdi.pipeline.stages.issuer import ISSUER_STAGE
 from fdi.platform.agent import AzureOpenAIAgentClient
 from fdi.platform.config import Settings, get_settings
@@ -159,9 +163,41 @@ async def _run_stage_async(
                 )
             except Exception as exc:  # noqa: BLE001 -- degrade, don't fail the stage
                 log.warning("company.resolve_failed", doc_id=doc_id, error=repr(exc))
+        if stage_name in FACT_PROJECTION_TRIGGERS:
+            # The Financial fact projection (S5) needs BOTH the reasoning
+            # artifact and the Report's Company and Fiscal year, which arrive
+            # from two different stages in either order; whichever completes
+            # second projects, the other records why it could not yet. Same
+            # posture as filing: a failure never fails the stage.
+            await _project_facts(session_factory, store, doc_id, services)
         return successors
     finally:
         await engine.dispose()
+
+
+# The stages whose completion can make a Report's facts projectable.
+FACT_PROJECTION_TRIGGERS = frozenset({ISSUER_STAGE, FogReasonStage.name})
+
+
+async def _project_facts(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: ArtifactStore,
+    doc_id: str,
+    services: Mapping[str, object],
+    *,
+    force: bool = False,
+) -> None:
+    schema = services.get("schema")
+    try:
+        outcome = await project_document(
+            session_factory=session_factory, store=store, doc_id=doc_id,
+            formulas_schema=schema if isinstance(schema, Mapping) else {},
+            standard_schema_path=get_settings().standard_schema_path, force=force,
+        )
+        log.info("facts.project_done", doc_id=doc_id, status=outcome.status,
+                 reason=outcome.reason, observations=outcome.observations)
+    except Exception as exc:  # noqa: BLE001 -- degrade, don't fail the stage
+        log.warning("facts.project_failed", doc_id=doc_id, error=repr(exc))
 
 
 # `type: ignore[untyped-decorator]` is NOT optional here, and every stage in
@@ -188,6 +224,36 @@ def run_stage_task(doc_id: str, stage_name: str, correlation_id: str = "") -> No
         successors = asyncio.run(_run_stage_async(doc_id, stage_name, run_id, corr))
         for nxt in successors:
             run_stage_task.apply_async(args=[doc_id, nxt], kwargs={"correlation_id": corr})
+    finally:
+        clear_correlation_id()
+
+
+async def _project_facts_async(doc_id: str, *, force: bool = False) -> None:
+    """Re-project one Report's Financial facts outside the stage DAG -- after
+    an Invitee re-files it under another Company or corrects its Fiscal year
+    (S2.3), or for a backfill."""
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    try:
+        session_factory = make_session_factory(engine)
+        store = ArtifactStore(_make_client(settings), bucket=settings.s3_bucket)
+        services: dict[str, object] = {}
+        try:
+            schema, _ = await load_schema(store=store, seed_path=settings.extraction_schema_path)
+            services["schema"] = schema
+        except Exception as exc:  # noqa: BLE001 -- project without composed sums
+            log.warning("facts.schema_load_failed", doc_id=doc_id, error=repr(exc))
+        await _project_facts(session_factory, store, doc_id, services, force=force)
+    finally:
+        await engine.dispose()
+
+
+@app.task(name="fdi.project_facts", bind=False)  # type: ignore[untyped-decorator]
+def project_facts_task(doc_id: str, correlation_id: str = "", force: bool = False) -> None:
+    corr = correlation_id or new_correlation_id()
+    bind_correlation_id(corr)
+    try:
+        asyncio.run(_project_facts_async(doc_id, force=force))
     finally:
         clear_correlation_id()
 

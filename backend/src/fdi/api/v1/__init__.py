@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from fdi.api.v1.companies import router as companies_router
 from fdi.api.v1.extraction_schemas import router as extraction_schemas_router
 from fdi.api.v1.extractions import router as extractions_router
+from fdi.api.v1.financial import router as financial_router
 from fdi.api.v1.reports import router as reports_router
 from fdi.api.v1.retrieval import router as retrieval_router
 from fdi.api.v1.workspaces import router as workspaces_router
@@ -21,3 +22,4 @@ v1_router.include_router(workspaces_router)
 v1_router.include_router(extraction_schemas_router)
 v1_router.include_router(extractions_router)
 v1_router.include_router(retrieval_router)
+v1_router.include_router(financial_router)

@@ -3,6 +3,7 @@ truth, and this keeps wall-clock out of artifact bodies (Global Constraint 6).""
 
 import enum
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -13,9 +14,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     true,
 )
@@ -628,3 +631,151 @@ class ExtractionRunItem(Base):
     read_id: Mapped[str | None] = mapped_column(
         ForeignKey("field_read.id", ondelete="SET NULL"), nullable=True
     )
+
+
+# -- Financial facts (S5, ADR-0006): a rebuildable projection -----------------
+
+
+class ConceptRow(Base):
+    """A taxonomy Concept, seeded from the FDI standard schema. Never created
+    by a model."""
+
+    __tablename__ = "concept"
+
+    tag: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    period_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FinancialProjection(Base):
+    """What one Report version's projection was made from, and what it saw."""
+
+    __tablename__ = "financial_projection"
+
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), primary_key=True
+    )
+    company_id: Mapped[str | None] = mapped_column(ForeignKey("company.id"), nullable=True)
+    fiscal_year: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    projection_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    observation_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    diagnostics: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    projected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FinancialObservationRow(Base):
+    """One value one source states for Concept x Fiscal year x basis."""
+
+    __tablename__ = "financial_observation"
+    __table_args__ = (
+        UniqueConstraint(
+            "doc_id", "basis", "concept", "fiscal_year", "report_column", "source",
+            name="uq_financial_observation_identity",
+        ),
+        Index("ix_financial_observation_fact", "company_id", "basis", "concept", "fiscal_year"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    company_id: Mapped[str] = mapped_column(ForeignKey("company.id"), nullable=False)
+    basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    concept: Mapped[str] = mapped_column(ForeignKey("concept.tag"), nullable=False)
+    fiscal_year: Mapped[str] = mapped_column(String(16), nullable=False)
+    report_column: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    doc_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_fiscal_year: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    printed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    scale: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    unit_printed: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    normalised: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    period_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    label: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    line_item: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    table_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_id: Mapped[str | None] = mapped_column(String(640), nullable=True)
+    validation: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    inputs: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    extracted_value_id: Mapped[str | None] = mapped_column(
+        ForeignKey("field_read.id", ondelete="CASCADE"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FinancialFactRow(Base):
+    """The value the fact rule picks for Company x Concept x Fiscal year x
+    basis. Written only by re-deriving it from Observations."""
+
+    __tablename__ = "financial_fact"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "concept", "fiscal_year", "basis", name="uq_financial_fact_key"
+        ),
+        Index("ix_financial_fact_history", "company_id", "basis", "concept", "fiscal_year"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(ForeignKey("company.id"), nullable=False)
+    concept: Mapped[str] = mapped_column(ForeignKey("concept.tag"), nullable=False)
+    fiscal_year: Mapped[str] = mapped_column(String(16), nullable=False)
+    basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    selected_observation_id: Mapped[str] = mapped_column(
+        ForeignKey("financial_observation.id", ondelete="CASCADE"), nullable=False
+    )
+    value: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    normalised: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    restated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    restatement_original_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    disagreement_original_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    derived_observation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    observation_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FinancialValidationRow(Base):
+    """One of a Report version's graph checks, on one basis."""
+
+    __tablename__ = "financial_validation"
+    __table_args__ = (
+        UniqueConstraint("doc_id", "basis", "rule_id", name="uq_financial_validation_rule"),
+        Index("ix_financial_validation_tags", "tags", postgresql_using="gin"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    expected: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    actual: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    delta: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    tolerance: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)

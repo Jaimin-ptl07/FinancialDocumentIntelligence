@@ -29,6 +29,7 @@ a number or None, and nothing raises.
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 
 # A nil/￮ marker. Filings use a bare dash for "nil" and a starred dash for
 # "less than half the reporting unit" -- neither is a number, and reading either
@@ -46,16 +47,12 @@ _CURRENCY = str.maketrans("", "", "₹$£€")
 _NUMERIC = re.compile(r"^-?\d+(\.\d+)?$")
 
 
-def parse_amount(text: object) -> float | None:
-    """A printed amount as a number, or None when the cell holds no amount.
-
-    Never raises. A cell that is not an amount -- a label, a nil marker, a date,
-    a footnote reference -- returns None rather than a guess."""
-    if isinstance(text, (int, float)) and not isinstance(text, bool):
-        return float(text)
-    if not isinstance(text, str):
-        return None
-
+def _amount_body(text: str) -> tuple[str, bool] | None:
+    """A printed cell normalised to a plain signed-digit string plus whether it
+    was an accounting negative, or None when it is not an amount. The ONE
+    place the printed-amount grammar lives: `parse_amount` and `parse_decimal`
+    both read through it, so a float and an exact decimal can never disagree
+    about what a cell says."""
     raw = text.strip()
     if raw.lower() in _NIL:
         return None
@@ -77,11 +74,55 @@ def parse_amount(text: object) -> float | None:
 
     if body.lower() in _NIL or not _NUMERIC.match(body):
         return None
+    return body, negative
 
+
+def parse_amount(text: object) -> float | None:
+    """A printed amount as a number, or None when the cell holds no amount.
+
+    Never raises. A cell that is not an amount -- a label, a nil marker, a date,
+    a footnote reference -- returns None rather than a guess."""
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        return float(text)
+    if not isinstance(text, str):
+        return None
+    parsed = _amount_body(text)
+    if parsed is None:
+        return None
+    body, negative = parsed
     value = float(body)
     if negative:
         value = -abs(value)
     return value
+
+
+def parse_decimal(text: object) -> Decimal | None:
+    """A printed amount as an EXACT decimal, or None when the cell holds no
+    amount -- the same grammar as `parse_amount`, never via a binary float.
+
+    `2,67,021.45` is Decimal("267021.45") with its two printed places kept, so
+    a crore figure round-trips exactly and `printed_places` can tell what
+    precision the issuer printed. Only strings are read: a float has already
+    lost the printed text. Never raises."""
+    if not isinstance(text, str):
+        return None
+    parsed = _amount_body(text)
+    if parsed is None:
+        return None
+    body, negative = parsed
+    try:
+        value = Decimal(body)
+    except InvalidOperation:  # pragma: no cover - _NUMERIC already guards it
+        return None
+    if negative:
+        value = -abs(value)
+    return value
+
+
+def printed_places(value: Decimal) -> int:
+    """How many decimal places `value` was printed with (0 for `2,67,021`)."""
+    exponent = value.as_tuple().exponent
+    return -exponent if isinstance(exponent, int) and exponent < 0 else 0
 
 
 def is_nil_marker(text: object) -> bool:
