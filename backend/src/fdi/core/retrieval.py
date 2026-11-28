@@ -384,6 +384,10 @@ def build_vector_results(
             "section_type": meta.get("section_type"),
             "text": meta.get("text") if isinstance(meta.get("text"), str) else "",
             "score": float(score) if isinstance(score, int | float) else 0.0,
+            # Vector schema v3 (S4): the index's own basis/kind scalars, None
+            # on a row indexed before them.
+            "basis": meta.get("basis") if isinstance(meta.get("basis"), str) else None,
+            "kind": meta.get("kind") if isinstance(meta.get("kind"), str) else None,
         })
         if len(results) >= k:
             break

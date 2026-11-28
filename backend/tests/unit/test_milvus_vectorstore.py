@@ -46,6 +46,9 @@ def test_milvus_store_creates_collection_then_upserts(monkeypatch: pytest.Monkey
             calls["create_collection"] = kwargs
             self._exists = True
 
+        def describe_collection(self, name: str) -> dict[str, object]:
+            return {"fields": [{"name": n} for n in ("id", "basis", "kind")]}
+
         def upsert(self, **kwargs: object) -> None:
             calls["upsert"] = kwargs
 
@@ -78,7 +81,7 @@ def test_milvus_store_creates_collection_then_upserts(monkeypatch: pytest.Monkey
     # at creation time, which forced this off the simple create_collection form.
     schema = cast(_FakeSchema, calls["create_collection"]["schema"])
     names = {f["name"] for f in schema.fields}
-    assert {"id", "vector", "text", "sparse", "doc_id", "chunk_id",
+    assert {"id", "vector", "text", "sparse", "doc_id", "chunk_id", "basis", "kind",
             "section_type", "heading", "page"} <= names
     assert len(schema.functions) == 1
 
@@ -204,7 +207,7 @@ def test_ensure_collection_declares_bm25_function_and_sparse_index(
 
     schema = created["schema"]
     names = {f["name"] for f in schema.fields}
-    assert {"id", "vector", "text", "sparse", "doc_id", "chunk_id",
+    assert {"id", "vector", "text", "sparse", "doc_id", "chunk_id", "basis", "kind",
             "section_type", "heading", "page"} <= names
 
     vector_field = next(f for f in schema.fields if f["name"] == "vector")
@@ -245,6 +248,9 @@ def test_search_text_passes_raw_text_and_explicit_output_fields(
         def has_collection(self, collection_name: str) -> bool:
             return True
 
+        def describe_collection(self, name: str) -> dict[str, object]:
+            return {"fields": [{"name": "basis"}, {"name": "kind"}]}
+
         def search(self, **kw: object) -> list[list[dict[str, object]]]:
             seen.update(kw)
             return [[{"id": "d:s1", "distance": 3.5,
@@ -278,3 +284,41 @@ def test_search_text_missing_collection_returns_empty(
     monkeypatch.setattr(vs, "MilvusClient", _FakeClient)
     store = vs.MilvusVectorStore(uri="http://x", collection="c", dim=384)
     assert store.search_text("anything", 5) == []
+
+
+def test_a_pre_v3_collection_is_refused_with_the_fix_in_the_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4: writing v3 rows into a collection without `basis`/`kind` must
+    fail loudly, naming the fix -- not row by row deep inside Milvus."""
+    import fdi.platform.vectorstore as vs
+
+    class _FakeClient:
+        def __init__(self, uri: str) -> None:
+            pass
+
+        def has_collection(self, collection_name: str) -> bool:
+            return True
+
+        def describe_collection(self, name: str) -> dict[str, object]:
+            return {"fields": [{"name": "id"}, {"name": "text"}]}
+
+    monkeypatch.setattr(vs, "MilvusClient", _FakeClient)
+    store = vs.MilvusVectorStore(uri="http://h:19530", collection="fdi_chunks_v2", dim=4)
+    with pytest.raises(vs.CollectionSchemaError, match="fdi-retrieval reindex"):
+        store.upsert([{"id": "d:s0", "vector": [0.0] * 4, "metadata": {}}])
+    with pytest.raises(vs.CollectionSchemaError):
+        store.search([0.0] * 4, 5)
+
+
+def test_delete_document_refuses_a_non_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    import fdi.platform.vectorstore as vs
+
+    class _FakeClient:
+        def __init__(self, uri: str) -> None:
+            pass
+
+    monkeypatch.setattr(vs, "MilvusClient", _FakeClient)
+    store = vs.MilvusVectorStore(uri="http://h:19530", collection="c", dim=4)
+    with pytest.raises(ValueError, match="not a document id"):
+        store.delete_document('x" or doc_id != "')

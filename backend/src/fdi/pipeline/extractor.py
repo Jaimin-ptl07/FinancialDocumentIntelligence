@@ -1,6 +1,7 @@
 """The extractor's orchestrator + ExtractorClient seam (design spec sec
-3.2): extract_unit pools context ONCE per Retrieval Unit via hybrid_search
-ALONE (dense BGE + keyword Postgres-FTS, RRF-fused -- table content already
+3.2): extract_unit pools context ONCE per Retrieval Unit via the Retrieval
+service's hybrid path (S4; fdi.pipeline.retrieval_service) ALONE, basis-
+filtered inside the vector store (dense BGE + Milvus BM25, RRF-fused -- table content already
 reaches this pool as chunks, since build_chunks emits one table CARD
 (`t{i}`) per canonicalized table alongside `s{i}` section chunks and
 EmbeddingStage embeds all of them; a separate get_tables table-blob
@@ -58,13 +59,13 @@ import re
 import uuid
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Protocol, cast, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import structlog
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.basis import page_basis, resolve_effective_basis
+from fdi.core.evidence import Basis, Evidence, RetrievalPath
 from fdi.core.extraction_plan import (
     EngineVersions,
     PlanItem,
@@ -104,7 +105,8 @@ from fdi.core.statements import STATEMENT_ANCHORS, find_statement_tables
 from fdi.core.table_render import render_table_markdown, repair_headers
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
-from fdi.pipeline.retrieval import hybrid_search, read_chunks
+from fdi.pipeline.retrieval import read_chunks
+from fdi.pipeline.retrieval_service import RetrievalRequest, RetrievalService, Scope
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.extraction_repository import ExtractionRepository
 from fdi.platform.db.models import FieldRead
@@ -261,53 +263,93 @@ def _note_pages_for_unit(note_map: NoteMap | None, unit: UnitSpec) -> list[int]:
 async def _pool_for(
     *, ctx: ExtractContext, query: str, k: int
 ) -> list[Candidate]:
-    """hybrid_search -> Candidate list, scoped to this document/version.
-    Never raises (decision 10): a failed search degrades to an empty pool.
-    An unconfigured embedder/vector_store degrades the same way -- hybrid_
-    search now requires both non-None, so there is nothing to call."""
+    """The Retrieval service's hybrid path -> Candidate list, scoped to this
+    Report version. Never raises (decision 10): a failed search degrades to
+    an empty pool."""
     pool, _error = await _pool_checked(ctx=ctx, query=query, k=k)
     return pool
 
 
+# The bases a unit's pool is filtered to IN THE VECTOR STORE (S4): the
+# preferred statement set plus `unknown` -- text outside every basis region
+# serves either set (`_basis_keep`'s rule, now enforced by retrieval itself).
+_POOL_BASES: dict[str, tuple[Basis, ...]] = {
+    "consolidated": (Basis.CONSOLIDATED, Basis.UNKNOWN),
+    "standalone": (Basis.STANDALONE, Basis.UNKNOWN),
+}
+
+
 async def _pool_checked(
-    *, ctx: ExtractContext, query: str, k: int
+    *, ctx: ExtractContext, query: str, k: int, basis: str = "both"
 ) -> tuple[list[Candidate], str | None]:
     """`_pool_for`, but saying WHY a pool is empty: (candidates, error).
     An unconfigured or failing retrieval is an error, not "nothing found" --
     storing it as a not-found read would cache a null that no later run
-    would ever retry. Never raises."""
+    would ever retry. Never raises.
+
+    S4: pools through the Retrieval service -- the same hybrid path, scope
+    enforcement and basis filtering research uses, so extraction and research
+    cannot drift apart. With a basis preference the pool arrives
+    basis-correct from the store (no over-fetch-then-drop). If the preferred
+    basis has NO candidates at all (a consolidated-only report asked for
+    standalone), the engine asks again unfiltered: extracting from the only
+    basis present beats returning nothing (measured on TCS; see
+    `_filter_by_basis`), and the retry is an explicit engine decision, never a
+    silent widening inside the service."""
     if ctx.embedder is None or ctx.vector_store is None:
         return [], "retrieval is not configured (no embedder or vector store)"
-    hits: list[dict[str, object]] = []
-    if query.strip():
-        try:
-            hits = await hybrid_search(
-                session=ctx.session, embedder=ctx.embedder,
-                vector_store=ctx.vector_store, query=query.strip(), k=k,
-                filters={"doc_key": ctx.doc_key, "version": ctx.version},
-            )
-        except Exception as exc:  # noqa: BLE001 - decision 10
-            log.warning("extractor.search_failed", doc_id=ctx.doc_id, error=repr(exc))
-            if isinstance(exc, SQLAlchemyError):
-                # A failed statement poisons the shared session for every later
-                # group; a vector-store error leaves it clean (and a needless
-                # rollback would expire the caller's ORM objects).
-                with contextlib.suppress(Exception):
-                    await ctx.session.rollback()
-            return [], f"retrieval failed: {type(exc).__name__}: {exc}"
-    return _candidates(hits), None
+    if not query.strip():
+        return [], None
+    service = RetrievalService(
+        session=ctx.session, store=ctx.store,
+        embedder=ctx.embedder, vector_store=ctx.vector_store,
+    )
+    bases = _POOL_BASES.get(basis, ())
+    evidence, error = await _pool_search(service, ctx=ctx, query=query, k=k, bases=bases)
+    if error is None and not evidence and bases:
+        log.info("extractor.basis_fallback", doc_id=ctx.doc_id, basis=basis)
+        evidence, error = await _pool_search(service, ctx=ctx, query=query, k=k, bases=())
+    if error is not None:
+        return [], error
+    return _candidates(evidence), None
 
 
-def _candidates(hits: Sequence[Mapping[str, object]]) -> list[Candidate]:
+async def _pool_search(
+    service: RetrievalService,
+    *,
+    ctx: ExtractContext,
+    query: str,
+    k: int,
+    bases: tuple[Basis, ...],
+) -> tuple[list[Evidence], str | None]:
+    request = RetrievalRequest(
+        query=query.strip(),
+        scope=Scope(doc_ids=(ctx.doc_id,), bases=bases),
+        paths=(RetrievalPath.HYBRID,),
+        k=max(1, min(k, _MAX_POOL_K)),
+    )
+    package = await service.retrieve(request)
+    outcome = package.path(RetrievalPath.HYBRID.value)
+    if outcome is not None and outcome.status == "degraded":
+        log.warning("extractor.search_failed", doc_id=ctx.doc_id, error=outcome.reason)
+        return [], f"retrieval failed: {outcome.reason}"
+    return list(package.evidence), None
+
+
+# RetrievalRequest's own ceiling on k.
+_MAX_POOL_K = 200
+
+
+def _candidates(evidence: Sequence[Evidence]) -> list[Candidate]:
     return [
         Candidate(
-            evidence_id=f"{h['doc_id']}:{h['chunk_id']}",
-            text=str(h.get("text", "")),
-            page=cast(int | None, h.get("page")),
-            score=float(cast(float, h.get("score", 0.0))),
+            evidence_id=e.evidence_id,
+            text=e.content,
+            page=e.page,
+            score=e.score if e.score is not None else 0.0,
             source_tool="hybrid",
         )
-        for h in hits
+        for e in evidence
     ]
 
 
@@ -458,7 +500,8 @@ async def _read_unit(
 ) -> _UnitRead:
     top_k = unit_top_k(len(unit.fields))
     pool, pool_error = await _pool_checked(
-        ctx=ctx, query=unit.retrieval_query, k=top_k * _POOL_OVERFETCH
+        ctx=ctx, query=unit.retrieval_query, k=top_k * _POOL_OVERFETCH,
+        basis=effective_basis or unit.basis_preference,
     )
 
     scoped = filter_candidates(

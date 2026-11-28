@@ -15,6 +15,7 @@ crosses this module's boundary is rebuilt into an explicitly-typed dict by
 hand, never returned raw, so mypy --strict's warn_return_any has nothing to
 catch here; no blanket ignore is needed."""
 
+import re
 from collections.abc import Mapping
 from typing import cast
 
@@ -27,7 +28,22 @@ log = structlog.get_logger(__name__)
 
 # Explicit, because Milvus REFUSES to output a SPARSE_FLOAT_VECTOR field --
 # `output_fields=["*"]` fails the moment `sparse` exists on the schema.
-_OUTPUT_FIELDS = ["text", "doc_id", "chunk_id", "section_type", "heading", "page"]
+_OUTPUT_FIELDS = [
+    "text", "doc_id", "chunk_id", "section_type", "heading", "page", "basis", "kind",
+]
+
+# Schema v3 (S4, ADR-0005): `basis` and `kind` are filterable scalars, so a
+# basis- or kind-scoped search is filtered INSIDE Milvus instead of
+# over-fetching and filtering in memory. A collection created before v3 lacks
+# them, and Milvus cannot add a field to a live collection -- hence a new
+# collection name (`fdi_chunks_v3`) and a reindex, never an alter.
+_DOC_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+_REQUIRED_FIELDS = frozenset({"basis", "kind"})
+
+
+class CollectionSchemaError(RuntimeError):
+    """The configured collection predates the schema this code writes."""
 
 # The largest real chunk measured on the STTL FY2023-24 corpus is 10,253
 # chars (section chunks have no size cap; only whole-table chunks are capped,
@@ -43,6 +59,7 @@ class MilvusVectorStore:
         self._client = MilvusClient(uri=uri)
         self._collection = collection
         self._dim = dim
+        self._schema_checked = False
 
     def _ensure_collection(self) -> None:
         """Schema v2: dense vector AND a BM25 sparse vector derived from `text`.
@@ -52,6 +69,7 @@ class MilvusVectorStore:
         moved off the simple create_collection(dimension=...) form, and why
         the collection name is versioned in config rather than mutated."""
         if self._client.has_collection(self._collection):
+            self._check_schema()
             return
 
         schema = self._client.create_schema(auto_id=False)
@@ -71,6 +89,8 @@ class MilvusVectorStore:
         schema.add_field("section_type", DataType.VARCHAR, max_length=64, nullable=True)
         schema.add_field("heading", DataType.VARCHAR, max_length=1024, nullable=True)
         schema.add_field("page", DataType.INT64, nullable=True)
+        schema.add_field("basis", DataType.VARCHAR, max_length=32)
+        schema.add_field("kind", DataType.VARCHAR, max_length=16)
         schema.add_function(Function(
             name="text_bm25",
             input_field_names=["text"],
@@ -88,6 +108,27 @@ class MilvusVectorStore:
         self._client.create_collection(
             collection_name=self._collection, schema=schema, index_params=index_params
         )
+
+    def _check_schema(self) -> None:
+        """Refuse, loudly, to write v3 rows into a pre-v3 collection: Milvus
+        would reject the unknown `basis`/`kind` fields row by row, and the
+        message would not say that the fix is a new collection name plus a
+        reindex. Checked once per process."""
+        if self._schema_checked:
+            return
+        described = self._client.describe_collection(self._collection)
+        fields = described.get("fields", []) if isinstance(described, Mapping) else []
+        names = {
+            str(f.get("name")) for f in fields if isinstance(f, Mapping)
+        }
+        missing = _REQUIRED_FIELDS - names
+        if missing:
+            raise CollectionSchemaError(
+                f"Milvus collection {self._collection!r} predates vector schema v3 "
+                f"(missing {sorted(missing)}): set FDI_MILVUS_COLLECTION to a new "
+                "name (default fdi_chunks_v3) and run `fdi-retrieval reindex`"
+            )
+        self._schema_checked = True
 
     def upsert(self, items: list[Mapping[str, object]]) -> dict[str, object]:
         if not items:
@@ -134,6 +175,7 @@ class MilvusVectorStore:
             # represents as an empty `_items` dict, not an error. Design
             # spec sec 2.8: fake and real must agree here explicitly.
             return []
+        self._check_schema()
         return self._hits(self._client.search(
             collection_name=self._collection,
             data=[vector],
@@ -151,6 +193,7 @@ class MilvusVectorStore:
         server-side. No client-side embedding, no tokenization here."""
         if not self._client.has_collection(self._collection):
             return []
+        self._check_schema()
         return self._hits(self._client.search(
             collection_name=self._collection,
             data=[query],
@@ -179,6 +222,10 @@ class MilvusVectorStore:
         return int(stats["row_count"])
 
     def delete_document(self, doc_id: str) -> None:
+        # The id is interpolated into a filter expression: refuse anything
+        # that is not a plain document id rather than quote-escape it.
+        if not _DOC_ID_RE.fullmatch(doc_id):
+            raise ValueError(f"not a document id: {doc_id!r}")
         if not self._client.has_collection(self._collection):
             return
         self._client.delete(collection_name=self._collection, filter=f'doc_id == "{doc_id}"')

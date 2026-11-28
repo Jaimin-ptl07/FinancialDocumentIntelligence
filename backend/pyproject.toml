@@ -58,6 +58,8 @@ fdi-mirror = "fdi.workers.mirror_cli:main"
 fdi-companies = "fdi.workers.companies_cli:main"
 # Imports the FDI standard Extraction schema as its next version (S3, ADR-0004).
 fdi-schemas = "fdi.workers.schemas_cli:main"
+# Rebuilds the vector index into schema v3 for the Retrieval service (S4, ADR-0005).
+fdi-retrieval = "fdi.workers.retrieval_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fdi"]

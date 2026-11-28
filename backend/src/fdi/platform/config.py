@@ -191,7 +191,9 @@ class Settings(BaseSettings):
     # BM25 Function cannot be added to an existing collection, so the cutover
     # is a NEW collection rather than an alter -- `fdi_sections` is left
     # in place, which makes rollback a one-line revert of this default.
-    milvus_collection: str = "fdi_chunks_v2"
+    # Schema v3 (S4, ADR-0005) adds filterable `basis`/`kind` scalars -- again
+    # a NEW collection, populated by `fdi-retrieval reindex` (index stage v4).
+    milvus_collection: str = "fdi_chunks_v3"
 
     # Cross-document entity resolution (SP-16). Cosine-similarity threshold for
     # single-linkage clustering of whole-document embedding vectors: two documents

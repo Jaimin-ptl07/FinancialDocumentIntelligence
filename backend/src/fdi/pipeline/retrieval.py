@@ -15,17 +15,24 @@ keyword_search (plainto_tsquery + ts_rank), which ANDed every lexeme and
 therefore returned zero hits for any real, sentence-shaped query.
 
 RT-2's vector_search (below) is the other consumer: embed the query, search the
-injected VectorStore, filter by section_type (Milvus metadata, in-memory) and/or
-doc_key/version (one batched Postgres join via DocumentRepository.get_many), then
-delegate the filter/join/truncate assembly to fdi.core.retrieval.build_vector_results
-(pure, independently unit-tested)."""
+injected VectorStore with every filter applied inside the store, join the
+doc_key/version citation (one batched Postgres read), and delegate the
+join/truncate assembly to fdi.core.retrieval.build_vector_results.
 
-from collections.abc import Mapping, Sequence
+S4: these channels are the Retrieval service's hybrid path
+(fdi.pipeline.retrieval_service). Filters now include explicit `doc_ids`,
+`bases` and `kinds`, and ALL of them -- section type included -- are applied
+by the store, built by fdi.core.evidence.scope_filter_expression from resolved
+ids and closed vocabularies only."""
+
+from collections.abc import Mapping
 from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fdi.core.evidence import DOC_ID_RE, Basis, EvidenceKind, scope_filter_expression
 from fdi.core.retrieval import build_vector_results, fuse
+from fdi.core.semantic import SectionType
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.vectorstore import VectorStore
 from fdi.platform.db.repository import DocumentRepository, RegistryRepository
@@ -74,19 +81,59 @@ async def resolve_chunks(
     return out
 
 
-_OVERFETCH_FACTOR = 5
+def _strs(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list | tuple):
+        return tuple(v for v in value if isinstance(v, str))
+    return ()
 
 
-def _milvus_filter(doc_ids: Sequence[str]) -> str:
-    """Milvus filter expression scoping a search to specific documents.
+_SECTION_TYPES = frozenset(t.value for t in SectionType)
+_BASES = frozenset(b.value for b in Basis)
+_KINDS = frozenset(k.value for k in EvidenceKind)
 
-    The collection stores `doc_id`, not `doc_key`/`version` -- a Stage has
-    neither -- so a doc_key/version filter is resolved to doc_ids by the
-    caller first. Empty string means unscoped."""
-    if not doc_ids:
-        return ""
-    ids = ", ".join(f'"{d}"' for d in doc_ids)
-    return f"doc_id in [{ids}]"
+
+async def _scope_filter(
+    session: AsyncSession, filters: Mapping[str, object] | None
+) -> str | None:
+    """The vector-store filter expression for `filters`, or None when the
+    filters can match NOTHING (an unknown doc_key, an out-of-vocabulary
+    section type) -- which the channels answer with [] rather than widening
+    to an unscoped search.
+
+    Every filter is applied INSIDE the store (S4): `doc_key`/`version` and
+    explicit `doc_ids` resolve to document ids in Postgres; `section_type`,
+    `bases` and `kinds` must be closed-vocabulary values. Nothing is
+    over-fetched and filtered in memory any more, so a filtered search
+    returns k results whenever the store holds k matching rows."""
+    f = filters or {}
+    doc_key = f.get("doc_key")
+    version = f.get("version")
+    doc_ids: list[str] = []
+    if doc_key is not None or version is not None:
+        doc_ids = await DocumentRepository(session).ids_for(
+            doc_key=cast(str | None, doc_key), version=cast(int | None, version)
+        )
+        if not doc_ids:
+            return None
+    explicit = f.get("doc_ids")
+    if explicit is not None:
+        wanted = [d for d in _strs(explicit) if DOC_ID_RE.match(d)]
+        doc_ids = [d for d in doc_ids if d in wanted] if doc_ids else wanted
+        if not doc_ids:
+            return None
+
+    section_types = _strs(f.get("section_type")) + _strs(f.get("section_types"))
+    bases = _strs(f.get("bases"))
+    kinds = _strs(f.get("kinds"))
+    if any(t not in _SECTION_TYPES for t in section_types):
+        return None
+    if any(b not in _BASES for b in bases) or any(k not in _KINDS for k in kinds):
+        return None
+    return scope_filter_expression(
+        doc_ids=doc_ids, bases=bases, kinds=kinds, section_types=section_types
+    )
 
 
 async def _docs_for(
@@ -99,16 +146,6 @@ async def _docs_for(
     }
 
 
-async def _doc_ids_for(
-    session: AsyncSession, *, doc_key: str | None, version: int | None
-) -> list[str]:
-    """doc_key/version -> the doc_ids to scope a Milvus filter to. Returns []
-    when no filter is requested (meaning unscoped, not 'match nothing')."""
-    if doc_key is None and version is None:
-        return []
-    return await DocumentRepository(session).ids_for(doc_key=doc_key, version=version)
-
-
 async def vector_search(
     *,
     session: AsyncSession,
@@ -118,36 +155,20 @@ async def vector_search(
     k: int,
     filters: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
-    """RT-2's semantic retrieval orchestrator: embed `query`, search
-    `vector_store`, filter/join/cite via build_vector_results. RT-9: the
-    Milvus hit carries its own text, so there is no separate resolve_chunks
-    call to attach it any more. Over-fetches k*_OVERFETCH_FACTOR from the
-    vector store when any filter is set (VectorStore.search has no filter
-    parameter -- design spec sec 2.3-4), single-shot: no adaptive re-query on
-    under-fill. Exactly one embed call, one vector_store.search call, one
-    DocumentRepository.get_many call -- no N+1."""
-    section_type = filters.get("section_type") if filters else None
-    doc_key = filters.get("doc_key") if filters else None
-    version = filters.get("version") if filters else None
-
-    doc_ids = await _doc_ids_for(
-        session, doc_key=cast(str | None, doc_key), version=cast(int | None, version)
-    )
-    if (doc_key is not None or version is not None) and not doc_ids:
+    """RT-2's semantic channel: embed `query`, search `vector_store` with
+    every filter applied in the store (`_scope_filter`), then join the
+    doc_key/version citation via build_vector_results. Exactly one embed
+    call, one vector_store.search call, one DocumentRepository.get_many call
+    -- no N+1."""
+    expression = await _scope_filter(session, filters)
+    if expression is None:
         return []
-
-    fetch_k = k * _OVERFETCH_FACTOR if section_type is not None else k
     [vector] = embedder.embed([query])
-    hits = vector_store.search(vector, fetch_k, filter=_milvus_filter(doc_ids))
+    hits = vector_store.search(vector, k, filter=expression)
     docs = await _docs_for(session, [str(h["id"]).split(":", 1)[0] for h in hits])
-
     return build_vector_results(
-        cast(list[Mapping[str, object]], hits),
-        docs,
-        section_type=cast(str | None, section_type),
-        doc_key=cast(str | None, doc_key),
-        version=cast(int | None, version),
-        k=k,
+        cast(list[Mapping[str, object]], hits), docs,
+        section_type=None, doc_key=None, version=None, k=k,
     )
 
 
@@ -162,29 +183,17 @@ async def bm25_search(
     """RT-9's keyword channel: Milvus-native BM25 over the analyzed `text`
     field. `query` is passed as RAW TEXT -- Milvus tokenizes and scores it
     server-side; there is no client-side tokenization and no embedding call.
-
-    Replaces RT-3's Postgres keyword_search, whose plainto_tsquery ANDed every
-    lexeme and therefore returned zero hits for every real (sentence-shaped)
-    query."""
+    Filters as `vector_search`."""
     if not query.strip():
         return []
-    section_type = filters.get("section_type") if filters else None
-    doc_key = filters.get("doc_key") if filters else None
-    version = filters.get("version") if filters else None
-
-    doc_ids = await _doc_ids_for(
-        session, doc_key=cast(str | None, doc_key), version=cast(int | None, version)
-    )
-    if (doc_key is not None or version is not None) and not doc_ids:
+    expression = await _scope_filter(session, filters)
+    if expression is None:
         return []
-
-    fetch_k = k * _OVERFETCH_FACTOR if section_type is not None else k
-    hits = vector_store.search_text(query.strip(), fetch_k, filter=_milvus_filter(doc_ids))
+    hits = vector_store.search_text(query.strip(), k, filter=expression)
     docs = await _docs_for(session, [str(h["id"]).split(":", 1)[0] for h in hits])
     return build_vector_results(
         cast(list[Mapping[str, object]], hits), docs,
-        section_type=cast(str | None, section_type),
-        doc_key=cast(str | None, doc_key), version=cast(int | None, version), k=k,
+        section_type=None, doc_key=None, version=None, k=k,
     )
 
 
@@ -211,10 +220,7 @@ async def hybrid_search(
     imports platform + core, no I/O left inline -- fusion itself lives in
     fdi.core.retrieval, pure and independently unit-tested."""
     fetch_k = k * _FUSE_OVERFETCH_FACTOR
-    section_type = filters.get("section_type") if filters else None
-    doc_key = filters.get("doc_key") if filters else None
-    version = filters.get("version") if filters else None
-    resolved_filters = {"section_type": section_type, "doc_key": doc_key, "version": version}
+    resolved_filters = dict(filters or {})
 
     keyword_hits = await bm25_search(
         session=session,

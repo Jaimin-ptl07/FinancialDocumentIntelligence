@@ -160,6 +160,9 @@ async def test_index_upserts_enriched_metadata(session_factory, store) -> None:
         "chunk_id": "s0",
         "section_type": "BALANCE_SHEET",
         "page": 1,
+        # S4 vector schema v3: page 1 lies in no basis region of this fixture.
+        "basis": "unknown",
+        "kind": "passage",
     }
 
 
@@ -185,6 +188,8 @@ async def test_index_upserts_chunk_missing_from_chunks_artifact() -> None:
         if stage_name == "chunks":
             # deliberately has NO record for chunk_id "orphan"
             return {"schema_version": 1, "chunks": []}
+        if stage_name == "basis":
+            return {"schema_version": 1, "regions": [], "default_basis": "unknown"}
         raise AssertionError(f"unexpected read_artifact stage: {stage_name!r}")
 
     ctx = StageContext(
@@ -203,11 +208,12 @@ async def test_index_upserts_chunk_missing_from_chunks_artifact() -> None:
     assert hits[0]["metadata"]["page"] is None
 
 
-def test_index_stage_version_is_3() -> None:
+def test_index_stage_version_is_4() -> None:
     """v3 rows carry `text` and `doc_id`; v2 rows carry neither. The bump is
     what re-runs `index` -- and only `index` -- for already-ingested
     documents, since the DAG is content-addressed on {stage}/v{version}."""
-    assert IndexStage().version == 3
+    assert IndexStage().version == 4
+    assert IndexStage.deps == ("embedding", "chunks", "basis")
 
 
 async def test_index_is_successor_of_embedding_and_chunks() -> None:

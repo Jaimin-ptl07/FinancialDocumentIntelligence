@@ -18,6 +18,7 @@ _ARTIFACTS = {
     "graph": {"nodes": [{"id": "s0", "type": "section"}], "edges": []},
     "embedding": {"chunks": [{"chunk_id": "c0", "vector": [0.1, 0.2]}]},
     "chunks": {"chunks": [{"chunk_id": "c0", "section_type": "pl", "page": 1}]},
+    "basis": {"regions": [], "default_basis": "unknown"},
 }
 
 

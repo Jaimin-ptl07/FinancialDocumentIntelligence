@@ -127,7 +127,7 @@ from fdi.pipeline.jobs import (
     JobKind,
     indexed_document,
 )
-from fdi.pipeline.retrieval import bm25_search, hybrid_search, vector_search
+from fdi.pipeline.retrieval_service import RetrievalService, legacy_search
 from fdi.pipeline.schema_store import load_schema, save_schema
 from fdi.pipeline.tables import concept_lookup, get_tables
 from fdi.platform.broker.health import check_broker
@@ -847,6 +847,7 @@ async def search(
 async def retrieve_vector(
     body: VectorSearchRequest,
     session: SessionDep,
+    store: StoreDep,
     embedder: EmbedderDep,
     vector_store: VectorStoreDep,
 ) -> VectorSearchResultsView:
@@ -870,13 +871,14 @@ async def retrieve_vector(
         "doc_key": body.filters.doc_key if body.filters else None,
         "version": body.filters.version if body.filters else None,
     }
-    results = await vector_search(
-        session=session,
-        embedder=embedder,
-        vector_store=vector_store,
-        query=body.query,
-        k=body.k,
-        filters=filters,
+    service = RetrievalService(
+        session=session, store=store, embedder=embedder, vector_store=vector_store
+    )
+    results = await legacy_search(
+        service, session=session, query=body.query, k=body.k,
+        section_type=cast(str | None, filters["section_type"]),
+        doc_key=cast(str | None, filters["doc_key"]),
+        version=cast(int | None, filters["version"]), channels=("dense",),
     )
     return VectorSearchResultsView(
         results=[VectorSearchResultView.model_validate(r) for r in results]
@@ -988,7 +990,8 @@ async def concept_lookup_route(
 
 @router.post("/retrieve/keyword", response_model=KeywordSearchResultsView)
 async def keyword_search_route(
-    body: KeywordSearchRequest, session: SessionDep, vector_store: VectorStoreDep
+    body: KeywordSearchRequest, session: SessionDep, store: StoreDep,
+    vector_store: VectorStoreDep,
 ) -> KeywordSearchResultsView:
     if vector_store is None:
         raise HTTPException(
@@ -998,10 +1001,11 @@ async def keyword_search_route(
                 "(set FDI_MILVUS_URI -- BM25 is served by Milvus)"
             ),
         )
-    hits = await bm25_search(
-        session=session, vector_store=vector_store, query=body.query, k=body.k,
-        filters={"section_type": body.section_type, "doc_key": body.doc_key,
-                 "version": body.version},
+    service = RetrievalService(session=session, store=store, vector_store=vector_store)
+    hits = await legacy_search(
+        service, session=session, query=body.query, k=body.k,
+        section_type=body.section_type, doc_key=body.doc_key, version=body.version,
+        channels=("bm25",),
     )
     return KeywordSearchResultsView(results=[KeywordHitView(**h) for h in hits])
 
@@ -1010,6 +1014,7 @@ async def keyword_search_route(
 async def hybrid_search_route(
     body: HybridSearchRequest,
     session: SessionDep,
+    store: StoreDep,
     embedder: EmbedderDep,
     vector_store: VectorStoreDep,
 ) -> HybridSearchResultsView:
@@ -1033,13 +1038,14 @@ async def hybrid_search_route(
         "doc_key": body.filters.doc_key if body.filters else None,
         "version": body.filters.version if body.filters else None,
     }
-    results = await hybrid_search(
-        session=session,
-        embedder=embedder,
-        vector_store=vector_store,
-        query=body.query,
-        k=body.k,
-        filters=filters,
+    service = RetrievalService(
+        session=session, store=store, embedder=embedder, vector_store=vector_store
+    )
+    results = await legacy_search(
+        service, session=session, query=body.query, k=body.k,
+        section_type=cast(str | None, filters["section_type"]),
+        doc_key=cast(str | None, filters["doc_key"]),
+        version=cast(int | None, filters["version"]),
     )
     return HybridSearchResultsView(
         results=[HybridSearchResultView.model_validate(r) for r in results]

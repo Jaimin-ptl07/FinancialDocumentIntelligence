@@ -27,11 +27,21 @@ Pre-check finding: `MilvusVectorStore.upsert` (platform/vectorstore.py) spreads
 there is no fixed collection-schema column list to extend. `section_type`
 (str | None) and `page` (int | None) are scalar values of the same shape as the
 existing `heading` field, so they are accepted without any store change.
-`FakeVectorStore` already stores arbitrary metadata dicts."""
+`FakeVectorStore` already stores arbitrary metadata dicts.
+
+S4 v4: every row also carries `basis` (the basis region its page falls in,
+`unknown` outside every region) and `kind` (`passage` for an `s{i}` section,
+`table` for a `t{i}` card) as filterable scalars -- vector schema v3
+(ADR-0005). `basis` is read from the `basis` artifact, now a declared dep, so
+re-segmenting a Report re-indexes it. Company and Fiscal year are NOT written:
+they are correctable and resolve to doc ids in Postgres at query time. The
+bump to v4 is again the reindex mechanism; `embedding` stays cached."""
 
 from collections.abc import Mapping
 from typing import cast
 
+from fdi.core.basis import page_basis
+from fdi.core.evidence import chunk_kind
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.stage import StageContext
 from fdi.pipeline.vectorstore import VectorStore
@@ -39,12 +49,13 @@ from fdi.pipeline.vectorstore import VectorStore
 
 class IndexStage:
     name = "index"
-    version = 3
-    deps: tuple[str, ...] = ("embedding", "chunks")
+    version = 4
+    deps: tuple[str, ...] = ("embedding", "chunks", "basis")
 
     async def run(self, ctx: StageContext) -> object:
         embedding = cast(Mapping[str, object], await ctx.read("embedding"))
         chunks_art = cast(Mapping[str, object], await ctx.read("chunks"))
+        basis_art = cast(Mapping[str, object], await ctx.read("basis"))
 
         # Milvus is OPTIONAL (the `vector` Compose profile is opt-in and
         # FDI_MILVUS_URI defaults to None), so `vector_store` may be absent.
@@ -74,6 +85,7 @@ class IndexStage:
         items: list[Mapping[str, object]] = []
         for chunk in chunks:
             meta = meta_by_chunk.get(str(chunk["chunk_id"]))
+            page = meta.get("page") if meta is not None else None
             items.append({
                 "id": f"{ctx.doc_id}:{chunk['chunk_id']}",
                 "vector": chunk["vector"],
@@ -86,7 +98,11 @@ class IndexStage:
                     "chunk_id": chunk["chunk_id"],
                     "heading": chunk.get("heading"),
                     "section_type": meta.get("section_type") if meta is not None else None,
-                    "page": meta.get("page") if meta is not None else None,
+                    "page": page,
+                    "basis": page_basis(
+                        basis_art, page if isinstance(page, int) else None
+                    ),
+                    "kind": chunk_kind(chunk["chunk_id"]),
                 },
             })
 
