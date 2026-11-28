@@ -1020,6 +1020,46 @@ class DocumentRepository:
         await self._s.execute(sqlalchemy.delete(Document).where(Document.id == doc_id))
         await self._s.flush()
 
+    async def latest_versions(
+        self,
+        *,
+        doc_keys: Sequence[str] | None = None,
+        fiscal_years: Sequence[str] | None = None,
+    ) -> list[Document]:
+        """The highest version of each Report (`coalesce(doc_key, id)` group,
+        ranked as `list_latest_per_doc_key`), optionally narrowed to the given
+        doc_keys and/or to Reports whose LATEST version is filed under one of
+        the given Fiscal years. Both None -> every Report's latest version.
+
+        The Retrieval service's default scope (S4): a superseded upload never
+        doubles up with its replacement. Ordered newest Fiscal year first,
+        then newest upload, so callers inherit one stable order."""
+        group = func.coalesce(Document.doc_key, Document.id)
+        ranked_q = select(
+            Document.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=group,
+                order_by=(
+                    Document.version.desc().nullslast(),
+                    Document.created_at.desc(),
+                    Document.id,
+                ),
+            )
+            .label("rn"),
+        )
+        if doc_keys is not None:
+            ranked_q = ranked_q.where(Document.doc_key.in_(list(doc_keys)))
+        ranked = ranked_q.subquery()
+        latest_ids = select(ranked.c.id).where(ranked.c.rn == 1)
+        stmt = select(Document).where(Document.id.in_(latest_ids))
+        if fiscal_years is not None:
+            stmt = stmt.where(Document.fiscal_year.in_(list(fiscal_years)))
+        stmt = stmt.order_by(
+            Document.period_end.desc().nullslast(), Document.created_at.desc(), Document.id
+        )
+        return list((await self._s.execute(stmt)).scalars().all())
+
     async def ids_for(self, *, doc_key: str | None, version: int | None) -> list[str]:
         """Document ids matching a doc_key and/or version. Used to scope a
         Milvus filter, which keys on doc_id (a Stage has no doc_key to write).

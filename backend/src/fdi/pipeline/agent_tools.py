@@ -30,7 +30,7 @@ from fdi.pipeline.entities import compare_concept_across_versions as compare_con
 from fdi.pipeline.entities import entity_timeline as entity_timeline_
 from fdi.pipeline.graphquery import document_structure as document_structure_
 from fdi.pipeline.graphstore import GraphStore
-from fdi.pipeline.retrieval import hybrid_search
+from fdi.pipeline.retrieval_service import RetrievalService, legacy_search
 from fdi.pipeline.tables import concept_lookup as concept_lookup_
 from fdi.pipeline.tables import get_tables as get_tables_
 from fdi.pipeline.vectorstore import VectorStore
@@ -115,13 +115,16 @@ async def _search(args: BaseModel, ctx: AgentContext) -> dict[str, object]:
     a = cast(_SearchArgs, args)
     if ctx.embedder is None or ctx.vector_store is None:
         return {"error": "search is unavailable: vector store not configured"}
-    filters = {
-        "section_type": a.section_type.value if a.section_type is not None else None,
-        "doc_key": a.doc_key, "version": a.version,
-    }
-    results = await hybrid_search(
-        session=ctx.session, embedder=ctx.embedder,
-        vector_store=ctx.vector_store, query=a.query, k=a.k, filters=filters,
+    # S4: served by the Retrieval service's hybrid path. Each result keeps
+    # its pre-S4 citation shape and gains a stable `evidence_id`.
+    service = RetrievalService(
+        session=ctx.session, store=ctx.store,
+        embedder=ctx.embedder, vector_store=ctx.vector_store,
+    )
+    results = await legacy_search(
+        service, session=ctx.session, query=a.query, k=a.k,
+        section_type=a.section_type.value if a.section_type is not None else None,
+        doc_key=a.doc_key, version=a.version,
     )
     return {"results": results}
 

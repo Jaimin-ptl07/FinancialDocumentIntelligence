@@ -48,6 +48,42 @@ _ITEM = BenchmarkItem(
 )
 
 
+async def test_an_access_token_that_expires_mid_run_is_renewed_by_signing_in_again() -> None:
+    """Access tokens live 15 minutes; the 96-item baseline took longer, and
+    every /ask after the expiry came back 401 (S1.8)."""
+    issued: list[str] = []
+    expired: set[str] = set()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/auth/login":
+            issued.append(f"t{len(issued)}")
+            return httpx.Response(200, json={"access_token": issued[-1]})
+        token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+        if token not in issued or token in expired:
+            return httpx.Response(401, json={"detail": "The access token is expired."})
+        if path == "/ask":
+            return httpx.Response(202, json={"job_id": "j1"})
+        if path == "/jobs/j1":
+            return httpx.Response(200, json={"status": "succeeded"})
+        if path == "/jobs/j1/result":
+            # The token lapses while the item is being answered.
+            expired.add(token)
+            return httpx.Response(200, json={"answer": "₹2,71,423 crore", "citations": []})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle),
+                                 base_url="http://t") as http:
+        adapter = AskJobAdapter(http, poll_interval=0.0)
+        await adapter.login("eval@example.test", "pw")
+        first = await adapter.answer(_ITEM)
+        second = await adapter.answer(_ITEM)
+
+    assert first.error is None
+    assert second.error is None
+    assert issued == ["t0", "t1"]
+
+
 def test_the_committed_fact_lookup_items_are_exactly_what_ground_truth_generates() -> None:
     """A hand edit to the benchmark, or ground truth that moved without a
     regenerate, shows up here. Fix: `eval_answers.py generate`."""
@@ -490,6 +526,59 @@ def test_with_no_recent_usage_the_run_says_it_cannot_estimate_and_still_runs_its
     out = capsys.readouterr().out
     assert "no recent /ask usage to estimate from" in out
     assert "[1/1]" in out
+
+
+def test_resume_reuses_answered_items_and_asks_only_the_ones_that_never_answered(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    """A run cut short (S1.8: 41 items got 401s) is finished without paying
+    again for the items it already answered: their answers are re-read from
+    their jobs, and only the rest are asked."""
+    earlier = tmp_path / "earlier.json"
+    earlier.write_text(json.dumps({"items": [
+        {"item_id": "fact_lookup:acme:q0", "status": "correct", "job_id": "old-0",
+         "latency_s": 12.5},
+        {"item_id": "fact_lookup:acme:q1", "status": "failed", "job_id": None,
+         "latency_s": 0.1, "reason": "POST /ask returned 401"},
+    ]}), encoding="utf-8")
+    asked: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/auth/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        if path == "/jobs":
+            return httpx.Response(200, json={"jobs": [{"job_id": "old-0", "status": "succeeded"}]})
+        if path == "/ask":
+            asked.append(json.loads(request.content)["question"])
+            return httpx.Response(202, json={"job_id": "new-1"})
+        if path.endswith("/usage"):
+            return httpx.Response(200, json={"input_tokens": 1_000, "output_tokens": 50,
+                                             "total_cost_inr": 0.3})
+        if path.endswith("/result"):
+            return httpx.Response(200, json={
+                "answer": "Total assets: ₹100 crore.", "tool_trace": [],
+                "citations": [{"doc_key": "acme-2025-26", "page": 7}]})
+        if path.startswith("/jobs/"):
+            return httpx.Response(200, json={"status": "succeeded"})
+        raise AssertionError(f"unexpected {request.method} {path}")
+
+    out_dir = tmp_path / "out"
+    main(["run", "--endpoint", "http://fdi.test", "--out-dir", str(out_dir), "--yes",
+          "--email", "e", "--password", "p", "--resume", str(earlier),
+          "--benchmark", str(_two_item_benchmark(tmp_path / "bench"))],
+         transport=httpx.MockTransport(handle))
+
+    assert asked == ["What were ACME's total assets? (q1)"]
+    printed = capsys.readouterr().out
+    assert "expected spend: INR 0.30 = 1 item(s)" in printed
+    body = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    by_id = {i["item_id"]: i for i in body["items"]}
+    assert by_id["fact_lookup:acme:q0"]["job_id"] == "old-0"
+    assert by_id["fact_lookup:acme:q0"]["latency_s"] == 12.5
+    assert by_id["fact_lookup:acme:q0"]["status"] == "correct"
+    assert by_id["fact_lookup:acme:q1"]["job_id"] == "new-1"
+    assert body["stamp"]["resumed"] == {"from": str(earlier), "items": 1}
 
 
 def test_with_no_recent_usage_yes_alone_is_refused_before_any_billed_call(

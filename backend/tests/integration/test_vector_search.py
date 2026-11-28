@@ -43,11 +43,13 @@ class _SpyVectorStore(FakeVectorStore):
     def __init__(self) -> None:
         super().__init__()
         self.search_k_calls: list[int] = []
+        self.filters: list[str] = []
 
     def search(
         self, vector: list[float], k: int, *, filter: str = ""
     ) -> list[dict[str, object]]:
         self.search_k_calls.append(k)
+        self.filters.append(filter)
         return super().search(vector, k, filter=filter)
 
 
@@ -209,9 +211,12 @@ async def test_vector_search_filter_matching_nothing_returns_empty(
     assert out == []
 
 
-async def test_vector_search_overfetches_only_when_filtered(session_factory, store) -> None:
-    """Pins the k*5 over-fetch factor directly against a spy, independent of
-    two_docs' fixture corpus size."""
+async def test_vector_search_filters_in_the_store_without_overfetch(
+    session_factory, store
+) -> None:
+    """S4: a section filter is applied BY the store, so a filtered search
+    asks for exactly k -- the old k*5 over-fetch-then-drop is gone -- and the
+    filter reaches the store as an expression."""
     embedder = FakeEmbeddingClient(dim=8)
     spy = _SpyVectorStore()
     async with session_factory() as s:
@@ -223,4 +228,5 @@ async def test_vector_search_overfetches_only_when_filtered(session_factory, sto
             session=s, embedder=embedder, vector_store=spy,
             query="q", k=3, filters={"section_type": "NOTES"},
         )
-    assert spy.search_k_calls == [3, 15]
+    assert spy.search_k_calls == [3, 3]
+    assert spy.filters == ["", 'section_type in ["NOTES"]']

@@ -53,7 +53,7 @@ EXPECTED: dict[str, tuple[int, str]] = {
     # is unchanged; a new basis artifact reaches them through their declared
     # `basis` dep's output hash, so their digests moved and no version did.
     "fog_objects": (6, "cdc94712b0c14a91"),
-    "fog_reason": (4, "540aa4ac8389d1a7"),
+    "fog_reason": (4, "12428a76599197de"),  # S4: fact_claims added; reason() body unchanged
     "note_index": (3, "faea6e37dac9a9e5"),
     "statement_index": (4, "8bd6748d30d14384"),
 }

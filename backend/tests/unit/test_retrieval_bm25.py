@@ -38,14 +38,14 @@ def _patch_docs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(r, "_docs_for", _fake_docs)
 
 
-async def test_bm25_search_returns_the_nine_key_hit_shape() -> None:
+async def test_bm25_search_returns_the_citation_hit_shape() -> None:
     hits = await r.bm25_search(
         session=None, vector_store=_store(), query="revenue from operations", k=5
     )
     assert hits
     assert set(hits[0]) == {
         "doc_id", "doc_key", "version", "chunk_id", "heading",
-        "page", "section_type", "text", "score",
+        "page", "section_type", "text", "score", "basis", "kind",
     }
 
 
@@ -68,17 +68,20 @@ async def test_bm25_search_doc_key_filter_matching_nothing_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A doc_key/version filter that resolves to zero doc_ids must return []
-    -- NOT fall through to an unscoped whole-corpus search. `_milvus_filter([])`
-    returns "" (unscoped), so if this guard were ever deleted, the seeded
-    "revenue" chunk below would come back and this test would catch it."""
+    -- NOT fall through to an unscoped whole-corpus search. An empty id list
+    builds no doc_id clause (unscoped), so if this guard were ever deleted,
+    the seeded "revenue" chunk below would come back and this test would
+    catch it."""
 
-    async def _fake_doc_ids_for(
-        session: object, *, doc_key: str | None, version: int | None
-    ) -> list[str]:
-        assert doc_key == "no-such-key"
-        return []
+    class _Docs:
+        def __init__(self, session: object) -> None:
+            pass
 
-    monkeypatch.setattr(r, "_doc_ids_for", _fake_doc_ids_for)
+        async def ids_for(self, *, doc_key: str | None, version: int | None) -> list[str]:
+            assert doc_key == "no-such-key"
+            return []
+
+    monkeypatch.setattr(r, "DocumentRepository", _Docs)
 
     hits = await r.bm25_search(
         session=None, vector_store=_store(), query="revenue from operations", k=5,

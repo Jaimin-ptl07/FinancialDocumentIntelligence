@@ -17,6 +17,7 @@ def test_build_vector_results_reads_text_off_the_hit() -> None:
         "doc_id": "d1", "doc_key": "acme", "version": 2, "chunk_id": "s0",
         "heading": "Balance Sheet", "page": 91, "section_type": "BALANCE_SHEET",
         "text": "Total assets 16,427.37", "score": 0.9,
+        "basis": None, "kind": None,  # indexed before vector schema v3
     }
 
 

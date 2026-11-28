@@ -134,8 +134,11 @@ async def test_index_stage_chains_off_embedding_and_chunks_and_caches(
     key = artifact_key(
         doc.id,
         "index",
-        3,
-        derived_input_hash([facts["embedding"].output_hash, facts["chunks"].output_hash]),
+        4,
+        derived_input_hash([
+            facts["embedding"].output_hash, facts["chunks"].output_hash,
+            facts["basis"].output_hash,
+        ]),
     )
     body = await store.get_json(key)
     assert body == {"schema_version": 1, "upserted": 1}
@@ -148,6 +151,8 @@ async def test_index_stage_chains_off_embedding_and_chunks_and_caches(
         "doc_id": doc.id,
         "heading": "Balance Sheet",
         "chunk_id": "s0",
+        "basis": "unknown",
+        "kind": "passage",
         "section_type": "BALANCE_SHEET",
         "page": 1,
     }

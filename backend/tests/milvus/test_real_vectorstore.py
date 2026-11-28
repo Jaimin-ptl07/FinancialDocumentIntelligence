@@ -76,3 +76,42 @@ def test_real_upsert_and_search_finds_the_match() -> None:
 
     hits = store.search(match_vector, k=1)
     assert hits[0]["id"] == f"{doc_id}:s0"
+
+
+def test_real_milvus_filters_by_basis_and_kind() -> None:
+    """S4 (vector schema v3): a basis/kind-scoped search is filtered BY
+    MILVUS -- the rows that do not match never leave the server. Runs in a
+    throwaway collection, dropped afterwards."""
+    settings = get_settings()
+    collection = f"fdi_s4_filter_{uuid.uuid4().hex[:12]}"
+    try:
+        store = MilvusVectorStore(
+            uri=settings.milvus_uri or "", collection=collection, dim=settings.embed_dim
+        )
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover - environment-dependent
+        pytest.skip(f"Milvus not reachable at the configured URI: {exc}")
+    from fdi.core.evidence import scope_filter_expression
+
+    dim = settings.embed_dim
+    vector = [1.0] + [0.0] * (dim - 1)
+    rows = [
+        ("s0", "consolidated", "passage"), ("t0", "consolidated", "table"),
+        ("s1", "standalone", "passage"), ("s2", "unknown", "passage"),
+    ]
+    store.upsert([
+        {"id": f"doc1:{chunk}", "vector": vector, "metadata": {
+            "text": f"revenue from operations {chunk}", "doc_id": "doc1", "chunk_id": chunk,
+            "heading": None, "section_type": None, "page": 1, "basis": basis, "kind": kind,
+        }}
+        for chunk, basis, kind in rows
+    ])
+    try:
+        consolidated = store.search(vector, 10, filter=scope_filter_expression(
+            doc_ids=["doc1"], bases=["consolidated"]))
+        assert {h["id"] for h in consolidated} == {"doc1:s0", "doc1:t0"}
+        tables = store.search_text("revenue", 10, filter=scope_filter_expression(
+            kinds=["table"]))
+        assert {h["id"] for h in tables} == {"doc1:t0"}
+        assert {h["metadata"]["basis"] for h in tables} == {"consolidated"}  # type: ignore[index]
+    finally:
+        store._client.drop_collection(collection)

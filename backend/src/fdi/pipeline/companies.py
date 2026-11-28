@@ -641,6 +641,12 @@ class CompanyRegistry:
             await self._report_view(d) for d in await self._companies.latest_documents(company_id)
         ]
 
+    async def report_documents(self, company_id: str) -> list[Document]:
+        """The Document versions behind `company_reports` -- same rule, same
+        order -- without building views: what the Retrieval service (S4)
+        resolves a Company scope to. Reads no artifacts."""
+        return await self._companies.latest_documents(company_id)
+
     async def _report_view(self, doc: Document) -> ReportView:
         registry = RegistryRepository(self._s)
         basis = await read_artifact(registry, self._store, doc.id, BasisStage.name)

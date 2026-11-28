@@ -1,0 +1,925 @@
+{
+  "stamp": {
+    "benchmark_version": "v0",
+    "git_commit": "594fa8483b8c5d264c3bf38073cc6cdfbd559ad2",
+    "endpoint": "http://localhost:9514",
+    "mode": "retrieval",
+    "started_at": "2026-11-26T14:56:05+00:00"
+  },
+  "benchmark_size": 96,
+  "skipped": 10,
+  "overall": {
+    "run": 86,
+    "failed": 0,
+    "recalled_at_5": 16,
+    "recalled_at_10": 36,
+    "reciprocal_rank_sum": 12.316269841269841,
+    "recall_at_5": 0.18604651162790697,
+    "recall_at_10": 0.4186046511627907,
+    "mrr": 0.1432124400147656
+  },
+  "by_kind": {
+    "calculation": {
+      "run": 10,
+      "failed": 0,
+      "recalled_at_5": 2,
+      "recalled_at_10": 4,
+      "reciprocal_rank_sum": 0.7361111111111112,
+      "recall_at_5": 0.2,
+      "recall_at_10": 0.4,
+      "mrr": 0.07361111111111111
+    },
+    "cross_company": {
+      "run": 6,
+      "failed": 0,
+      "recalled_at_5": 0,
+      "recalled_at_10": 0,
+      "reciprocal_rank_sum": 0.0,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0
+    },
+    "fact_lookup": {
+      "run": 59,
+      "failed": 0,
+      "recalled_at_5": 8,
+      "recalled_at_10": 24,
+      "reciprocal_rank_sum": 6.770634920634921,
+      "recall_at_5": 0.13559322033898305,
+      "recall_at_10": 0.4067796610169492,
+      "mrr": 0.11475652407855798
+    },
+    "research": {
+      "run": 11,
+      "failed": 0,
+      "recalled_at_5": 6,
+      "recalled_at_10": 8,
+      "reciprocal_rank_sum": 4.809523809523809,
+      "recall_at_5": 0.5454545454545454,
+      "recall_at_10": 0.7272727272727273,
+      "mrr": 0.4372294372294372
+    }
+  },
+  "items": [
+    {
+      "item_id": "calculation:TCS-FY2025-26-consolidated:net_profit_margin",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": 8,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.125
+    },
+    {
+      "item_id": "calculation:TCS-FY2025-26-consolidated:effective_tax_rate",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "calculation:TCS-FY2025-26-standalone:net_profit_margin",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "calculation:TCS-FY2025-26-consolidated:total_assets",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": 4,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.25
+    },
+    {
+      "item_id": "calculation:TCS-FY2025-26-consolidated:total_liabilities",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "calculation:TCS-FY2025-26-consolidated:current_ratio",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "calculation:TCS-FY2025-26-consolidated:total_lease_liabilities",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "calculation:RIL-FY2025-26-consolidated:revenue_net_of_gst",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": 4,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.25
+    },
+    {
+      "item_id": "calculation:REMC-FY2024-25:net_profit_margin",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "calculation:REMC-FY2024-25:effective_tax_rate",
+      "kind": "calculation",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "cross_company:TCS-RIL-FY2025-26-consolidated:total_income",
+      "kind": "cross_company",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "cross_company:TCS-RIL-FY2025-26-consolidated:total_expenses",
+      "kind": "cross_company",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "cross_company:TCS-RIL-FY2025-26-consolidated:other_comprehensive_income",
+      "kind": "cross_company",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "cross_company:TCS-RIL-FY2025-26-consolidated:total_comprehensive_income",
+      "kind": "cross_company",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "cross_company:TCS-RIL-FY2025-26-consolidated:basic_eps",
+      "kind": "cross_company",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "cross_company:TCS-FY2025-26-REMC-FY2024-25:basic_eps",
+      "kind": "cross_company",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:CT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:DT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:EPSB",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 1,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:EPSD",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 1,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:PATR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 2,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:PBMI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 1,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:PBTR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 2,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:TOTEXPR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 5,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.2
+    },
+    {
+      "item_id": "fact_lookup:REMC-FY2024-25-unknown-profit_and_loss:TOTRNOTINR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:CT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:DT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:EPSB",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:EPSD",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:GST",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 7,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.14285714285714285
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:OTCI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 6,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.16666666666666666
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:PBMI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 8,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.125
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:RFSP",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:RFSS",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:SOP",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:TOTEXPR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:RIL-FY2025-26-consolidated-profit_and_loss:TOTRNOTINR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:INVT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:NETDTA",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:NETGW",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:NETOTIA",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 5,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.2
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:RGHTUA",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 3,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.3333333333333333
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:TOTCAR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-assets:TOTNCR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 6,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.16666666666666666
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-equity:TOTEQ",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-equity:TOTEQNR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-equity:TOTOTEQ",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-liabilities:LTOLR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-liabilities:NETDTL",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-liabilities:STLL",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-liabilities:STTRP",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-liabilities:TOTCLR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 10,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-liabilities:TOTNCLR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:CT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:DT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:EPSB",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:EPSD",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:OTCI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:PATR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:PB3NTAX",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 6,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.16666666666666666
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:PBMI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 6,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.16666666666666666
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:PBTR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:TOTEXPR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-consolidated-profit_and_loss:TOTRNOTINR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:CT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:DT",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:EPSB",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:EPSD",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:OTCI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:PATR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:PB3NTAX",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 8,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.125
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:PBMI",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 10,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:PBTR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": 9,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.1111111111111111
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:TOTEXPR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "fact_lookup:TCS-FY2025-26-standalone-profit_and_loss:TOTRNOTINR",
+      "kind": "fact_lookup",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "research:TCS-FY2025-26-consolidated:other_income_note",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "research:TCS-FY2025-26-consolidated:tax_rate_reconciliation",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 2,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "item_id": "research:TCS-FY2025-26-consolidated:restructuring_exceptional_item",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 7,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.14285714285714285
+    },
+    {
+      "item_id": "research:TCS-FY2025-26-consolidated:final_dividend_proposed",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 2,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "item_id": "research:TCS-FY2025-26-consolidated:talent_retention_and_learning",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 2,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "item_id": "research:RIL-FY2025-26-consolidated:other_income_note",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 6,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": true,
+      "reciprocal_rank": 0.16666666666666666
+    },
+    {
+      "item_id": "research:RIL-FY2025-26-consolidated:tax_rate_reconciliation",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 1,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "item_id": "research:RIL-FY2025-26-consolidated:segment_ebitda_decline",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 1,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "item_id": "research:REMC-FY2024-25-unknown:other_income_note",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "research:REMC-FY2024-25-unknown:revenue_from_operations_note",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": null,
+      "error": null,
+      "recalled_at_5": false,
+      "recalled_at_10": false,
+      "reciprocal_rank": 0.0
+    },
+    {
+      "item_id": "research:REMC-FY2024-25-unknown:income_decline_reasons",
+      "kind": "research",
+      "hits": 10,
+      "first_gold_rank": 1,
+      "error": null,
+      "recalled_at_5": true,
+      "recalled_at_10": true,
+      "reciprocal_rank": 1.0
+    }
+  ]
+}

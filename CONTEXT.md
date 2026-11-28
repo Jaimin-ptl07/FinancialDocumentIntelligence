@@ -128,6 +128,10 @@ _Avoid_: "report" on its own, "export"
 A located piece of one Report version — a passage, a table, a table cell, a page, or a financial fact — that an answer can point at. Its identity comes from where it is in the Report, never from how it was found or how well it ranked, so the same passage found two ways is the same Evidence.
 _Avoid_: "chunk" (a chunk is how text is indexed, one possible kind of Evidence), "source", "context"
 
+**Evidence package**:
+What one retrieval request returns: the Evidence found, each Report in scope marked matched, no match or not processed, and which retrieval paths answered, degraded or were skipped. Not processed (the Report has not reached the stage a path reads) is never the same as no match (it has, and nothing matched).
+_Avoid_: "search results", "hits"
+
 **Workspace**:
 An Invitee's working set of Companies — a view for focusing research, never an access boundary. Two Workspaces holding the same Company see the same reports and facts.
 _Avoid_: "tenant", "organization", "account"

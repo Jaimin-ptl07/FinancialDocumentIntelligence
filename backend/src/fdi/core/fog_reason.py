@@ -55,6 +55,32 @@ def facts_from_mapping(
 
 
 @dataclass(frozen=True)
+class FactClaim:
+    """The winning line item behind one reasoned fact: what the Retrieval
+    service's structured path returns as `fact` Evidence (S4), linked to the
+    line item it came from."""
+
+    tag: str
+    value: float
+    line_item: str
+    label: str
+    origin: str
+    method: str
+
+
+def fact_claims(
+    fog: Mapping[str, object], mapping: Mapping[str, object], *, basis: str
+) -> dict[str, FactClaim]:
+    """tag -> the arbitrated claim behind it, for one basis -- the same
+    winners `facts_from_mapping` takes its values from, with the line item
+    kept. Total: never raises."""
+    return {
+        tag: FactClaim(c.tag, c.value, c.line_item, c.label, c.origin, c.method)
+        for tag, c in _arbitrate(fog, mapping, basis).items()
+    }
+
+
+@dataclass(frozen=True)
 class _Claim:
     """One line item's bid for a tag, and how strong the bid is."""
 
