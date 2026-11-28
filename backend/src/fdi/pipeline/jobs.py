@@ -1,4 +1,4 @@
-"""API jobs (T5): the four expensive routes, run off the request.
+"""API jobs (T5): the expensive routes, run off the request.
 
 `/ask`, `/extract/document`, `/factsheet/document` and `/eval` each made many
 sequential Azure calls inside one HTTP request -- minutes long, no timeout, and
@@ -39,10 +39,13 @@ from fdi.pipeline.dispatch import TaskSender
 from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.eval_service import run_evaluation
 from fdi.pipeline.evaluation import CandidateRegistry
+from fdi.pipeline.extraction_runs import EngineDeps, execute_run
+from fdi.pipeline.extraction_runs import RunNotFound as ExtractionRunNotFound
 from fdi.pipeline.extractor import ExtractContext, ExtractorClient, extract_document
 from fdi.pipeline.graphstore import GraphStore
 from fdi.pipeline.schema_store import load_schema
 from fdi.pipeline.vectorstore import VectorStore
+from fdi.platform.db.extraction_repository import ExtractionRepository
 from fdi.platform.db.models import Document
 from fdi.platform.db.repository import DocumentRepository, JobRepository, RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
@@ -52,7 +55,7 @@ log = structlog.get_logger(__name__)
 # The one spelling of the kind vocabulary on the Python side (the api_job
 # CHECK constraint is the database's). `_HANDLERS` is keyed by it and the
 # jobs listing validates `?kind=` against it.
-JobKind = Literal["ask", "extract", "factsheet", "eval"]
+JobKind = Literal["ask", "extract", "factsheet", "eval", "extraction"]
 JOB_KINDS: tuple[str, ...] = get_args(JobKind)
 TERMINAL_STATUSES = frozenset({"succeeded", "failed"})
 
@@ -285,6 +288,48 @@ async def _eval(params: dict[str, object], services: JobServices, ref: JobRef) -
     return {"run_id": run_id, "aggregate": aggregate}
 
 
+async def _extraction(params: dict[str, object], services: JobServices, ref: JobRef) -> object:
+    """An Extraction run (S3): `params` carries only its id -- what to read
+    is on the run row, recorded when it was accepted."""
+    run_id = str(params["run_id"])
+    if services.extractor_client is None:
+        error = "extraction is not configured: missing extractor_client"
+        async with services.session_factory() as s:
+            await ExtractionRepository(s).set_run_status(
+                run_id, status="failed", error=error, finished=True
+            )
+            await s.commit()
+        raise JobRejected(error)
+    try:
+        return await execute_run(
+            run_id, session_factory=services.session_factory,
+            deps=EngineDeps(
+                store=services.store, embedder=services.embedder,
+                vector_store=services.vector_store, client=services.extractor_client,
+            ),
+            api_job_id=ref.job_id, correlation_id=ref.correlation_id,
+        )
+    except ExtractionRunNotFound as exc:
+        raise JobRejected(str(exc)) from exc
+    except Exception as exc:
+        # The job is about to be marked failed (terminal), so no redelivery
+        # will ever finish this run: fail it too, so it can be retried.
+        try:
+            async with services.session_factory() as s:
+                await ExtractionRepository(s).set_run_status(
+                    run_id, status="failed", error=f"{type(exc).__name__}: {exc}",
+                    finished=True,
+                )
+                await s.commit()
+        except Exception as record_exc:  # noqa: BLE001 -- must not mask the cause
+            log.error("extraction_run.mark_failed_failed", run_id=run_id,
+                      error=repr(record_exc))
+        raise
+
+
 _HANDLERS: dict[
     JobKind, Callable[[dict[str, object], JobServices, JobRef], Awaitable[object]]
-] = {"ask": _ask, "extract": _extract, "factsheet": _factsheet, "eval": _eval}
+] = {
+    "ask": _ask, "extract": _extract, "factsheet": _factsheet, "eval": _eval,
+    "extraction": _extraction,
+}

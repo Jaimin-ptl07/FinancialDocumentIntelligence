@@ -54,6 +54,9 @@ COPY --from=builder --chown=fdi:fdi /app/.venv /app/.venv
 COPY --from=builder --chown=fdi:fdi /app/alembic /app/alembic
 COPY --from=builder --chown=fdi:fdi /app/alembic.ini /app/alembic.ini
 COPY --chown=fdi:fdi docs/architecture/field-extraction-schema.json /app/docs/architecture/field-extraction-schema.json
+# The FDI standard Extraction schema document (S3): imported into Postgres at
+# API start-up and by `fdi-admin import-standard-schema` (FDI_STANDARD_SCHEMA_PATH).
+COPY --chown=fdi:fdi docs/architecture/field-extraction-schema.v4_3.json /app/docs/architecture/field-extraction-schema.v4_3.json
 # The baked embedding weights, at the path the builder's FASTEMBED_CACHE_PATH
 # downloaded them to. chown'd, not left root-owned: huggingface_hub resolves
 # the snapshot on every construction and rewrites ref/lock files in-place, so

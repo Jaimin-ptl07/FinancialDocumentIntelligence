@@ -57,6 +57,7 @@ Basis-AWARE retrieval (filtering candidates by it) is a later phase, out of
 scope here -- this phase only carries the value through, pure.
 """
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -506,6 +507,14 @@ def build_unit_messages(
     for c in candidates:
         lines.append(f"[{c.evidence_id}] (page {c.page}): {c.text}")
     return system, "\n".join(lines)
+
+
+def prompt_version() -> str:
+    """Hash of the batched prompt's field-independent instructions. Part of
+    every Extracted value's cache key (ADR-0004): reword the rules above and
+    every read is stale; leave them alone and every read stays fresh."""
+    system, _user = build_unit_messages(UnitSpec("", "", "", (), ()), [])
+    return hashlib.sha256(system.encode("utf-8")).hexdigest()[:16]
 
 
 def _clamp_confidence(raw: object) -> float:

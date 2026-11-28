@@ -21,6 +21,7 @@ from pydantic_settings.sources import EnvSettingsSource, PydanticBaseSettingsSou
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 _SCHEMA_RELPATH = Path("docs") / "architecture" / "field-extraction-schema.json"
+_STANDARD_SCHEMA_RELPATH = Path("docs") / "architecture" / "field-extraction-schema.v4_3.json"
 
 
 def _first_existing(*candidates: Path) -> Path:
@@ -55,6 +56,16 @@ def _default_schema_path() -> Path:
     return _first_existing(
         _REPO_ROOT / _SCHEMA_RELPATH,
         Path.cwd() / _SCHEMA_RELPATH,
+    )
+
+
+def _default_standard_schema_path() -> Path:
+    """Where the FDI standard Extraction schema document (v4.3, merged)
+    lives, resolved exactly like `_default_schema_path` -- repo checkout
+    first, the image's WORKDIR copy second (backend/Dockerfile COPYs it)."""
+    return _first_existing(
+        _REPO_ROOT / _STANDARD_SCHEMA_RELPATH,
+        Path.cwd() / _STANDARD_SCHEMA_RELPATH,
     )
 
 
@@ -219,6 +230,15 @@ class Settings(BaseSettings):
     # Dockerfile's COPY of this exact file into the image's WORKDIR for the
     # deployed-image side of making the default resolve.
     extraction_schema_path: str = str(_default_schema_path())
+
+    # Extraction schemas (S3, ADR-0004). The FDI standard schema is IMPORTED
+    # from this document -- at API start-up when no standard schema exists
+    # yet, and as its next version by `fdi-admin import-standard-schema` --
+    # never hand-edited in the database.
+    standard_schema_path: str = str(_default_standard_schema_path())
+    # How many Reports one Extraction run may cover: each costs one model
+    # call per stale retrieval group, so this bounds a single request's spend.
+    extraction_run_max_reports: int = Field(default=10, ge=1, le=50)
 
     # Costing (docs/superpowers/specs/2026-07-28-costing-feature-design.md).
     # OCR is billed 1 INR/page flat. LLM is billed per Azure OpenAI's own

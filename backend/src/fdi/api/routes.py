@@ -40,6 +40,7 @@ from fdi.api.deps import (
     StoreDep,
     VectorStoreDep,
 )
+from fdi.api.job_submit import submit_job as _submit_job
 from fdi.api.schemas import (
     AnalyticsView,
     AskRequest,
@@ -123,7 +124,6 @@ from fdi.pipeline.intake import document_key, intake_document
 from fdi.pipeline.jobs import (
     DocumentNotFound,
     DocumentNotIndexed,
-    JobDispatcher,
     JobKind,
     indexed_document,
 )
@@ -330,50 +330,6 @@ async def get_job_result(job_id: str, session: SessionDep, user_id: CurrentUserD
     if job.params.get("format") == "xbrl":
         return Response(content=str(job.result), media_type="application/xml")
     return job.result
-
-
-async def _submit_job(
-    session: AsyncSession,
-    dispatcher: JobDispatcher,
-    limits: ratelimit.RateLimits,
-    response: Response,
-    *,
-    user_id: str,
-    kind: str,
-    params: dict[str, object],
-    correlation_id: str,
-) -> JobAccepted:
-    """Admit (T7), persist, THEN publish: a worker that wins the race must
-    find the row. The submitting request's correlation id becomes the job's,
-    so the 202 the caller holds names every log line the worker writes.
-
-    Admission holds the caller's submission lock until the commit below, so
-    the row is visible before the next submission counts jobs in flight."""
-    quota = await ratelimit.admit_job(session, limits, user_id)
-    job_id = str(uuid.uuid4())
-    try:
-        await JobRepository(session).create(
-            job_id=job_id, user_id=user_id, kind=kind, params=params,
-            correlation_id=correlation_id,
-        )
-        await session.commit()
-        try:
-            dispatcher.dispatch(job_id, correlation_id)
-        except Exception:
-            # No message means no worker will ever touch this row: fail it
-            # now, or it sits `queued` in the caller's job list forever (and
-            # holds their concurrency slot). The publish error itself still
-            # propagates as the 500.
-            await JobRepository(session).mark_failed(job_id, "the job could not be queued")
-            await session.commit()
-            raise
-    except Exception:
-        # Admitted but never queued: nothing will be spent, so charge nothing.
-        await ratelimit.refund(limits, ratelimit.JOBS, user_id)
-        raise
-    log.info("job.queued", job_id=job_id, kind=kind)
-    ratelimit.set_quota_headers(response, quota)
-    return JobAccepted(job_id=job_id, correlation_id=correlation_id, status="queued")
 
 
 async def _require_indexed(session: AsyncSession, doc_key: str) -> None:
