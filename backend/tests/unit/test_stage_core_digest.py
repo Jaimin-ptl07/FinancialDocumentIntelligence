@@ -52,10 +52,16 @@ EXPECTED: dict[str, tuple[int, str]] = {
     # anchors (BasisStage v2). These stages only call `basis_regions`, which
     # is unchanged; a new basis artifact reaches them through their declared
     # `basis` dep's output hash, so their digests moved and no version did.
-    "fog_objects": (6, "cdc94712b0c14a91"),
+    # S5 moved the printed-amount grammar into one helper shared by
+    # `parse_amount` and the new `parse_decimal`, and the face parser's
+    # header/amount-column logic into helpers `printed_amounts` reuses.
+    # Bodies unchanged -- MEASURED on both TCS Reports' OCR (881 tables,
+    # 37,822 cells): every FaceRow and every parsed amount identical -- so
+    # these three digests moved and no version did.
+    "fog_objects": (6, "efb2448c0b7eb882"),
     "fog_reason": (4, "12428a76599197de"),  # S4: fact_claims added; reason() body unchanged
-    "note_index": (3, "faea6e37dac9a9e5"),
-    "statement_index": (4, "8bd6748d30d14384"),
+    "note_index": (3, "7ad9941db9537dc3"),
+    "statement_index": (4, "d32f3ec897d3c7ed"),
 }
 
 

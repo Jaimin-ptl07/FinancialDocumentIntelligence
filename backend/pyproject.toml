@@ -60,6 +60,8 @@ fdi-companies = "fdi.workers.companies_cli:main"
 fdi-schemas = "fdi.workers.schemas_cli:main"
 # Rebuilds the vector index into schema v3 for the Retrieval service (S4, ADR-0005).
 fdi-retrieval = "fdi.workers.retrieval_cli:main"
+# Projects Reports into Observations and Financial facts (S5, ADR-0006).
+fdi-facts = "fdi.workers.facts_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fdi"]

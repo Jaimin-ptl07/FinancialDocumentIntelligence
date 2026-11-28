@@ -110,6 +110,7 @@ from fdi.core.pricing import llm_cost_inr, ocr_cost_inr
 from fdi.core.schema import bump_patch_version, validate_extraction_schema
 from fdi.pipeline.crossdoc import resolve_entities
 from fdi.pipeline.entities import compare_concept_across_versions, entity_timeline
+from fdi.pipeline.financial_facts import FinancialFactService
 from fdi.pipeline.graphquery import (
     document_structure as document_structure_query,
 )
@@ -538,8 +539,10 @@ async def delete_document(
     rather than a Postgres row with no artifacts behind it.
     """
     repo = DocumentRepository(session)
-    if await repo.get(doc_id) is None:
+    doc = await repo.get(doc_id)
+    if doc is None:
         raise HTTPException(status_code=404, detail=f"document {doc_id} not found")
+    company_id = doc.company_id
 
     await store.delete_prefix(f"artifacts/{doc_id}/")
     await store.delete_prefix(f"extractions/{doc_id}/")
@@ -550,6 +553,11 @@ async def delete_document(
 
     await repo.delete(doc_id)
     await session.commit()
+    if company_id is not None:
+        # Its Observations went with it (ON DELETE CASCADE); the Company's
+        # Financial facts are re-derived from what remains (S5), so a fact the
+        # deleted Report had won falls back to the next Report's figure.
+        await FinancialFactService(session=session, store=store).rebuild_company(company_id)
 
 
 @router.post(

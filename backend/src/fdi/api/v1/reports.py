@@ -7,11 +7,12 @@ Company or correct its Company or Fiscal year; every change records who and
 when, and re-processing the Report never undoes it. Everything goes through
 `fdi.pipeline.companies.CompanyRegistry`, never the tables."""
 
+import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from fdi.api.auth import CurrentUserDep
-from fdi.api.deps import SessionDep, StoreDep
+from fdi.api.deps import FactsDispatcherDep, SessionDep, StoreDep
 from fdi.api.v1.companies import (
     ChangeListOut,
     ReportListOut,
@@ -21,8 +22,24 @@ from fdi.api.v1.companies import (
     report_out,
 )
 from fdi.pipeline.companies import CompanyCurationError, CompanyRegistry
+from fdi.pipeline.dispatch import FactProjectionDispatcher
+from fdi.platform.obs.logging import get_correlation_id
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+log = structlog.get_logger(__name__)
+
+
+def _reproject(dispatcher: FactProjectionDispatcher | None, doc_id: str) -> None:
+    """Queue the Report's Financial fact re-projection (S5): its Observations
+    carry the Company and Fiscal year it was filed under. The change itself is
+    already committed, so a broker outage is logged, not failed -- the next
+    `fdi-facts backfill` catches the Report up."""
+    if dispatcher is None:
+        return
+    try:
+        dispatcher.dispatch(doc_id, get_correlation_id() or "")
+    except Exception as exc:  # noqa: BLE001 -- the correction stands either way
+        log.warning("facts.reproject_dispatch_failed", doc_id=doc_id, error=repr(exc))
 
 
 class CompanyLinkIn(BaseModel):
@@ -56,7 +73,7 @@ async def get_report(doc_id: str, session: SessionDep, store: StoreDep) -> Repor
 @router.put("/{doc_id}/company", response_model=ReportOut)
 async def link_report(
     doc_id: str, body: CompanyLinkIn, session: SessionDep, store: StoreDep,
-    invitee_id: CurrentUserDep,
+    invitee_id: CurrentUserDep, facts: FactsDispatcherDep,
 ) -> ReportOut:
     """Confirm the Report's Company, or correct it to another. 422 when the
     Company does not exist."""
@@ -69,13 +86,14 @@ async def link_report(
     if report is None:
         raise _not_found(doc_id)
     await session.commit()
+    _reproject(facts, doc_id)
     return report_out(report)
 
 
 @router.put("/{doc_id}/fiscal-year", response_model=ReportOut)
 async def correct_fiscal_year(
     doc_id: str, body: FiscalYearIn, session: SessionDep, store: StoreDep,
-    invitee_id: CurrentUserDep,
+    invitee_id: CurrentUserDep, facts: FactsDispatcherDep,
 ) -> ReportOut:
     """Correct the Report's Fiscal year; its period and its place in its
     Company's history follow. 422 for a label that is not one Fiscal year."""
@@ -88,6 +106,7 @@ async def correct_fiscal_year(
     if report is None:
         raise _not_found(doc_id)
     await session.commit()
+    _reproject(facts, doc_id)
     return report_out(report)
 
 

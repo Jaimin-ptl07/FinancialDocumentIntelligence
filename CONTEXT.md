@@ -69,7 +69,7 @@ A line of financial meaning from FDI's standard taxonomy — "Profit after tax",
 _Avoid_: "field" (a Field is what an Extraction schema asks for; it may name a Concept), "line item" (a printed row)
 
 **Observation**:
-One Report's printed value for one Concept, Fiscal year and basis. A Report observes its own Fiscal year (the current column) and usually the previous one (the comparative column), so one Fiscal year can have several Observations.
+One value one source states for one Concept, Fiscal year and basis: a Report's statement face or note (printed, with its unit — "₹ crore"), a subtotal FDI composed from printed components, or an Invitee-accepted or corrected Extracted value. A Report observes its own Fiscal year (the current column) and usually the previous one (the comparative column), so one Fiscal year can have several Observations. A printed nil ("-") is an Observation with no value: the issuer said nothing is there.
 _Avoid_: "fact" for a single Report's number
 
 **Financial fact**:
@@ -77,12 +77,19 @@ The value FDI stands behind for one Company, Concept, Fiscal year and basis, cho
 _Avoid_: "extracted value" (that is one Extraction run's read of one Field)
 
 **Restatement**:
-A later Report printing a different value for an earlier Fiscal year than that year's own Report did. Both Observations are kept; the Financial fact follows the latest Report, and says it was restated.
+A later Report printing a different value, on the same statement-face line, for an earlier Fiscal year than that year's own Report did — beyond the rounding of either's printed precision. Both Observations are kept; the Financial fact follows the latest Report, and says it was restated.
 _Avoid_: "correction", "error" (a restatement is the issuer's own revision, not a mistake by FDI)
 
+**Sources differ**:
+Two Reports' Observations of one Financial fact disagreeing anywhere other than on the same face line — typically a note row, or two different lines read as one Concept. Recorded beside the fact, never called a Restatement: it may be FDI's reading, not the issuer's revision.
+_Avoid_: "restatement" for this
+
 **Metric**:
-A named calculation over Financial facts — operating margin, revenue growth, debt to equity — with a fixed formula. Computed by FDI, never by the model.
+A named calculation over Financial facts — operating margin, revenue growth, debt to equity — with a fixed formula. Computed by FDI, never by the model. One that cannot be computed says why (`not_computable`: an input is missing; `not_comparable`: inputs cannot be combined).
 _Avoid_: "ratio" when the calculation is not a ratio (growth), "KPI"
+
+**Comparable**:
+Two Financial facts or Metric results that may be set side by side: same basis, same unit once normalised, period ends on the same day of the year, and no restated input. Decided by rule, never by judgement.
 
 ## Agents
 
