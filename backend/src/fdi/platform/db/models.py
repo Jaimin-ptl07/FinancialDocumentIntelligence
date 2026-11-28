@@ -5,12 +5,14 @@ import enum
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -332,7 +334,9 @@ class ApiJob(Base):
 
     __tablename__ = "api_job"
     __table_args__ = (
-        CheckConstraint("kind IN ('ask','extract','factsheet','eval')", name="ck_api_job_kind"),
+        CheckConstraint(
+            "kind IN ('ask','extract','factsheet','eval','extraction')", name="ck_api_job_kind"
+        ),
         CheckConstraint(
             "status IN ('queued','running','succeeded','failed')", name="ck_api_job_status"
         ),
@@ -411,4 +415,216 @@ class WorkspaceCompany(Base):
     )
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# --- Extraction schemas, reads and runs (S3, ADR-0004, migration 0019) -------
+
+
+class ExtractionSchema(Base):
+    """A named list of Fields. `owner_user_id` NULL means FDI owns it (the
+    standard schema, identified by `standard_key`); only the owner edits,
+    every Invitee reads, copies and runs (#16)."""
+
+    __tablename__ = "extraction_schema"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_user.id"), index=True, nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    standard_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExtractionSchemaVersion(Base):
+    """A published, immutable version. Its Fields are `ExtractionField` rows."""
+
+    __tablename__ = "extraction_schema_version"
+    __table_args__ = (
+        UniqueConstraint("schema_id", "version", name="uq_extraction_schema_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    schema_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_schema.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    groups: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    field_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_by: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExtractionField(Base):
+    """One Field of one published version. `field_id` is the identity the
+    Field keeps across versions; `definition` is
+    `fdi.core.extraction_schema.field_to_mapping`."""
+
+    __tablename__ = "extraction_field"
+    __table_args__ = (
+        UniqueConstraint("version_id", "field_id", name="uq_extraction_field_identity"),
+        UniqueConstraint("version_id", "position", name="uq_extraction_field_position"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    version_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_schema_version.id", ondelete="CASCADE"), nullable=False
+    )
+    field_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    definition: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+
+
+class ExtractionSchemaDraft(Base):
+    """A schema's one mutable draft. `revision` increments on every write; a
+    write naming a stale revision is refused, so two tabs never clobber."""
+
+    __tablename__ = "extraction_schema_draft"
+
+    schema_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_schema.id", ondelete="CASCADE"), primary_key=True
+    )
+    base_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    fields: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    groups: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    review_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExtractionRun(Base):
+    __tablename__ = "extraction_run"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','partial','failed')",
+            name="ck_extraction_run_status",
+        ),
+        Index("ix_extraction_run_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    schema_version_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_schema_version.id"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    api_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("api_job.id", ondelete="SET NULL"), nullable=True
+    )
+    retry_of: Mapped[str | None] = mapped_column(ForeignKey("extraction_run.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    field_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    forced_field_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    counts: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ExtractionRunReport(Base):
+    __tablename__ = "extraction_run_report"
+
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_run.id", ondelete="CASCADE"), primary_key=True
+    )
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    counts: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class FieldRead(Base):
+    """One immutable read of one Field from one Report version (ADR-0004).
+    Never updated, except to be marked superseded by a forced re-read."""
+
+    __tablename__ = "field_read"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    field_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    retrieval_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    basis: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    provenance: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    answered: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("extraction_run.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ValueReview(Base):
+    """An Invitee's accept or correct of one read: beside it, never over it."""
+
+    __tablename__ = "value_review"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    read_id: Mapped[str] = mapped_column(
+        ForeignKey("field_read.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExtractionRunItem(Base):
+    """What one run did for one Field x Report, and why (the plan's reason)."""
+
+    __tablename__ = "extraction_run_item"
+
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_run.id", ondelete="CASCADE"), primary_key=True
+    )
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), primary_key=True
+    )
+    field_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    read_id: Mapped[str | None] = mapped_column(
+        ForeignKey("field_read.id", ondelete="SET NULL"), nullable=True
     )

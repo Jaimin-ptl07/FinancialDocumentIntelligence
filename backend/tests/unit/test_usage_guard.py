@@ -49,12 +49,12 @@ async def test_extraction_survives_a_broken_usage_write(monkeypatch):
         attempts.append("attempted")
         raise RuntimeError('relation "llm_usage_event" does not exist')
 
-    async def pool(**kwargs: object) -> list[ex.Candidate]:
+    async def pool(**kwargs: object) -> tuple[list[ex.Candidate], str | None]:
         return [ex.Candidate(evidence_id="d:1", text="Cash | 1,833", page=252,
-                             score=1.0, source_tool="hybrid")]
+                             score=1.0, source_tool="hybrid")], None
 
     monkeypatch.setattr(ex, "_record_llm_usage", boom)
-    monkeypatch.setattr(ex, "_pool_for", pool)
+    monkeypatch.setattr(ex, "_pool_checked", pool)
 
     records = await ex.extract_unit(
         ctx=_Ctx(), unit=_unit(), client=_Client(),  # type: ignore[arg-type]
@@ -72,12 +72,12 @@ async def test_a_working_usage_write_is_still_recorded(monkeypatch):
     async def ok(**kwargs: object) -> None:
         seen.append(kwargs.get("usage"))
 
-    async def pool(**kwargs: object) -> list[ex.Candidate]:
+    async def pool(**kwargs: object) -> tuple[list[ex.Candidate], str | None]:
         return [ex.Candidate(evidence_id="d:1", text="Cash | 1,833", page=252,
-                             score=1.0, source_tool="hybrid")]
+                             score=1.0, source_tool="hybrid")], None
 
     monkeypatch.setattr(ex, "_record_llm_usage", ok)
-    monkeypatch.setattr(ex, "_pool_for", pool)
+    monkeypatch.setattr(ex, "_pool_checked", pool)
 
     records = await ex.extract_unit(
         ctx=object(), unit=_unit(), client=_Client(),  # type: ignore[arg-type]

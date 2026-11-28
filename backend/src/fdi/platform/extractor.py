@@ -30,6 +30,12 @@ class AzureOpenAIExtractorClient:
         self._deployment = deployment
         self._model = model
 
+    @property
+    def model_id(self) -> str:
+        """The deployment every call goes to: part of each read's cache key,
+        so switching deployments makes every stored read stale (ADR-0004)."""
+        return self._deployment
+
     def extract(self, *, system: str, user: str) -> ExtractResult:
         start = time.perf_counter()
         resp = self._sdk.chat.completions.create(

@@ -19,6 +19,7 @@ from fdi.api.limits import EXPOSED_HEADERS, RateLimits
 from fdi.api.middleware import CorrelationIdMiddleware
 from fdi.api.routes import public_router, router
 from fdi.api.v1 import v1_router
+from fdi.pipeline.extraction_schemas import import_standard_schema_file
 from fdi.pipeline.registry import REGISTRY
 from fdi.pipeline.resolver import DagResolver
 from fdi.platform.agent import AzureOpenAIAgentClient
@@ -94,6 +95,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.agent_client = AzureOpenAIAgentClient.from_settings(settings)
     app.state.extractor_client = AzureOpenAIExtractorClient.from_settings(settings)
     app.state.extraction_schema_path = settings.extraction_schema_path
+    app.state.extraction_run_max_reports = settings.extraction_run_max_reports
+    # S3: a fresh database gets the FDI standard Extraction schema (version 1)
+    # without a manual step. Only when it has none -- a NEW standard version
+    # is the explicit `fdi-schemas import-standard`. Best effort, like the
+    # bucket above: an unreachable database or a missing document degrades
+    # the schema routes, it does not keep the API from booting.
+    try:
+        async with app.state.session_factory() as s:
+            imported = await import_standard_schema_file(
+                s, settings.standard_schema_path, only_if_absent=True
+            )
+            await s.commit()
+        if imported is not None:
+            log.info("startup.standard_schema_imported",
+                     version=imported.summary.version,
+                     fields=imported.summary.field_count)
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            log.warning("startup.standard_schema_import_failed",
+                        path=settings.standard_schema_path, error=repr(exc))
 
     # THE one place `api` may name `fdi.workers`, and the reason it is legal here
     # is that this function is the composition root: it is where concrete things

@@ -52,16 +52,28 @@ directly, with no per-field `DocumentRepository.get` lookup inside the loop
 resolving only doc_id would require."""
 
 import contextlib
+import hashlib
+import json
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol, cast, runtime_checkable
 
 import structlog
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fdi.core.basis import page_basis, resolve_effective_basis
+from fdi.core.extraction_plan import (
+    EngineVersions,
+    PlanItem,
+    PlannedField,
+    StoredRead,
+    cache_key,
+    plan_extraction,
+    summarize,
+)
 from fdi.core.extractor import (
     EXTRACTION_RECORD_VERSION,
     Candidate,
@@ -75,6 +87,7 @@ from fdi.core.extractor import (
     build_unit_messages,
     filter_candidates,
     group_fields_by_unit,
+    prompt_version,
     rerank_candidates,
     unit_needs_tables,
     unit_top_k,
@@ -93,6 +106,8 @@ from fdi.pipeline.embeddings import EmbeddingClient
 from fdi.pipeline.keys import extraction_key, output_hash
 from fdi.pipeline.retrieval import hybrid_search, read_chunks
 from fdi.pipeline.vectorstore import VectorStore
+from fdi.platform.db.extraction_repository import ExtractionRepository
+from fdi.platform.db.models import FieldRead
 from fdi.platform.db.repository import RegistryRepository
 from fdi.platform.storage.artifact_store import ArtifactStore
 
@@ -118,6 +133,8 @@ class FakeExtractorClient:
         self._results = results
         self._next = 0
         self.calls: list[tuple[str, str]] = []
+
+    model_id = "fake"
 
     def extract(self, *, system: str, user: str) -> ExtractResult:
         self.calls.append((system, user))
@@ -248,16 +265,40 @@ async def _pool_for(
     Never raises (decision 10): a failed search degrades to an empty pool.
     An unconfigured embedder/vector_store degrades the same way -- hybrid_
     search now requires both non-None, so there is nothing to call."""
+    pool, _error = await _pool_checked(ctx=ctx, query=query, k=k)
+    return pool
+
+
+async def _pool_checked(
+    *, ctx: ExtractContext, query: str, k: int
+) -> tuple[list[Candidate], str | None]:
+    """`_pool_for`, but saying WHY a pool is empty: (candidates, error).
+    An unconfigured or failing retrieval is an error, not "nothing found" --
+    storing it as a not-found read would cache a null that no later run
+    would ever retry. Never raises."""
     if ctx.embedder is None or ctx.vector_store is None:
-        return []
+        return [], "retrieval is not configured (no embedder or vector store)"
     hits: list[dict[str, object]] = []
     if query.strip():
-        with contextlib.suppress(Exception):
+        try:
             hits = await hybrid_search(
                 session=ctx.session, embedder=ctx.embedder,
                 vector_store=ctx.vector_store, query=query.strip(), k=k,
                 filters={"doc_key": ctx.doc_key, "version": ctx.version},
             )
+        except Exception as exc:  # noqa: BLE001 - decision 10
+            log.warning("extractor.search_failed", doc_id=ctx.doc_id, error=repr(exc))
+            if isinstance(exc, SQLAlchemyError):
+                # A failed statement poisons the shared session for every later
+                # group; a vector-store error leaves it clean (and a needless
+                # rollback would expire the caller's ORM objects).
+                with contextlib.suppress(Exception):
+                    await ctx.session.rollback()
+            return [], f"retrieval failed: {type(exc).__name__}: {exc}"
+    return _candidates(hits), None
+
+
+def _candidates(hits: Sequence[Mapping[str, object]]) -> list[Candidate]:
     return [
         Candidate(
             evidence_id=f"{h['doc_id']}:{h['chunk_id']}",
@@ -386,8 +427,39 @@ async def extract_unit(
     field, in unit order. Never raises (decision 10): a failed search or
     client call degrades THIS unit's fields to well-formed null records and
     never affects another unit."""
+    read = await _read_unit(
+        ctx=ctx, unit=unit, client=client, basis_artifact=basis_artifact,
+        structure=structure, note_map=note_map, chunks=chunks,
+        effective_basis=effective_basis,
+    )
+    return read.records
+
+
+@dataclass(frozen=True)
+class _UnitRead:
+    """One unit's records plus what `extract_unit` hides: whether the model
+    was asked at all, and the error that stopped it (retrieval or the call)."""
+
+    records: list[dict[str, object]]
+    asked: bool
+    error: str | None
+
+
+async def _read_unit(
+    *,
+    ctx: ExtractContext,
+    unit: UnitSpec,
+    client: ExtractorClient,
+    basis_artifact: Mapping[str, object] | None,
+    structure: Mapping[str, object] | None,
+    note_map: NoteMap | None,
+    chunks: Sequence[Mapping[str, object]] | None,
+    effective_basis: str,
+) -> _UnitRead:
     top_k = unit_top_k(len(unit.fields))
-    pool = await _pool_for(ctx=ctx, query=unit.retrieval_query, k=top_k * _POOL_OVERFETCH)
+    pool, pool_error = await _pool_checked(
+        ctx=ctx, query=unit.retrieval_query, k=top_k * _POOL_OVERFETCH
+    )
 
     scoped = filter_candidates(
         pool, consolidated_start_page=None, needs_tables=unit_needs_tables(unit),
@@ -416,7 +488,10 @@ async def extract_unit(
             scoped = injected + list(scoped)
     ranked = rerank_candidates(scoped, unit.locator_keywords, top_k=top_k)
     if not ranked:
-        return assemble_unit_results(unit, {}, ranked)
+        # Note-follow can still have found pages when search failed; only a
+        # unit left with NOTHING to read reports the retrieval error.
+        return _UnitRead(assemble_unit_results(unit, {}, ranked), asked=False,
+                         error=pool_error)
 
     prompt_candidates = [
         _render_table_candidate(c, structure=structure or {}) for c in ranked
@@ -424,10 +499,15 @@ async def extract_unit(
     system, user = build_unit_messages(unit, prompt_candidates)
     raw: Mapping[str, object] = {}
     usage: LlmCallUsage | None = None
-    with contextlib.suppress(Exception):  # never raise (decision 10)
+    call_error: str | None = None
+    try:  # never raise (decision 10)
         result = client.extract(system=system, user=user)
-        raw = result.data
+        raw = result.data if isinstance(result.data, Mapping) else {}
         usage = result.usage
+    except Exception as exc:  # noqa: BLE001 - decision 10
+        call_error = f"extraction call failed: {type(exc).__name__}: {exc}"
+        log.warning("extractor.call_failed", doc_id=ctx.doc_id, unit=unit.unit_id,
+                    error=repr(exc))
     # Usage bookkeeping gets its own guard AND its own rollback, deliberately.
     # A failed write here does not lose `raw` (the assignment above already
     # happened) -- it poisons ctx.SESSION, and hybrid_search shares that
@@ -443,7 +523,7 @@ async def extract_unit(
             log.info("extractor.usage_record_failed", doc_id=getattr(ctx, "doc_id", ""))
             with contextlib.suppress(Exception):
                 await ctx.session.rollback()
-    return assemble_unit_results(unit, raw, ranked)
+    return _UnitRead(assemble_unit_results(unit, raw, ranked), asked=True, error=call_error)
 
 
 async def extract_field(
@@ -623,22 +703,252 @@ async def _basis_artifact_for(ctx: ExtractContext) -> Mapping[str, object]:
     return basis
 
 
-async def _cached_extraction(
-    ctx: ExtractContext, fields: Sequence[FieldSpec]
-) -> dict[str, object] | None:
-    """The persisted record for this exact (doc_id, schema) pair, or None if
-    absent/unreadable. Never raises (decision 10): a corrupt or unreachable
-    cache degrades to a fresh extraction, not a 500. Keyed identically to
-    `_persist_extraction`'s write, so a cache write and a cache check always
-    agree on where to look."""
-    schema_hash = output_hash([f.field_path or f.field_name for f in fields])
-    key = extraction_key(ctx.doc_id, EXTRACTION_RECORD_VERSION, schema_hash)
-    with contextlib.suppress(Exception):
-        if await ctx.store.exists(key):
-            raw = await ctx.store.get_json(key)
-            if isinstance(raw, Mapping):
-                return dict(raw)
-    return None
+# ---------------------------------------------------------------------------
+# The engine's one entry point (S3): extract these Fields from this Report.
+#
+# `extract_fields` plans (fdi.core.extraction_plan -- the only place staleness
+# is decided), reuses every fresh read, reads ONLY the stale Fields (one
+# retrieval + one call per group, carrying just those Fields), and stores each
+# group's reads as soon as that group finishes -- so a crashed run keeps what
+# it paid for, and its redelivery reuses it instead of paying twice.
+# ---------------------------------------------------------------------------
+
+RETRIEVAL_CONFIG_VERSION = "1"
+"""Bump when pooling, filtering, reranking, note-follow or table rendering
+changes what context a group's call receives: every read becomes stale
+(ADR-0004). Field-independent prompt wording is versioned automatically
+(`fdi.core.extractor.prompt_version`)."""
+
+_NOT_ANSWERED = "the model returned no answer for this Field"
+
+
+def engine_versions(client: ExtractorClient) -> EngineVersions:
+    """The engine half of every read's cache key, for `client`."""
+    model = getattr(client, "model_id", None)
+    return EngineVersions(
+        prompt_version=prompt_version(),
+        retrieval_version=RETRIEVAL_CONFIG_VERSION,
+        model=model if isinstance(model, str) and model else type(client).__name__,
+    )
+
+
+@dataclass(frozen=True)
+class EngineField:
+    """One Field as the engine reads it: identity, definition hash and the
+    retrieval/prompt spec built from its definition."""
+
+    field_id: str
+    definition_hash: str
+    spec: FieldSpec
+
+
+@dataclass(frozen=True)
+class FieldResult:
+    """What `extract_fields` produced for one Field: the live read it now
+    points at, whether it was reused or read now, and why (plan reason)."""
+
+    field_id: str
+    read: FieldRead
+    action: str
+    reason: str
+
+
+def _read_status(record: Mapping[str, object], error: str | None) -> str:
+    if error is not None:
+        return "failed"
+    value = record.get("value")
+    if value is None:
+        return "not_found"
+    if isinstance(value, Mapping) and value and all(v is None for v in value.values()):
+        return "not_found"
+    return "extracted"
+
+
+def _confidence(record: Mapping[str, object]) -> float | None:
+    c = record.get("confidence")
+    return float(c) if isinstance(c, int | float) and not isinstance(c, bool) else None
+
+
+async def extract_fields(
+    *,
+    ctx: ExtractContext,
+    fields: Sequence[EngineField],
+    client: ExtractorClient,
+    forced: Collection[str] = (),
+    run_id: str | None = None,
+) -> list[FieldResult]:
+    """Extract `fields` from the Report `ctx` names; one result per Field in
+    input order (a repeated Field id is answered once per occurrence).
+
+    Fresh reads are reused at no cost. Stale ones are read now and stored as
+    immutable `field_read` rows (committed group by group); a failed read is
+    stored too, as `failed`, so the next run retries it. `forced` Field ids
+    are read again even when fresh; their previous read is kept, superseded.
+    Never raises for a retrieval or model failure -- those become `failed`
+    reads; database errors propagate (nothing could be stored anyway).
+    Derived Fields are refused: they are computed when shown, never read."""
+    derived = [f.field_id for f in fields if f.spec.origin == "derived"]
+    if derived:
+        raise ValueError(f"extract_fields was given derived Fields: {derived[:5]}")
+    engine = engine_versions(client)
+    unique: dict[str, EngineField] = {}
+    for f in fields:
+        unique.setdefault(f.field_id, f)
+    repo = ExtractionRepository(ctx.session)
+    stored = await repo.live_reads([ctx.doc_id], list(unique))
+    plan = plan_extraction(
+        fields=[PlannedField(f.field_id, f.definition_hash, f.spec.origin)
+                for f in unique.values()],
+        doc_ids=[ctx.doc_id],
+        reads=[_stored_read(r) for r in stored],
+        engine=engine,
+        forced=forced,
+    )
+    by_id = {r.id: r for r in stored}
+    results: dict[str, FieldResult] = {}
+    for item in plan.reused():
+        results[item.field_id] = FieldResult(
+            item.field_id, by_id[str(item.read_id)], "reuse", item.reason
+        )
+    stale = {i.field_id: i for i in plan.to_extract()}
+    if stale:
+        log.info("extractor.plan", doc_id=ctx.doc_id, reused=len(results),
+                 extract=len(stale), reasons=dict(summarize(plan)))
+        await _read_stale(
+            ctx=ctx, repo=repo, fields=[unique[fid] for fid in stale], plan=stale,
+            client=client, engine=engine, run_id=run_id, out=results,
+        )
+        # A rollback while reading (a failed search or usage insert) expires
+        # every instance in the session, including the reused reads loaded
+        # before the loop; touching them would lazy-load under asyncio. Load
+        # them again by id (ids come from the plan, never from those rows).
+        reused_ids = {i.field_id: str(i.read_id) for i in plan.reused()}
+        if reused_ids:
+            fresh = await repo.reads_by_ids(reused_ids.values())
+            for fid, rid in reused_ids.items():
+                results[fid] = FieldResult(fid, fresh[rid], "reuse", "fresh")
+    return [results[f.field_id] for f in fields]
+
+
+def _stored_read(r: FieldRead) -> StoredRead:
+    return StoredRead(
+        read_id=r.id, doc_id=r.doc_id, field_id=r.field_id,
+        definition_hash=r.definition_hash, prompt_version=r.prompt_version,
+        retrieval_version=r.retrieval_version, model=r.model, status=r.status,
+    )
+
+
+async def _read_stale(
+    *,
+    ctx: ExtractContext,
+    repo: ExtractionRepository,
+    fields: Sequence[EngineField],
+    plan: Mapping[str, PlanItem],
+    client: ExtractorClient,
+    engine: EngineVersions,
+    run_id: str | None,
+    out: dict[str, FieldResult],
+) -> None:
+    provenance = await _read_latest_artifact(ctx, "provenance")
+    structure = await _read_latest_artifact(ctx, "structure")
+    basis_artifact = await _basis_artifact_for(ctx)
+    units = group_fields_by_unit([f.spec for f in fields])
+    preferred = units[0].basis_preference if units else "standalone"
+    effective_basis = resolve_effective_basis(basis_artifact, preferred)
+    chunks = list(await _read_chunks_for(ctx))
+    note_maps: dict[str, NoteMap | None] = {}
+    by_spec = {id(f.spec): f for f in fields}
+    for unit in units:
+        preference = effective_basis or unit.basis_preference
+        if preference not in note_maps:
+            note_maps[preference] = await _note_map_for(
+                ctx, basis_artifact=basis_artifact, preference=preference
+            )
+        read = await _read_unit(
+            ctx=ctx, unit=unit, client=client, basis_artifact=basis_artifact,
+            structure=structure, note_map=note_maps[preference], chunks=chunks,
+            effective_basis=effective_basis,
+        )
+        stored: list[tuple[EngineField, str]] = []
+        for spec, record in zip(unit.fields, read.records, strict=True):
+            f = by_spec[id(spec)]
+            record = _attach_regions(record, spec, doc_id=ctx.doc_id,
+                                     provenance=provenance, structure=structure)
+            error = read.error
+            if error is None and read.asked and not record.get("answered", True):
+                error = _NOT_ANSWERED
+            key = cache_key(f.field_id, f.definition_hash, engine)
+            if plan[f.field_id].reason in ("forced", "previously_failed"):
+                await repo.supersede(doc_id=ctx.doc_id, field_id=f.field_id, cache_key=key)
+            source = record.get("source")
+            read_id = await repo.insert_read({
+                "doc_id": ctx.doc_id, "field_id": f.field_id, "cache_key": key,
+                "definition_hash": f.definition_hash,
+                "prompt_version": engine.prompt_version,
+                "retrieval_version": engine.retrieval_version, "model": engine.model,
+                "status": _read_status(record, error),
+                "value": None if error is not None else record.get("value"),
+                "confidence": None if error is not None else _confidence(record),
+                "basis": effective_basis or unit.basis_preference,
+                "provenance": dict(source) if isinstance(source, Mapping) else {},
+                "answered": bool(record.get("answered", read.asked)),
+                "error": error, "run_id": run_id,
+            })
+            stored.append((f, read_id))
+        await ctx.session.commit()
+        rows = await repo.reads_by_ids(rid for _f, rid in stored)
+        for f, read_id in stored:
+            out[f.field_id] = FieldResult(
+                f.field_id, rows[read_id], "extract", plan[f.field_id].reason
+            )
+
+
+# ---------------------------------------------------------------------------
+# POST /extract/document: the configured schema document through the engine.
+# ---------------------------------------------------------------------------
+
+# Identity of a Field of the configured schema DOCUMENT (not a stored
+# Extraction schema): derived from its path, so the same document Field keeps
+# its cached reads across requests. Never change it.
+_DOCUMENT_FIELD_NAMESPACE = uuid.UUID("9d1c7b52-0e4f-4a77-8a51-3c6f0b8e2d94")
+
+
+def document_engine_field(spec: FieldSpec) -> EngineField:
+    """An `EngineField` for a Field of the configured schema document."""
+    identity = spec.field_path or f"{spec.unit_id}/{spec.field_name}"
+    body = json.dumps(
+        {
+            "name": spec.field_name, "data_type": spec.data_type,
+            "query": spec.retrieval_query, "keywords": list(spec.keywords),
+            "prompt": spec.extraction_prompt, "enum": list(spec.enum_values or ()),
+            "unit": [spec.unit_id, spec.unit_title, spec.basis_preference,
+                     list(spec.locator_keywords)],
+            "periods": list(spec.periods), "tag": spec.tag,
+            "note_aliases": list(spec.note_aliases),
+        },
+        sort_keys=True, ensure_ascii=False,
+    )
+    return EngineField(
+        field_id=str(uuid.uuid5(_DOCUMENT_FIELD_NAMESPACE, identity)),
+        definition_hash=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        spec=spec,
+    )
+
+
+def read_record(spec: FieldSpec, read: FieldRead) -> dict[str, object]:
+    """A stored read in the output_contract record shape the extraction
+    record and `/extract/document` have always carried."""
+    source = dict(read.provenance) if isinstance(read.provenance, Mapping) else {}
+    source.setdefault("page", None)
+    source.setdefault("snippet", None)
+    source.setdefault("evidence_ids", [])
+    source.setdefault("bounding_regions", {"current": [], "prior": []})
+    return {
+        "field_name": spec.field_name, "tag": spec.tag, "origin": spec.origin,
+        "value": read.value, "source": source,
+        "confidence": read.confidence if read.confidence is not None else 0.0,
+        "answered": read.answered,
+    }
 
 
 async def extract_document(
@@ -648,93 +958,32 @@ async def extract_document(
     client: ExtractorClient,
     force: bool = False,
 ) -> dict[str, object]:
-    """Group `fields` into Retrieval Units and run ONE retrieval + ONE LLM
-    call per unit, then restore the caller's field order. Signature unchanged
-    -- `doc_key`/`module` are still attached by the route. Never raises.
+    """Extract every Field of a schema DOCUMENT (the configured one, for
+    `POST /extract/document` and the factsheet) through `extract_fields`, in
+    the caller's field order. Response shape unchanged.
 
-    Unless `force`, a persisted record for this exact (doc_id, schema) pair
-    -- written by a prior call's `_persist_extraction` -- is served directly,
-    with no retrieval or LLM calls at all: extraction is expensive (one Azure
-    OpenAI round trip per Retrieval Unit) and its inputs (the document, the
-    schema) do not change between page loads, so re-running on every view
-    would burn the same money and the same multi-minute wait for an answer
-    already on disk.
+    Cached per Field, not per document: a later request for the same document
+    Fields is served from the stored reads with no model call, adding one
+    Field reads only that Field, and rewording a Field re-reads only it. The
+    old cache was keyed by a hash of Field NAMES, so it did the opposite on
+    both counts. `force` reads every Field again.
 
-    Each record's `source` additionally carries `bounding_regions`: the
-    geometry behind its cited chunks, joined by the pure
-    fdi.core.provenance.resolve_evidence_regions. All THREE artifacts this
-    needs (provenance for geometry, structure for both geometry AND table-
-    card rendering, and basis for basis-aware retrieval) are read ONCE here,
-    not per field or per unit -- the committed schema has 198 fields, so a
-    per-field read would be hundreds of MinIO round trips for one request."""
-    if not force:
-        cached = await _cached_extraction(ctx, fields)
-        if cached is not None:
-            log.info("extractor.cache_hit", doc_id=ctx.doc_id)
-            return cached
-
-    provenance = await _read_latest_artifact(ctx, "provenance")
-    structure = await _read_latest_artifact(ctx, "structure")
-    basis_artifact = await _basis_artifact_for(ctx)
-
-    units = group_fields_by_unit(fields)
-    preferred = units[0].basis_preference if units else "standalone"
-    effective_basis = resolve_effective_basis(basis_artifact, preferred)
-    if units and effective_basis != preferred:
-        log.info(
-            "extractor.basis_resolved", doc_id=ctx.doc_id,
-            preferred=preferred, effective=effective_basis,
-            reason="document does not carry the preferred basis",
-        )
-    note_maps: dict[str, NoteMap | None] = {}
-    chunks: list[Mapping[str, object]] = []
-    if units:
-        chunks = list(await _read_chunks_for(ctx))
-
-    flat: list[dict[str, object]] = []
-    for unit in units:
-        preference = effective_basis or unit.basis_preference
-        if preference not in note_maps:
-            note_maps[preference] = await _note_map_for(
-                ctx, basis_artifact=basis_artifact, preference=preference
-            )
-        flat.extend(
-            await extract_unit(
-                ctx=ctx, unit=unit, client=client,
-                basis_artifact=basis_artifact, structure=structure,
-                note_map=note_maps[preference], chunks=chunks,
-                effective_basis=effective_basis,
-            )
-        )
-
-    # restore input order: group_fields_by_unit is order-preserving, so the
-    # flat unit-order list lines up positionally with `unit_order` below. A
-    # plain {id(f): i} dict breaks if the SAME FieldSpec object appears twice
-    # in `fields` (both entries would map to one record) -- a queue per
-    # identity instead assigns each occurrence its own position, in order.
-    unit_order: list[FieldSpec] = [f for unit in units for f in unit.fields]
-    positions: dict[int, list[int]] = {}
-    for i, f in enumerate(unit_order):
-        positions.setdefault(id(f), []).append(i)
-    results = [flat[positions[id(f)].pop(0)] for f in fields]
-
-    # Geometry is attached AFTER order restoration and BEFORE persistence, so
-    # the durable record carries the same bounding_regions the response does.
-    results = [
-        _attach_regions(
-            r, f, doc_id=ctx.doc_id, provenance=provenance, structure=structure
-        )
-        for r, f in zip(results, fields, strict=True)
-    ]
-
+    The extraction record is still written to the artifact store for the
+    readers that load it (`score_pipeline.py`); it is no longer read back as
+    a cache."""
+    engine_fields = [document_engine_field(f) for f in fields]
+    results = await extract_fields(
+        ctx=ctx, fields=engine_fields, client=client,
+        forced=[f.field_id for f in engine_fields] if force else (),
+    )
+    records = [read_record(f, r.read) for f, r in zip(fields, results, strict=True)]
     record = build_extraction_record(
-        doc_id=ctx.doc_id, doc_key=ctx.doc_key, version=ctx.version, results=results,
+        doc_id=ctx.doc_id, doc_key=ctx.doc_key, version=ctx.version, results=records,
     )
     key = await _persist_extraction(ctx=ctx, fields=fields, record=record)
-
     return {
         "schema_version": 1, "doc_id": ctx.doc_id,
-        "field_count": len(results), "fields": results,
+        "field_count": len(records), "fields": records,
         "extraction_key": key,
     }
 
